@@ -1,4 +1,19 @@
 services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: andreagpt-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   andreagpt:
     build:
       context: .
@@ -6,16 +21,32 @@ services:
     container_name: andreagpt
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_DOCKER_HOST: "1"
+      BRAIN_ROOT: /app/ANDREA-BRAIN
+      BRAIN_DATA_DIR: /app/data/brain
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_API_BASE: ${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      SEARXNG_URL: http://searxng:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./ANDREA-BRAIN:/app/ANDREA-BRAIN:ro
+      - brain-index:/app/data/brain
+    depends_on:
+      searxng:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
+
+volumes:
+  brain-index:

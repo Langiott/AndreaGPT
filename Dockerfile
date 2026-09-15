@@ -13,5 +13,6 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 EXPOSE 3000
+RUN mkdir -p /app/data/brain && chown -R node:node /app/data
 USER node
 CMD ["npm", "run", "start:prod"]

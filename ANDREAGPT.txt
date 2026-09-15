@@ -1,0 +1,4 @@
+ANDREAGPT
+
+MODELLO: Qwen3.8-27B-GGUF
+HUGGING FACE: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF

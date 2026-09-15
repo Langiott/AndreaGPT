@@ -9,6 +9,11 @@ import {
   Info,
   Menu,
   MessageSquarePlus,
+  FileText,
+  Folder,
+  Globe2,
+  Image,
+  Paperclip,
   PanelLeftClose,
   PenTool,
   Search,
@@ -24,7 +29,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mascotUrl from "../img/mascotte-no-sfondo.png";
 import { QUICK_PROMPTS, TASKS } from "./data";
-import type { ChatMessage, ChatSettings, Conversation, ModelInfo } from "./types";
+import { BrainPanel } from "./BrainPanel";
+import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, ModelInfo } from "./types";
 
 const iconByName = {
   sparkles: Sparkles,
@@ -36,6 +42,10 @@ const iconByName = {
 };
 
 const initialSettings: ChatSettings = { temperature: 0.6, maxTokens: 2048 };
+const MAX_ATTACHMENTS = 6;
+const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS_SIZE = 12 * 1024 * 1024;
+const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
 type Theme = "cosmic" | "normal";
 
 export default function App() {
@@ -46,6 +56,11 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState(() => loadActiveConversationId());
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadActiveMessages());
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
+  const [brainEnabled, setBrainEnabled] = useState(false);
+  const [brainSource, setBrainSource] = useState("");
+  const [brainOpen, setBrainOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -62,8 +77,11 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0];
+  const brainPrivate = brainEnabled || messages.some((message) => message.brainPrivate) || Boolean(conversations.find((c) => c.id === activeConversationId)?.brainPrivate);
+  const isOllama = selectedModel?.providerId === "ollama";
   const selectedTask = TASKS.find((task) => task.id === taskId) ?? TASKS[0];
   const filteredModels = models.filter((model) => {
     const term = search.toLowerCase();
@@ -88,7 +106,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("andreagpt-messages", JSON.stringify(messages));
+    persistMessages("andreagpt-messages", messages);
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -98,8 +116,8 @@ export default function App() {
       const existing = current.find((item) => item.id === activeConversationId);
       const title = existing?.customTitle
         ? existing.title
-        : createConversationTitle(messages.find((message) => message.role === "user")?.content ?? "");
-      const conversation: Conversation = { id: activeConversationId, title, customTitle: existing?.customTitle, messages, modelId: selectedModelId, updatedAt: Date.now() };
+        : createConversationTitleFromMessages(messages);
+      const conversation: Conversation = { id: activeConversationId, title, customTitle: existing?.customTitle, brainPrivate: existing?.brainPrivate || messages.some((m) => m.brainPrivate), messages, modelId: selectedModelId, updatedAt: Date.now() };
       const exists = Boolean(existing);
       return exists
         ? current.map((item) => item.id === activeConversationId ? conversation : item)
@@ -108,8 +126,15 @@ export default function App() {
   }, [activeConversationId, messages, selectedModelId]);
 
   useEffect(() => {
-    localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations));
+    persistConversations(conversations);
   }, [conversations]);
+
+  useEffect(() => {
+    if (!brainPrivate) return;
+    setWebSearchEnabled(false);
+    const local = models.find((model) => model.providerId === "ollama");
+    if (local) setSelectedModelId(local.id);
+  }, [brainPrivate, models]);
 
   useEffect(() => {
     if (activeConversationId) localStorage.setItem("andreagpt-active-conversation", activeConversationId);
@@ -119,6 +144,10 @@ export default function App() {
   useEffect(() => {
     if (selectedModelId) localStorage.setItem("andreagpt-model", selectedModelId);
   }, [selectedModelId]);
+
+  useEffect(() => {
+    localStorage.setItem("andreagpt-web-search", String(webSearchEnabled));
+  }, [webSearchEnabled]);
 
   useEffect(() => {
     localStorage.setItem("andreagpt-theme", theme);
@@ -140,22 +169,36 @@ export default function App() {
     setTaskId(nextTaskId);
     setTaskMenuOpen(false);
     const task = TASKS.find((item) => item.id === nextTaskId);
-    if (task?.suggestedModel && models.some((model) => model.id === task.suggestedModel)) {
+    if (!brainPrivate && task?.suggestedModel && models.some((model) => model.id === task.suggestedModel)) {
       setSelectedModelId(task.suggestedModel);
     }
   }
 
   function chooseModel(id: string) {
+    if (loading || (brainPrivate && models.find((model) => model.id === id)?.providerId !== "ollama")) return;
     setSelectedModelId(id);
     setSidebarOpen(false);
+  }
+
+  function setBrainMode(enabled: boolean) {
+    if (loading) return;
+    setBrainEnabled(enabled);
+    if (enabled) {
+      setWebSearchEnabled(false);
+      const local = models.find((model) => model.providerId === "ollama");
+      if (local) setSelectedModelId(local.id);
+      setMessages((current) => current.map((message) => ({ ...message, brainPrivate: true })));
+    }
   }
 
   function newChat() {
     abortRef.current?.abort();
     setLoading(false);
     setMessages([]);
+    setBrainEnabled(false);
     setActiveConversationId("");
     setInput("");
+    setAttachments([]);
     setError("");
     textareaRef.current?.focus();
   }
@@ -165,18 +208,23 @@ export default function App() {
     setLoading(false);
     setActiveConversationId(conversation.id);
     setMessages(conversation.messages);
+    setBrainEnabled(false);
+    setAttachments([]);
     setError("");
     if (models.some((model) => model.id === conversation.modelId)) setSelectedModelId(conversation.modelId);
     setSidebarOpen(false);
   }
 
   function deleteConversation(id: string) {
+    if (loading) return;
     const remaining = conversations.filter((conversation) => conversation.id !== id);
     setConversations(remaining);
     if (id === activeConversationId) {
+      setBrainEnabled(false);
       const next = remaining[0];
       setActiveConversationId(next?.id ?? "");
       setMessages(next?.messages ?? []);
+      setAttachments([]);
       if (next && models.some((model) => model.id === next.modelId)) setSelectedModelId(next.modelId);
     }
   }
@@ -191,14 +239,19 @@ export default function App() {
 
   async function sendMessage(text = input) {
     const content = text.trim();
-    if (!content || loading || !selectedModel) return;
+    if ((!content && !attachments.length) || loading || !selectedModel) return;
+    if (brainPrivate && (!isOllama || webSearchEnabled)) { setError("Brain e cronologia privata possono usare solo Ollama, senza web."); return; }
+    if (isOllama && [...messages.flatMap((m) => m.attachments || []), ...attachments].some((a) => a.kind !== "text")) { setError("Ollama accetta solo testo. Questa conversazione contiene immagini/PDF: avvia una nuova chat o usa testo estratto."); return; }
 
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content };
-    if (!activeConversationId) setActiveConversationId(crypto.randomUUID());
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content, attachments, webSearch: webSearchEnabled, brainPrivate };
+    const conversationId = activeConversationId || crypto.randomUUID();
+    if (!activeConversationId) setActiveConversationId(conversationId);
     const assistantId = crypto.randomUUID();
     const history = [...messages, userMessage];
-    setMessages([...history, { id: assistantId, role: "assistant", content: "" }]);
+    const attachmentMessageIndex = findLastAttachmentMessageIndex(history);
+    setMessages([...history, { id: assistantId, role: "assistant", content: "", brainPrivate }]);
     setInput("");
+    setAttachments([]);
     setError("");
     setLoading(true);
 
@@ -211,18 +264,26 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: selectedModel.id,
+          provider: selectedModel.providerId,
+          conversationId,
+          brain: brainEnabled,
+          brainPrivate,
+          brainSource: brainSource || undefined,
           messages: [
             { role: "system", content: selectedTask.prompt },
-            ...history.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+            ...history.filter((message) => message.content || message.attachments?.length).map((message) => ({ ...toApiMessage(message, history.indexOf(message) === attachmentMessageIndex), brainPrivate: message.brainPrivate })),
           ],
           ...settings,
+          maxTokens: isOllama ? settings.ollamaMaxTokens ?? 256 : settings.maxTokens,
+          numCtx: settings.numCtx ?? (isOllama ? Number(selectedModel.context) || 4096 : 4096),
+          webSearch: webSearchEnabled,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: string };
-        if (response.status === 404) {
+        if (response.status === 404 && !isOllama) {
           setModels((current) => current.filter((model) => model.id !== selectedModel.id));
           setSelectedModelId((current) => current === selectedModel.id ? "" : current);
         }
@@ -244,16 +305,15 @@ export default function App() {
         for (const line of lines) {
           const data = line.trim().replace(/^data:\s*/, "");
           if (!data || data === "[DONE]") continue;
-          try {
-            const event = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> };
+          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; error?: string };
+          try { event = JSON.parse(data); } catch { continue; }
+            if (event.error) throw new Error(event.error);
+            if (Array.isArray(event.brainSources)) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, brainSources: event.brainSources } : message));
             const token = event.choices?.[0]?.delta?.content ?? "";
             if (token) {
               fullText += token;
               setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: fullText } : message));
             }
-          } catch {
-            // Some providers include keep-alive lines that are not JSON.
-          }
         }
         if (done) break;
       }
@@ -266,8 +326,10 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : "Si è verificato un errore.");
       }
     } finally {
-      setLoading(false);
-      abortRef.current = null;
+      if (abortRef.current === controller) {
+        setLoading(false);
+        abortRef.current = null;
+      }
     }
   }
 
@@ -281,6 +343,38 @@ export default function App() {
     if (textarea) {
       textarea.style.height = "auto";
       textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+    }
+  }
+
+  async function addAttachments(files: FileList | File[]) {
+    const selectedFiles = Array.from(files);
+    if (!selectedFiles.length) return;
+    const availableSlots = MAX_ATTACHMENTS - attachments.length;
+    if (availableSlots <= 0) {
+      setError(`Puoi allegare al massimo ${MAX_ATTACHMENTS} file per messaggio.`);
+      return;
+    }
+
+    const nextFiles = selectedFiles.slice(0, availableSlots);
+    const currentSize = attachments.reduce((total, attachment) => total + attachment.size, 0);
+    if (nextFiles.some((file) => file.size > MAX_ATTACHMENT_SIZE)) {
+      setError("Ogni allegato può pesare al massimo 5 MB.");
+      return;
+    }
+    if (currentSize + nextFiles.reduce((total, file) => total + file.size, 0) > MAX_ATTACHMENTS_SIZE) {
+      setError("Gli allegati del messaggio possono pesare al massimo 12 MB in totale.");
+      return;
+    }
+
+    try {
+      const loaded = await Promise.all(nextFiles.map(readAttachment));
+      if (isOllama && loaded.some((a) => a.kind !== "text")) throw new Error("Il modello Ollama non ha multimodalita verificata: allega solo testo/codice.");
+      setAttachments((current) => [...current, ...loaded]);
+      setError(selectedFiles.length > availableSlots ? `Sono stati aggiunti solo i primi ${availableSlots} file.` : "");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Impossibile leggere uno degli allegati.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -327,7 +421,7 @@ export default function App() {
           <div className="model-list">
             {modelsLoading && <div className="loading-list"><span /><span /><span /></div>}
             {!modelsLoading && filteredModels.map((model) => (
-              <button key={model.id} className={`model-row ${model.id === selectedModel?.id ? "selected" : ""}`} onClick={() => chooseModel(model.id)}>
+              <button key={model.id} disabled={loading || (brainPrivate && model.providerId !== "ollama")} className={`model-row ${model.id === selectedModel?.id ? "selected" : ""}`} onClick={() => chooseModel(model.id)}>
                 <span className="provider-avatar">{model.provider.slice(0, 1).toUpperCase()}</span>
                 <span className="model-copy"><strong>{model.name}</strong><small>{model.provider}</small></span>
                 {model.id === selectedModel?.id && <Check size={16} className="selected-check" />}
@@ -340,7 +434,8 @@ export default function App() {
 
         <div className="sidebar-footer">
           <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />
-          <div className={`api-status ${configured ? "online" : "offline"}`}><span />{configured ? "Provider API connessi" : "API key da configurare"}</div>
+          <div className={`api-status ${configured ? "online" : "offline"}`}><span />{configured ? "Catalogo pronto (Ollama senza chiavi)" : "Catalogo non disponibile"}</div>
+          <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
         </div>
       </aside>
@@ -354,6 +449,8 @@ export default function App() {
             <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong><small>{selectedModel?.provider ?? "NVIDIA"} · Contesto usato: ~{estimatedTokens.toLocaleString("it-IT")} token</small></div>
           </div>
           <div className="topbar-actions">
+            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled}><BrainCircuit size={17} /><span>{brainEnabled ? "Brain attivo" : "Usa Brain"}</span></button>
+            <button className="brain-library-button" onClick={() => setBrainOpen(true)} aria-label="Esplora file Brain" title="Esplora file e progetti"><Folder size={17} /><span>Archivio</span></button>
             <div className="task-selector">
               <button className="task-trigger" onClick={() => setTaskMenuOpen((value) => !value)}>
                 <Zap size={15} /> <span>{selectedTask.shortName}</span> <ChevronDown size={15} />
@@ -392,8 +489,10 @@ export default function App() {
                 <article key={message.id} className={`message ${message.role}`}>
                   <div className="message-avatar">{message.role === "user" ? "TU" : <img src="/andreagpt-logo.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
-                    <div className="message-meta">{message.role === "user" ? "Tu" : selectedModel?.name}</div>
-                    {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown> : <div className="thinking"><span /><span /><span /></div>}
+                    <div className="message-meta">{message.role === "user" ? "Tu" : selectedModel?.name}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
+                    {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
+                    {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={brainPrivate || message.brainPrivate ? { img: ({ alt }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined}>{message.content}</ReactMarkdown> : message.role === "assistant" ? <div className="thinking"><span /><span /><span /></div> : null}
+                    {!!message.brainSources?.length && <details className="brain-citations"><summary>Fonti Brain recuperate ({message.brainSources.length})</summary>{message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><p>{source.text}</p></div>)}</details>}
                   </div>
                 </article>
               ))}
@@ -403,23 +502,37 @@ export default function App() {
         </section>
 
         <footer className="composer-wrap">
-          {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError("")}><X size={15} /></button></div>}
-          {!configured && configured !== null && <div className="config-banner"><Info size={15} /> Aggiungi una chiave NVIDIA o OpenRouter al file <code>.env</code> per iniziare a chattare.</div>}
+          {brainPrivate && <div className={`privacy-indicator ${brainEnabled ? "active" : "inactive"}`} role="status" aria-label={`Conversazione privata. Solo Ollama, web bloccato. ${brainEnabled ? "Retrieval Brain attivo." : "Retrieval spento; cronologia privata."}`} title={`Conversazione privata · Solo Ollama · Web bloccato · ${brainEnabled ? "Brain attivo" : "Retrieval spento"}`}><BrainCircuit size={21} /></div>}
+          {error && <div className="error-banner" role="alert" aria-live="assertive"><span><strong>Attenzione</strong>{error}</span><button onClick={() => setError("")} aria-label="Chiudi notifica"><X size={20} /></button></div>}
+          {!configured && configured !== null && <div className="config-banner"><Info size={15} /> Verifica il server AndreaGPT. Ollama locale non richiede chiavi cloud.</div>}
           <div className="composer">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(event) => resizeInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendMessage();
-                }
-              }}
-              placeholder={`Scrivi a ${selectedModel?.name ?? "AndreaGPT"}...`}
-              rows={1}
-            />
-            {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={!input.trim() || !selectedModel} aria-label="Invia"><Send size={18} /></button>}
+            {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
+            <div className="composer-row">
+              <input
+                ref={fileInputRef}
+                className="file-input"
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"
+                onChange={(event) => void addAttachments(event.target.files ?? [])}
+              />
+              <button className="attach-button" onClick={() => fileInputRef.current?.click()} disabled={loading || attachments.length >= MAX_ATTACHMENTS} aria-label="Allega file o immagini" title="Allega file o immagini"><Paperclip size={18} /></button>
+              <button className={`web-search-button ${webSearchEnabled ? "active" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate} aria-pressed={webSearchEnabled} aria-label="Attiva ricerca web" title={brainPrivate ? "Web bloccato per privacy Brain" : webSearchEnabled ? "Ricerca web attiva" : "Attiva ricerca web"}><Globe2 size={18} /></button>
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(event) => resizeInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendMessage();
+                  }
+                }}
+                placeholder={`Scrivi a ${selectedModel?.name ?? "AndreaGPT"}...`}
+                rows={1}
+              />
+              {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!input.trim() && !attachments.length) || !selectedModel} aria-label="Invia"><Send size={18} /></button>}
+            </div>
           </div>
         </footer>
       </main>
@@ -430,9 +543,11 @@ export default function App() {
           <p className="detail-description">{selectedModel.description}</p>
           <dl className="detail-grid"><div><dt>Provider</dt><dd>{selectedModel.provider}</dd></div><div><dt>Contesto</dt><dd>{selectedModel.context ?? "Vedi model card"}</dd></div></dl>
           <div className="tag-list">{selectedModel.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
-          <a className="external-link" href={`https://build.nvidia.com/${selectedModel.id}`} target="_blank" rel="noreferrer">Apri la model card su NVIDIA Build ↗</a>
+          {!isOllama && <a className="external-link" href={selectedModel.providerId === "openrouter" ? `https://openrouter.ai/${selectedModel.id}` : `https://build.nvidia.com/${selectedModel.id}`} target="_blank" rel="noreferrer">Apri la model card ↗</a>}
         </Modal>
       )}
+
+      {brainOpen && <Modal title="Archivio Brain" wide onClose={() => setBrainOpen(false)}><BrainPanel locked={loading} source={brainSource} onSource={setBrainSource} /></Modal>}
 
       {settingsOpen && (
         <Modal title="Impostazioni" onClose={() => setSettingsOpen(false)}>
@@ -456,6 +571,9 @@ export default function App() {
           <label className="setting-field"><span><strong>Temperatura</strong><small>Valori bassi sono più precisi, valori alti più creativi.</small></span><output>{settings.temperature.toFixed(1)}</output></label>
           <input className="range" type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} />
           <label className="setting-field token-field"><span><strong>Token massimi</strong><small>Lunghezza massima della risposta.</small></span><input type="number" min="1" max="8192" value={settings.maxTokens} onChange={(event) => setSettings({ ...settings, maxTokens: Math.min(8192, Math.max(1, Number(event.target.value))) })} /></label>
+          <label className="setting-field brain-field"><span>Contesto Ollama</span><select value={settings.numCtx ?? (Number(models.find((m) => m.providerId === "ollama")?.context) || 4096)} onChange={(e) => setSettings({ ...settings, numCtx: Number(e.target.value) as 4096 | 8192 })}><option value={4096}>4096</option><option value={8192}>8192</option></select></label>
+          <label className="setting-field brain-field"><span>Output Ollama</span><select value={settings.ollamaMaxTokens ?? 256} onChange={(e) => setSettings({ ...settings, ollamaMaxTokens: Number(e.target.value) as 256 | 512 | 1024 })}><option value={256}>256 · veloce</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option></select></label>
+          <p className="brain-note">Budget input conservativo: la cronologia meno recente viene rimossa se necessario. Il primo caricamento locale puo richiedere diversi minuti; Stop annulla la richiesta.</p>
           </div>
           <button className="primary-action" onClick={() => setSettingsOpen(false)}>Salva impostazioni</button>
         </Modal>
@@ -464,8 +582,70 @@ export default function App() {
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="modal" onMouseDown={(event) => event.stopPropagation()}><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
+function AttachmentList({ attachments, removable = false, onRemove }: { attachments: ChatAttachment[]; removable?: boolean; onRemove?: (id: string) => void }) {
+  return <div className={`attachment-list ${removable ? "pending" : "sent"}`}>
+    {attachments.map((attachment) => (
+      <div className={`attachment-card ${attachment.kind}`} key={attachment.id} title={`${attachment.name} · ${formatFileSize(attachment.size)}`}>
+        {attachment.kind === "image" && attachment.dataUrl
+          ? <img src={attachment.dataUrl} alt={attachment.name} />
+          : <span className="attachment-icon">{attachment.kind === "image" ? <Image size={19} /> : <FileText size={19} />}</span>}
+        <span className="attachment-copy"><strong>{attachment.name}</strong><small>{attachment.kind === "image" ? "Immagine" : attachment.kind === "pdf" ? "PDF" : "Documento"} · {formatFileSize(attachment.size)}</small></span>
+        {removable && <button onClick={() => onRemove?.(attachment.id)} aria-label={`Rimuovi ${attachment.name}`}><X size={14} /></button>}
+      </div>
+    ))}
+  </div>;
+}
+
+async function readAttachment(file: File): Promise<ChatAttachment> {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const base = { id: crypto.randomUUID(), name: file.name, type: file.type, size: file.size };
+  if (file.type.startsWith("image/")) return { ...base, kind: "image", dataUrl: await readAsDataUrl(file) };
+  if (file.type === "application/pdf" || extension === "pdf") {
+    const dataUrl = (await readAsDataUrl(file)).replace(/^data:[^;,]+/, "data:application/pdf");
+    return { ...base, kind: "pdf", dataUrl };
+  }
+  if (file.type.startsWith("text/") || TEXT_FILE_EXTENSIONS.has(extension)) return { ...base, kind: "text", text: await file.text() };
+  throw new Error(`Formato non supportato: ${file.name}. Usa immagini, PDF o file di testo/codice.`);
+}
+
+function readAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error(`Impossibile leggere ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function toApiMessage(message: ChatMessage, includeAttachmentPayloads = true) {
+  if (!message.attachments?.length) return { role: message.role, content: message.content };
+  if (!includeAttachmentPayloads) return { role: message.role, content: `${message.content}\n\n[Allegati precedenti: ${message.attachments.map((attachment) => attachment.name).join(", ")}]`.trim() };
+  const content: Array<Record<string, unknown>> = [];
+  if (message.content) content.push({ type: "text", text: message.content });
+  for (const attachment of message.attachments) {
+    if (attachment.kind === "image" && attachment.dataUrl) content.push({ type: "image_url", image_url: { url: attachment.dataUrl } });
+    if (attachment.kind === "pdf" && attachment.dataUrl) content.push({ type: "file", file: { filename: attachment.name, file_data: attachment.dataUrl } });
+    if (attachment.kind === "text" && attachment.text) content.push({ type: "text", text: `\n\n--- File: ${attachment.name} ---\n${attachment.text}\n--- Fine file ---` });
+  }
+  if (!content.length) content.push({ type: "text", text: `[Allegati non più disponibili: ${message.attachments.map((attachment) => attachment.name).join(", ")}]` });
+  return { role: message.role, content };
+}
+
+function findLastAttachmentMessageIndex(messages: ChatMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].attachments?.length) return index;
+  }
+  return -1;
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString("it-IT", { maximumFractionDigits: 1 })} MB`;
+}
+
+function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className={`modal ${wide ? "wide" : ""}`} onMouseDown={(event) => event.stopPropagation()}><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
 }
 
 function loadMessages(): ChatMessage[] {
@@ -483,13 +663,13 @@ function loadConversations(): Conversation[] {
     if (Array.isArray(saved) && saved.length) {
       return saved.map((conversation: Conversation) => conversation.customTitle ? conversation : {
         ...conversation,
-        title: createConversationTitle(conversation.messages.find((message) => message.role === "user")?.content ?? ""),
+        title: createConversationTitleFromMessages(conversation.messages),
       });
     }
     const messages = loadMessages();
     if (!messages.length) return [];
     const id = crypto.randomUUID();
-    const title = createConversationTitle(messages.find((message) => message.role === "user")?.content ?? "");
+    const title = createConversationTitleFromMessages(messages);
     const migrated = [{ id, title, messages, modelId: localStorage.getItem("andreagpt-model") ?? "", updatedAt: Date.now() }];
     localStorage.setItem("andreagpt-conversations", JSON.stringify(migrated));
     localStorage.setItem("andreagpt-active-conversation", id);
@@ -521,4 +701,37 @@ function createConversationTitle(content: string) {
   const selected = keywords.length ? keywords : words.slice(0, 3);
   const title = selected.join(" ").trim();
   return title ? title.charAt(0).toLocaleUpperCase("it-IT") + title.slice(1) : "Nuova conversazione";
+}
+
+function createConversationTitleFromMessages(messages: ChatMessage[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user");
+  if (firstUserMessage?.content) return createConversationTitle(firstUserMessage.content);
+  return firstUserMessage?.attachments?.[0]?.name.slice(0, 60) || "Nuova conversazione";
+}
+
+function persistMessages(key: string, messages: ChatMessage[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(messages));
+  } catch {
+    localStorage.setItem(key, JSON.stringify(withoutAttachmentPayloads(messages)));
+  }
+}
+
+function persistConversations(conversations: Conversation[]) {
+  try {
+    localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations));
+  } catch {
+    const lightweight = conversations.map((conversation) => ({
+      ...conversation,
+      messages: withoutAttachmentPayloads(conversation.messages),
+    }));
+    localStorage.setItem("andreagpt-conversations", JSON.stringify(lightweight));
+  }
+}
+
+function withoutAttachmentPayloads(messages: ChatMessage[]) {
+  return messages.map((message) => ({
+    ...message,
+    attachments: message.attachments?.map(({ dataUrl: _dataUrl, text: _text, ...attachment }) => attachment),
+  }));
 }

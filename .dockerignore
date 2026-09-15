@@ -4,3 +4,9 @@ dist
 .env
 *.log
 .vscode
+ANDREA-BRAIN
+data
+.env.*
+*.pem
+*.key
+ANDREAGPT.txt

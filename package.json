@@ -4,37 +4,45 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k \"node --use-system-ca --import tsx --watch server/index.ts\" \"vite\"",
     "build": "tsc --noEmit && vite build",
-    "start": "tsx server/index.ts",
-    "start:prod": "tsx server/index.ts",
+    "start": "node --use-system-ca --import tsx server/index.ts",
+    "start:prod": "node --use-system-ca --import tsx server/index.ts",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "tsx --test server/*.test.ts",
+    "brain": "tsx server/brain-cli.ts",
+    "smoke:local": "tsx scripts/Smoke-Locale.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "adm-zip": "^0.6.1",
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
+    "fast-xml-parser": "^5.11.1",
     "lucide-react": "latest",
+    "pdf-parse": "2.4.5",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "latest",
     "remark-gfm": "latest",
     "tsx": "latest",
+    "undici": "^8.10.2",
     "vite": "latest",
     "zod": "latest"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/cors": "latest",
     "@types/express": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "concurrently": "latest",
-    "typescript": "latest"
+    "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.3.0"
   }
 }

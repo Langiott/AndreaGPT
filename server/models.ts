@@ -1,5 +1,20 @@
 import type { ModelInfo } from "../src/types";
 
+export const OLLAMA_MODEL = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M";
+export const OLLAMA_FAST_MODEL = "qwen2.5-coder:7b";
+export const OLLAMA_MODELS = new Set([OLLAMA_MODEL, OLLAMA_FAST_MODEL]);
+export const OLLAMA_NUM_CTX = process.env.OLLAMA_NUM_CTX === "8192" ? 8192 : 4096;
+export const OLLAMA_INFO: ModelInfo = {
+  id: OLLAMA_MODEL, name: "Qwen3.8 27B (locale)", provider: "Ollama", providerId: "ollama",
+  description: "GGUF UD-Q4_K_M, circa 16.5 GB di pesi, non di RAM totale. Solo testo; primo caricamento potenzialmente lento.",
+  tags: ["Locale", "Brain", "Solo testo"], context: String(OLLAMA_NUM_CTX), featured: true,
+};
+export const OLLAMA_FAST_INFO: ModelInfo = {
+  id: OLLAMA_FAST_MODEL, name: "Qwen 2.5 7B (veloce)", provider: "Ollama", providerId: "ollama",
+  description: "Modello locale leggero già installato. Molto più rapido del 27B; adatto a risposte brevi, codice e consultazione Brain.",
+  tags: ["Locale", "Brain", "Veloce", "Codice"], context: "4096", featured: true,
+};
+
 const DESCRIPTIONS: Record<string, Partial<ModelInfo>> = {
   "nvidia/nemotron-3.5-lightning-30b-a3b": {
     name: "Nemotron 3.5 Lightning 30B",
@@ -17,6 +32,12 @@ const DESCRIPTIONS: Record<string, Partial<ModelInfo>> = {
     name: "MiniMax M3",
     description: "Modello generalista per conversazione, contenuti e problem solving.",
     tags: ["Generale", "Multilingua"],
+    featured: true,
+  },
+  "minimax/minimax-m3": {
+    name: "MiniMax M3",
+    description: "MiniMax M3 tramite OpenRouter. Modello a pagamento: il consumo viene addebitato sul credito OpenRouter.",
+    tags: ["Generale", "Multilingua", "A pagamento"],
     featured: true,
   },
   "meta/llama-3.1-70b-instruct": {
@@ -76,6 +97,7 @@ const FALLBACK_MODEL_IDS = [
 
 export const FALLBACK_MODELS: ModelInfo[] = FALLBACK_MODEL_IDS.map((id) => ({
   id,
+  providerId: "nvidia",
   name: DESCRIPTIONS[id]?.name ?? humanizeModelId(id),
   provider: id.split("/")[0],
   description: DESCRIPTIONS[id]?.description ?? "Modello disponibile tramite NVIDIA API Catalog.",
@@ -96,6 +118,7 @@ export function enrichModel(id: string): ModelInfo {
   const known = DESCRIPTIONS[id];
   return {
     id,
+    providerId: "nvidia",
     name: known?.name ?? humanizeModelId(id),
     provider: id.includes("/") ? id.split("/")[0] : "NVIDIA",
     description: known?.description ?? "Modello disponibile nel catalogo NVIDIA. Capacità e limiti dipendono dalla relativa model card.",

@@ -5,3 +5,9 @@ dist/
 .DS_Store
 desktop.ini
 img/universe/
+ANDREA-BRAIN/
+data/
+.env.*
+!.env.example
+*.pem
+*.key
