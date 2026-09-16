@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 title AndreaGPT - Server locale
 cd /d "%~dp0"
 
@@ -46,17 +46,30 @@ if errorlevel 1 (
 set "APP_PORT=3000"
 for /f "tokens=2 delims==" %%A in ('findstr /b "APP_PORT=" ".env" 2^>nul') do set "APP_PORT=%%A"
 
-echo Il browser si aprira su http://127.0.0.1:%APP_PORT%
-echo.
-
-curl.exe -s --max-time 2 http://127.0.0.1:%APP_PORT%/ >nul 2>nul
+call :is_andreagpt %APP_PORT%
 if not errorlevel 1 goto :pronto
 
+set /a "LAST_PORT=APP_PORT+20"
+set "SELECTED_PORT="
+for /f %%P in ('powershell.exe -NoProfile -Command "$used = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port; for ($candidate = %APP_PORT%; $candidate -le !LAST_PORT!; $candidate++) { if ($candidate -notin $used) { Write-Output $candidate; break } }"') do set "SELECTED_PORT=%%P"
+if not defined SELECTED_PORT (
+  echo ERRORE: nessuna porta libera trovata tra %APP_PORT% e !LAST_PORT!.
+  goto :errore
+)
+if not "%APP_PORT%"=="!SELECTED_PORT!" (
+  echo La porta %APP_PORT% e usata da un altro programma.
+  echo AndreaGPT verra avviato sulla porta !SELECTED_PORT!.
+)
+set "APP_PORT=!SELECTED_PORT!"
+
+echo Il browser si aprira su http://127.0.0.1:!APP_PORT!
+echo.
+
 echo Avvio del server Node in una finestra minimizzata...
-start "AndreaGPT Server" /min cmd.exe /d /k "cd /d %~dp0 && set PORT=%APP_PORT% && call npm start"
+start "AndreaGPT Server" /min cmd.exe /d /k "cd /d %~dp0 && set PORT=!APP_PORT! && call npm start"
 
 for /l %%I in (1,1,60) do (
-  curl.exe -s --max-time 1 http://127.0.0.1:%APP_PORT%/ >nul 2>nul
+  call :is_andreagpt !APP_PORT!
   if not errorlevel 1 goto :pronto
   ping 127.0.0.1 -n 2 >nul
 )
@@ -66,8 +79,10 @@ echo Apri la finestra minimizzata "AndreaGPT Server" per leggere l'errore.
 goto :errore
 
 :pronto
-echo AndreaGPT e attivo su http://127.0.0.1:%APP_PORT%
-start "" "http://127.0.0.1:%APP_PORT%/"
+if not exist "data" mkdir "data"
+>"data\.andreagpt-port" echo !APP_PORT!
+echo AndreaGPT e attivo su http://127.0.0.1:!APP_PORT!
+start "" "http://127.0.0.1:!APP_PORT!/"
 echo.
 echo Puoi chiudere questa finestra: il server resta nella finestra minimizzata.
 echo Usa Ferma-AndreaGPT.bat oppure chiudi "AndreaGPT Server" per arrestarlo.
@@ -79,3 +94,11 @@ echo.
 echo AndreaGPT non e stato avviato. Leggi l'errore qui sopra.
 pause
 exit /b 1
+
+:is_andreagpt
+set "HEALTH_FILE=%TEMP%\andreagpt-health-%RANDOM%-%RANDOM%.tmp"
+curl.exe -s --max-time 2 "http://127.0.0.1:%~1/" >"!HEALTH_FILE!" 2>nul
+findstr /c:"<title>AndreaGPT</title>" "!HEALTH_FILE!" >nul 2>nul
+set "HEALTH_RESULT=!errorlevel!"
+del /q "!HEALTH_FILE!" >nul 2>nul
+exit /b !HEALTH_RESULT!

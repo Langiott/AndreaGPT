@@ -22,7 +22,7 @@ Aprire `http://127.0.0.1:3000`. Ollama deve essere avviato su Windows; se il ser
 
 Il modello esatto e `hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M`. I pesi GGUF sono circa 16.5 GB, mentre Ollama mostra circa 17 GB per il pacchetto completo. **Non sono il consumo RAM totale**: cache KV, buffer, runtime, sistema operativo e memoria condivisa della GPU richiedono altro spazio. Su 31 GiB evitare altri carichi pesanti; l'accelerazione AMD 890M dipende dal supporto del runtime, non e garantita.
 
-Contesto predefinito 4096, selezionabile 8192; output 512 o 1024 token. La cronologia meno recente viene esclusa dalla richiesta quando non entra nel budget conservativo, senza cancellarla dalla UI. Domande/allegati troppo lunghi sono rifiutati esplicitamente. Chat solo testuale per questo percorso: niente immagini o PDF allegati direttamente al modello. Il primo caricamento puo richiedere minuti; timeout chat 15 minuti, embedding 5 minuti per batch. Stop interrompe la richiesta HTTP e propaga l'annullamento alla generazione; il modello puo restare residente nella cache Ollama.
+Contesto predefinito 4096, selezionabile 8192; output Brain predefinito 512 token (256 breve, 1024 lungo). Attivando Brain viene scelto il modello locale veloce 7B; il 27B resta selezionabile manualmente, ma su macchine che non lo contengono interamente in VRAM puo richiedere minuti. La cronologia meno recente viene esclusa dalla richiesta quando non entra nel budget conservativo, senza cancellarla dalla UI. Domande/allegati troppo lunghi sono rifiutati esplicitamente. Chat solo testuale per questo percorso: niente immagini o PDF allegati direttamente al modello. Timeout chat 15 minuti, embedding 5 minuti per batch. Stop interrompe la richiesta HTTP e propaga l'annullamento alla generazione; il modello puo restare residente nella cache Ollama.
 
 ## Brain Locale
 
@@ -105,3 +105,11 @@ Test `node:test` via tsx con embedding mock: chunking, formati Office veri/falsi
 Smoke test reale opzionale, dopo build e indicizzazione: `npm run smoke:local`. Avvia un server temporaneo su loopback senza `.env`, interroga Brain e il modello esatto con contesto 4096, verifica fonti e fine stream, quindi chiude il server. Stampa solo conteggi, non i passaggi privati. Il test HTTP verifica anche la propagazione di Stop allo stream upstream.
 
 Attivare Brain su una conversazione precedentemente cloud ne blocca gli invii futuri, ma non ritira i messaggi gia inviati ai provider prima dell'attivazione.
+
+## Diagnostica prestazioni locale
+
+Le risposte Ollama mostrano **Tempi e consumo**: ricerca Brain, tempo fino al primo token, tempo totale e conteggi token effettivi restituiti da Ollama. I tempi di caricamento e valutazione sono disponibili anche nell'evento SSE `metrics` (durate Ollama in nanosecondi, tempi applicativi in millisecondi).
+
+Brain conserva in memoria l'indice e i dati lessicali; verifica le informazioni del file a ogni accesso e invalida la cache quando l'indice cambia. I lockfile delle dipendenze sono esclusi dalla ricerca, anche per indici esistenti, e dalle nuove indicizzazioni. Il prompt locale riserva spazio alle fonti prima della cronologia, include fino a tre estratti e verifica il budget dopo aver composto istruzioni e documenti. Non occorre reindicizzare per usare queste modifiche.
+
+Benchmark facoltativo: `node --import tsx scripts/Benchmark-Brain.ts`. Usa il modello veloce già installato e un server locale temporaneo, senza cloud; ogni domanda ha un limite di 60 secondi. Si possono passare domande come argomenti. Stampa risposta, riferimenti e misure: l'output può contenere informazioni private. Non certifica automaticamente la correttezza della risposta.

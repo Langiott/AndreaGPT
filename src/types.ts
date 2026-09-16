@@ -18,6 +18,7 @@ export interface ChatMessage {
   webSearch?: boolean;
   brainPrivate?: boolean;
   brainSources?: BrainCitation[];
+  metrics?: Record<string, number>;
 }
 
 export interface Conversation {

@@ -41,7 +41,7 @@ const iconByName = {
   eye: Eye,
 };
 
-const initialSettings: ChatSettings = { temperature: 0.6, maxTokens: 2048 };
+const initialSettings: ChatSettings = { temperature: 0.6, maxTokens: 2048, ollamaMaxTokens: 512 };
 const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
 const MAX_ATTACHMENTS_SIZE = 12 * 1024 * 1024;
@@ -58,7 +58,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
-  const [brainEnabled, setBrainEnabled] = useState(false);
+  const [brainEnabled, setBrainEnabled] = useState(() => localStorage.getItem("andreagpt-brain-enabled") !== "false");
   const [brainSource, setBrainSource] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -132,7 +132,8 @@ export default function App() {
   useEffect(() => {
     if (!brainPrivate) return;
     setWebSearchEnabled(false);
-    const local = models.find((model) => model.providerId === "ollama");
+    const local = models.find((model) => model.providerId === "ollama" && model.tags.includes("Veloce"))
+      ?? models.find((model) => model.providerId === "ollama");
     if (local) setSelectedModelId(local.id);
   }, [brainPrivate, models]);
 
@@ -148,6 +149,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("andreagpt-web-search", String(webSearchEnabled));
   }, [webSearchEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("andreagpt-brain-enabled", String(brainEnabled));
+  }, [brainEnabled]);
 
   useEffect(() => {
     localStorage.setItem("andreagpt-theme", theme);
@@ -185,7 +190,8 @@ export default function App() {
     setBrainEnabled(enabled);
     if (enabled) {
       setWebSearchEnabled(false);
-      const local = models.find((model) => model.providerId === "ollama");
+      const local = models.find((model) => model.providerId === "ollama" && model.tags.includes("Veloce"))
+        ?? models.find((model) => model.providerId === "ollama");
       if (local) setSelectedModelId(local.id);
       setMessages((current) => current.map((message) => ({ ...message, brainPrivate: true })));
     }
@@ -195,7 +201,6 @@ export default function App() {
     abortRef.current?.abort();
     setLoading(false);
     setMessages([]);
-    setBrainEnabled(false);
     setActiveConversationId("");
     setInput("");
     setAttachments([]);
@@ -208,7 +213,7 @@ export default function App() {
     setLoading(false);
     setActiveConversationId(conversation.id);
     setMessages(conversation.messages);
-    setBrainEnabled(false);
+    setBrainEnabled(Boolean(conversation.brainPrivate));
     setAttachments([]);
     setError("");
     if (models.some((model) => model.id === conversation.modelId)) setSelectedModelId(conversation.modelId);
@@ -220,8 +225,8 @@ export default function App() {
     const remaining = conversations.filter((conversation) => conversation.id !== id);
     setConversations(remaining);
     if (id === activeConversationId) {
-      setBrainEnabled(false);
       const next = remaining[0];
+      setBrainEnabled(Boolean(next?.brainPrivate));
       setActiveConversationId(next?.id ?? "");
       setMessages(next?.messages ?? []);
       setAttachments([]);
@@ -274,7 +279,8 @@ export default function App() {
             ...history.filter((message) => message.content || message.attachments?.length).map((message) => ({ ...toApiMessage(message, history.indexOf(message) === attachmentMessageIndex), brainPrivate: message.brainPrivate })),
           ],
           ...settings,
-          maxTokens: isOllama ? settings.ollamaMaxTokens ?? 256 : settings.maxTokens,
+          temperature: brainEnabled ? Math.min(settings.temperature, 0.3) : settings.temperature,
+          maxTokens: isOllama ? settings.ollamaMaxTokens ?? 512 : settings.maxTokens,
           numCtx: settings.numCtx ?? (isOllama ? Number(selectedModel.context) || 4096 : 4096),
           webSearch: webSearchEnabled,
         }),
@@ -305,9 +311,10 @@ export default function App() {
         for (const line of lines) {
           const data = line.trim().replace(/^data:\s*/, "");
           if (!data || data === "[DONE]") continue;
-          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; error?: string };
+          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; metrics?: Record<string, number>; error?: string };
           try { event = JSON.parse(data); } catch { continue; }
             if (event.error) throw new Error(event.error);
+            if (event.metrics) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, metrics: event.metrics } : message));
             if (Array.isArray(event.brainSources)) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, brainSources: event.brainSources } : message));
             const token = event.choices?.[0]?.delta?.content ?? "";
             if (token) {
@@ -491,8 +498,13 @@ export default function App() {
                   <div className="message-content">
                     <div className="message-meta">{message.role === "user" ? "Tu" : selectedModel?.name}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
-                    {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={brainPrivate || message.brainPrivate ? { img: ({ alt }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined}>{message.content}</ReactMarkdown> : message.role === "assistant" ? <div className="thinking"><span /><span /><span /></div> : null}
-                    {!!message.brainSources?.length && <details className="brain-citations"><summary>Fonti Brain recuperate ({message.brainSources.length})</summary>{message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><p>{source.text}</p></div>)}</details>}
+                    {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={brainPrivate || message.brainPrivate ? { img: ({ alt }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined}>{message.content}</ReactMarkdown> : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.brainSources && <details className="brain-citations" open={!message.brainSources.length}><summary>Fonti Brain recuperate ({message.brainSources.length})</summary>{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</details>}
+                    {message.metrics && <details className="brain-citations"><summary>Tempi e consumo</summary><p>
+                      {message.metrics.retrievalMs !== undefined && <>Ricerca: {(message.metrics.retrievalMs / 1000).toFixed(2)} s · </>}
+                      {message.metrics.firstTokenMs !== undefined && <>Prima risposta: {(message.metrics.firstTokenMs / 1000).toFixed(1)} s · </>}
+                      Totale: {((message.metrics.totalMs ?? 0) / 1000).toFixed(1)} s
+                    </p><p>Token in ingresso: {message.metrics.prompt_eval_count ?? "—"} · Token generati: {message.metrics.eval_count ?? "—"}</p></details>}
                   </div>
                 </article>
               ))}
@@ -572,7 +584,7 @@ export default function App() {
           <input className="range" type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} />
           <label className="setting-field token-field"><span><strong>Token massimi</strong><small>Lunghezza massima della risposta.</small></span><input type="number" min="1" max="8192" value={settings.maxTokens} onChange={(event) => setSettings({ ...settings, maxTokens: Math.min(8192, Math.max(1, Number(event.target.value))) })} /></label>
           <label className="setting-field brain-field"><span>Contesto Ollama</span><select value={settings.numCtx ?? (Number(models.find((m) => m.providerId === "ollama")?.context) || 4096)} onChange={(e) => setSettings({ ...settings, numCtx: Number(e.target.value) as 4096 | 8192 })}><option value={4096}>4096</option><option value={8192}>8192</option></select></label>
-          <label className="setting-field brain-field"><span>Output Ollama</span><select value={settings.ollamaMaxTokens ?? 256} onChange={(e) => setSettings({ ...settings, ollamaMaxTokens: Number(e.target.value) as 256 | 512 | 1024 })}><option value={256}>256 · veloce</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option></select></label>
+          <label className="setting-field brain-field"><span>Output Ollama</span><select value={settings.ollamaMaxTokens ?? 512} onChange={(e) => setSettings({ ...settings, ollamaMaxTokens: Number(e.target.value) as 256 | 512 | 1024 })}><option value={256}>256 · breve</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option></select></label>
           <p className="brain-note">Budget input conservativo: la cronologia meno recente viene rimossa se necessario. Il primo caricamento locale puo richiedere diversi minuti; Stop annulla la richiesta.</p>
           </div>
           <button className="primary-action" onClick={() => setSettingsOpen(false)}>Salva impostazioni</button>

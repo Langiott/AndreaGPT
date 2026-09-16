@@ -2,3 +2,13 @@ ANDREAGPT
 
 MODELLO: Qwen3.8-27B-GGUF
 HUGGING FACE: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+
+UPDATE GITHUB:
+cd /Desktop/AndreaGPT
+git status
+git add -A
+git commit -m "Aggiornato 16/09 PM"
+git push origin main
+
+
+COME IMPLEMNETARE RAG:  https://datamasters.it/blog/come-creare-e-implementare-un-sistema-rag-da-zero/

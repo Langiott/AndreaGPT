@@ -186,6 +186,22 @@ export function validateBrainRepositoryUrl(input: string): string {
 }
 
 function tokens(text: string) { return text.toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) ?? []; }
+function identityExcerpt(text: string, names: string[]) {
+  const lower = text.toLocaleLowerCase("it");
+  const positions = names.map(name => lower.indexOf(name.toLocaleLowerCase("it"))).filter(position => position >= 0);
+  if (!positions.length) return text;
+  const entity = Math.min(...positions);
+  // Start at the sentence that introduces the requested entity. This prevents
+  // traits belonging to the previous character from leaking into its profile.
+  const before = text.slice(Math.max(0, entity - 240), entity);
+  const boundary = Math.max(before.lastIndexOf("."), before.lastIndexOf("!"), before.lastIndexOf("?"), before.lastIndexOf("\n"));
+  const start = Math.max(0, entity - 240) + boundary + 1;
+  const desiredEnd = Math.min(text.length, start + 1050);
+  const tail = text.slice(Math.min(start + 650, desiredEnd), desiredEnd);
+  const after = tail.search(/[.!?](?:\s|$)/u);
+  const end = after >= 0 ? Math.min(text.length, start + 650 + after + 1) : desiredEnd;
+  return text.slice(start, end).trim();
+}
 function cosine(a: number[], b: number[]) {
   if (a.length !== b.length) throw new Error("Dimensioni embedding cambiate: ricreare l'indice.");
   let dot = 0, aa = 0, bb = 0;
@@ -202,15 +218,23 @@ export function createBrain(options: BrainOptions = {}) {
   let indexing = false;
   let importing = false;
   const empty = (): BrainIndex => ({ version: VERSION, model: MODEL, updatedAt: null, files: {}, errors: [] });
+  let cachedIndex: { stamp: string; value: BrainIndex } | undefined;
+  const lexicalCache = new WeakMap<BrainIndex, Map<string, { chunk: StoredChunk; words: string[]; body: Set<string>; counts: Map<string, number> }[]>>();
+  const noiseFile = (name: string) => /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock)$/i.test(name);
 
   async function load(): Promise<BrainIndex> {
     await noLinks(indexPath);
     try {
-      if ((await fs.stat(indexPath)).size > 256 * 1024 * 1024) throw new Error("Indice troppo grande.");
+      const info = await fs.stat(indexPath);
+      if (info.size > 256 * 1024 * 1024) throw new Error("Indice troppo grande.");
+      const stamp = `${info.size}:${info.mtimeMs}:${info.ctimeMs}:${info.ino}`;
+      if (cachedIndex?.stamp === stamp) return cachedIndex.value;
       const index = JSON.parse(await fs.readFile(indexPath, "utf8")) as BrainIndex;
       if (index.version !== VERSION || index.model !== MODEL || !index.files || !Array.isArray(index.errors)) throw new Error("Indice incompatibile.");
+      cachedIndex = { stamp, value: index };
       return index;
     } catch (error) {
+      cachedIndex = undefined;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty();
       throw error;
     }
@@ -270,6 +294,7 @@ export function createBrain(options: BrainOptions = {}) {
           if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
           if (++fileCount > MAX_FILES) throw new Error("Troppi documenti: massimo 5000.");
           const relative = path.relative(root, absolute).split(path.sep).join("/");
+          if (noiseFile(relative)) continue;
           let chunks: BrainChunk[], hash: string;
           try {
             const handle = await fs.open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -318,6 +343,7 @@ export function createBrain(options: BrainOptions = {}) {
       const output = await fs.open(temporary, "wx", 0o600);
       try { await output.writeFile(serialized); await output.sync(); } finally { await output.close(); }
       await fs.rename(temporary, indexPath);
+      cachedIndex = undefined;
       return { ...status(next), indexing: false };
     } finally {
       indexing = false;
@@ -331,34 +357,78 @@ export function createBrain(options: BrainOptions = {}) {
     const filter = sourceFilter?.replace(/\\/g, "/").replace(/\/$/, "");
     if (filter && (filter.startsWith("/") || filter.split("/").some(part => part === ".." || part === ".") || filter.includes(":"))) throw new Error("Filtro sorgente non valido: usare un percorso relativo.");
     const index = await load();
-    const chunks = Object.values(index.files).flatMap(file => file.chunks).filter(chunk => !filter || chunk.path === filter || chunk.path.startsWith(`${filter}/`));
+    let prepared = lexicalCache.get(index);
+    if (!prepared) { prepared = new Map(); lexicalCache.set(index, prepared); }
+    const key = filter ?? "";
+    let entries = prepared.get(key);
+    if (!entries) {
+      entries = Object.values(index.files).flatMap(file => file.chunks)
+        .filter(chunk => !noiseFile(chunk.path) && (!filter || chunk.path === filter || chunk.path.startsWith(`${filter}/`)))
+        .map(chunk => {
+          const words = tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`);
+          const counts = new Map<string, number>();
+          for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
+          return { chunk, words, counts, body: new Set(tokens(chunk.text)) };
+        });
+      if (prepared.size >= 8) prepared.clear();
+      prepared.set(key, entries);
+    }
+    const chunks = entries.map(entry => entry.chunk);
     if (!chunks.length) return [];
-    const [vector] = await embed([`search_query: ${query}`]);
-    const terms = [...new Set(tokens(query))];
-    const identityQuestion = /^\s*chi\s+(?:e|è)\s+/iu.test(query);
-    const identityTerms = terms.filter(term => !["chi", "cosa", "che", "sono", "essere"].includes(term));
-    const documents = chunks.map(chunk => new Set(tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`)));
-    const weights = terms.map(term => Math.log(1 + chunks.length / (1 + documents.filter(doc => doc.has(term)).length)));
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-    return chunks.map((chunk, i) => {
-      const lexicalScore = terms.reduce((sum, term, j) => sum + (documents[i].has(term) ? weights[j] : 0), 0) / totalWeight;
+    // Anche le ricerche telegrafiche ("chi Nova?") sono domande biografiche.
+    const identityQuestion = /^\s*chi\b(?:\s+(?:e|è|sia))?[\s:,-]+\S/iu.test(query);
+    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "sono", "essere", "sia"]);
+    const terms = [...new Set(tokens(query).filter(term => !stopWords.has(term)))];
+    const identityTerms = identityQuestion ? terms : [];
+    // Espansione generica dell'intento: migliora l'embedding delle domande
+    // brevissime senza conoscere in anticipo nomi, ruoli o risposte.
+    const semanticQuery = identityQuestion
+      ? `Identità, descrizione, caratteristiche, storia e ruolo di ${identityTerms.join(" ")}. Domanda: ${query}`
+      : query;
+    const [vector] = await embed([`search_query: ${semanticQuery}`]);
+    const documentTokens = entries.map(entry => entry.words);
+    const documents = entries.map(entry => entry.counts);
+    const averageLength = documentTokens.reduce((sum, words) => sum + words.length, 0) / documentTokens.length || 1;
+    const weights = terms.map(term => Math.log(1 + (chunks.length - documents.filter(doc => doc.has(term)).length + 0.5) / (documents.filter(doc => doc.has(term)).length + 0.5)));
+    const ranked = chunks.map((chunk, i) => {
+      const bm25 = terms.reduce((sum, term, j) => {
+        const frequency = documents[i].get(term) ?? 0;
+        if (!frequency) return sum;
+        const saturation = frequency * 2.2 / (frequency + 1.2 * (0.25 + 0.75 * documentTokens[i].length / averageLength));
+        return sum + weights[j] * saturation;
+      }, 0);
+      const lexicalScore = bm25 / (1 + bm25);
       const cosineScore = cosine(vector, chunk.embedding);
-      // Per "chi è X" favorisci presentazioni/biografie, non scene casuali
-      // dove il nome di X viene semplicemente ripetuto.
-      const normalizedText = chunk.text.toLocaleLowerCase("it-IT");
-      const identitySignal = /\b(?:protagonista|personaggio|orfano|orfana|biografia|nato|nata|cresciuto|cresciuta|discendente|identita|identità)\b/iu;
-      const identityScore = identityQuestion && identityTerms.some(term => {
-        let position = normalizedText.indexOf(term);
-        while (position >= 0) {
-          const nearby = normalizedText.slice(Math.max(0, position - 140), position + term.length + 140);
-          if (identitySignal.test(nearby)) return true;
-          position = normalizedText.indexOf(term, position + term.length);
-        }
-        return false;
-      }) ? 0.6 : 0;
       const { embedding: _embedding, ...source } = chunk;
-      return { ...source, lexicalScore, cosineScore, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + identityScore, citation: `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}` };
-    }).filter(hit => hit.lexicalScore > 0 || hit.cosineScore > 0.25).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 8);
+      const entityMatch = !identityQuestion || identityTerms.some(term => entries![i].body.has(term));
+      // Prefer descriptions of the requested entity over repeated dialogue mentions.
+      // Match within a sentence, never merely the document's filename.
+      const description = identityQuestion && chunk.text.split(/[.!?\n]/u).some(sentence => {
+        const words = tokens(sentence);
+        return identityTerms.some(term => words.some((word, position) => word === term &&
+          words.slice(position + 1, position + 5).some(next => /^(?:protagonista|studente|studentessa|personaggio|fondatore|fondatrice|autore|autrice)$/.test(next))));
+      });
+      const focused = identityQuestion ? identityExcerpt(chunk.text, identityTerms) : chunk.text;
+      const profileFacts = identityQuestion ? new Set(focused.toLocaleLowerCase("it").match(/\b(?:protagonista|amic[oa]|riparator\w*|medic\w*|biolog\w*|coltivator\w*|ingegner\w*|scienziat\w*|pilot\w*|principessa|principe|orfan[oa]|lavora|professione|ruolo)\b/giu) ?? []).size : 0;
+      const profileBoost = Math.min(0.40, profileFacts * 0.10);
+      return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + profileBoost, citation: `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}` };
+    }).filter(hit => hit.entityMatch && (hit.lexicalScore > 0 || hit.cosineScore > 0.25)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    const selected: typeof ranked = [];
+    if (identityQuestion) {
+      // One strong passage per distant section gives long books broad coverage
+      // instead of returning five near-duplicate scenes from the same chapter.
+      const sections = new Set<string>();
+      for (const hit of ranked) {
+        const section = `${hit.path}:${Math.floor(hit.startLine / 250)}`;
+        if (!sections.has(section)) { selected.push(hit); sections.add(section); }
+        if (selected.length === 5) break;
+      }
+    }
+    for (const hit of ranked) {
+      if (selected.length === 5) break;
+      if (!selected.includes(hit)) selected.push(hit);
+    }
+    return selected.map(({ entityMatch: _entityMatch, ...hit }) => hit);
   }
 
   async function importBrainRepository(input: string): Promise<{ path: string; url: string; branch: string; commit: string }> {
