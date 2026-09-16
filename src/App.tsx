@@ -30,6 +30,8 @@ import remarkGfm from "remark-gfm";
 import mascotUrl from "../img/mascotte-no-sfondo.png";
 import { QUICK_PROMPTS, TASKS } from "./data";
 import { BrainPanel } from "./BrainPanel";
+import { UniverseBackground } from "./UniverseBackground";
+import { AppearanceSettings, fonts, useAppearance } from "./AppearanceSettings";
 import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, ModelInfo } from "./types";
 
 const iconByName = {
@@ -58,9 +60,18 @@ export default function App() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
-  const [brainEnabled, setBrainEnabled] = useState(() => localStorage.getItem("andreagpt-brain-enabled") !== "false");
+  const [brainEnabled, setBrainEnabled] = useState(() => {
+    if (localStorage.getItem("andreagpt-brain-default-v2") !== "1") {
+      localStorage.setItem("andreagpt-brain-default-v2", "1");
+      localStorage.setItem("andreagpt-brain-enabled", "true");
+      return true;
+    }
+    return localStorage.getItem("andreagpt-brain-enabled") !== "false";
+  });
   const [brainSource, setBrainSource] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
+  const appearance = useAppearance();
+  const [brainInfoOpen, setBrainInfoOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -448,7 +459,8 @@ export default function App() {
       </aside>
       {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Chiudi menu" />}
 
-      <main className="main-panel">
+      <main className="main-panel" style={{ "--chat-font": fonts[appearance.preferences.font], "--chat-font-size": `${appearance.preferences.size}px` } as React.CSSProperties}>
+        <UniverseBackground key={appearance.pictures.map(picture => picture.id).join("|")} images={appearance.pictures.map(picture => picture.url)} />
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Apri menu"><Menu size={21} /></button>
           <div className="model-title">
@@ -456,7 +468,7 @@ export default function App() {
             <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong><small>{selectedModel?.provider ?? "NVIDIA"} · Contesto usato: ~{estimatedTokens.toLocaleString("it-IT")} token</small></div>
           </div>
           <div className="topbar-actions">
-            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled}><BrainCircuit size={17} /><span>{brainEnabled ? "Brain attivo" : "Usa Brain"}</span></button>
+            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><BrainCircuit size={17} /><span>{brainEnabled ? "Brain attivo" : "Brain SPENTO"}</span></button>
             <button className="brain-library-button" onClick={() => setBrainOpen(true)} aria-label="Esplora file Brain" title="Esplora file e progetti"><Folder size={17} /><span>Archivio</span></button>
             <div className="task-selector">
               <button className="task-trigger" onClick={() => setTaskMenuOpen((value) => !value)}>
@@ -559,7 +571,7 @@ export default function App() {
         </Modal>
       )}
 
-      {brainOpen && <Modal title="Archivio Brain" wide onClose={() => setBrainOpen(false)}><BrainPanel locked={loading} source={brainSource} onSource={setBrainSource} /></Modal>}
+      {brainOpen && <Modal title={<span className="brain-title">Archivio Brain<button className="brain-info-button" aria-label="Informazioni sull'archivio Brain" aria-expanded={brainInfoOpen} aria-controls="brain-info" onClick={() => setBrainInfoOpen(!brainInfoOpen)}><Info size={18} /></button></span>} wide onClose={() => setBrainOpen(false)}><BrainPanel showInfo={brainInfoOpen} locked={loading} source={brainSource} onSource={setBrainSource} /></Modal>}
 
       {settingsOpen && (
         <Modal title="Impostazioni" onClose={() => setSettingsOpen(false)}>
@@ -578,6 +590,7 @@ export default function App() {
               </button>
             </div>
           </div>
+          <AppearanceSettings appearance={appearance} />
           <div className="settings-section generation-settings">
             <div className="settings-heading"><strong>Generazione</strong><small>Configura il comportamento delle risposte.</small></div>
           <label className="setting-field"><span><strong>Temperatura</strong><small>Valori bassi sono più precisi, valori alti più creativi.</small></span><output>{settings.temperature.toFixed(1)}</output></label>
@@ -656,7 +669,7 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toLocaleString("it-IT", { maximumFractionDigits: 1 })} MB`;
 }
 
-function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+function Modal({ title, onClose, children, wide = false }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   return <div className="modal-backdrop" onMouseDown={onClose}><section className={`modal ${wide ? "wide" : ""}`} onMouseDown={(event) => event.stopPropagation()}><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
 }
 

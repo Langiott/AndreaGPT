@@ -40,6 +40,46 @@ test("identità richiede il nome nel testo, favorisce presentazioni ed esclude l
   assert.equal((await reader.getBrainStatus()).files, 2);
 });
 
+test("caricamento multiplo indicizza automaticamente e conserva gli omonimi", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "appunti.txt"), "Originale");
+  const result = await f.brain.indexBrain([
+    { name: "appunti.txt", data: Buffer.from("Il database Postgres conserva dati.").toString("base64") },
+    { name: "fiori.md", data: Buffer.from("Il giardino contiene un fiore.").toString("base64") },
+  ]);
+  assert.equal(result.files, 3);
+  assert.equal(await fs.readFile(path.join(f.root, "appunti.txt"), "utf8"), "Originale");
+  assert.ok((await f.brain.searchBrain("database Postgres")).some(hit => hit.path === "appunti (1).txt"));
+});
+
+test("upload rifiuta percorsi, formati, contenuti e dimensioni non validi prima di scrivere", async t => {
+  const f = await fixture(t);
+  for (const name of ["../escape.txt", "a\\b.txt", "x.txt:stream", "CON.txt", ".env", "program.exe", "package-lock.json"]) {
+    await assert.rejects(f.brain.indexBrain([{ name, data: "YWJj" }]));
+  }
+  for (const data of ["", "!!!!", "YWJj=", Buffer.alloc(20 * 1024 * 1024 + 1).toString("base64")]) {
+    await assert.rejects(f.brain.indexBrain([{ name: "test.txt", data }]));
+  }
+  await assert.rejects(f.brain.indexBrain([{ name: "valid.txt", data: "YWJj" }, { name: "invalid.exe", data: "YWJj" }]));
+  assert.deepEqual(await fs.readdir(f.root), []);
+});
+
+test("il pacchetto scelto controlla il caricamento e rifiuta pacchetti sconosciuti", async t => {
+  const f = await fixture(t);
+  const file = { name: "documento.txt", data: Buffer.alloc(6 * 1024 * 1024, 65).toString("base64") };
+  await assert.rejects(f.brain.indexBrain([file], 5), /5 MiB/);
+  assert.deepEqual(await fs.readdir(f.root), []);
+  await assert.rejects(f.brain.indexBrain([], 999), /Pacchetto/);
+  // A larger package admits the file; the separate extracted-text limit still applies.
+  const result = await f.brain.indexBrain([file], 20);
+  assert.equal((await fs.stat(path.join(f.root, file.name))).size, 6 * 1024 * 1024);
+  assert.match(result.errors[0].error, /Testo estratto/);
+  for (const preset of [5, 20, 50, 100]) {
+    const status = await f.brain.indexBrain([{ name: `file-${preset}.txt`, data: Buffer.from("Il database Postgres conserva dati.").toString("base64") }], preset);
+    assert.ok(status.sources.some(source => source.id === `file-${preset}.txt`));
+  }
+});
+
 test("chunking mantiene righe, sezioni e limiti anche per codice minificato", () => {
   const chunks = chunkBrainText(`# Database\nPostgres\n\n## Dettagli\n${"x".repeat(5000)}\nfine`, "docs/test.md");
   assert.equal(chunks[0].section, "Database");
@@ -118,8 +158,23 @@ test("profili separano personaggi adiacenti e coprono sezioni lontane", async t 
   const hits = await f.brain.searchBrain("Chi è Micelia?");
   assert.match(hits[0].text, /biologa.*medico eccellente/i);
   assert.doesNotMatch(hits[0].text, /Esita era timida|introversa/i);
-  assert.ok(new Set(hits.map(hit => Math.floor(hit.startLine / 250))).size >= 3);
   assert.ok(hits.some(hit => /Riparatrice.*sala medica/i.test(hit.text)));
+  assert.ok(hits.some(hit => /lasciò i Riparatori/i.test(hit.text)));
+});
+
+test("recupera fatti esatti, repository e uso della PCA", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "romanzo.md"), "Il pianeta Cometa ha la forma di un nastro di Moebius.");
+  const petri = path.join(f.root, "progetti", "Langiott--Pipe_Reti_di_Petri");
+  await fs.mkdir(petri, { recursive: true });
+  await fs.writeFile(path.join(petri, "README.md"), "PIPE è un ambiente per creare reti di Petri e automi per impianti manifatturieri.");
+  const satellite = path.join(f.root, "progetti", "Langiott--Immagini-Satellitari");
+  await fs.mkdir(satellite, { recursive: true });
+  await fs.writeFile(path.join(satellite, "README.md"), "Ho usato PCA per ridurre la dimensionalità delle immagini satellitari Sentinel-2 e classificare specie vegetali.");
+  await f.brain.indexBrain();
+  assert.match((await f.brain.searchBrain("Che forma ha il pianeta Cometa?"))[0].text, /nastro di Moebius/i);
+  assert.match((await f.brain.searchBrain("Esiste un progetto per creare reti di Petri?"))[0].path, /Pipe_Reti_di_Petri/);
+  assert.match((await f.brain.searchBrain("Come ho utilizzato la PCA nei progetti?"))[0].text, /immagini satellitari Sentinel-2/i);
 });
 
 test("falso DOCX, PDF non valido, binari, segreti e cartelle escluse", async t => {
@@ -198,10 +253,10 @@ test("URL repository rigorosi, import esplicito e nessuna chiamata git per URL i
 
 test("file oltre limite escluso; indice corrotto non viene sovrascritto", async t => {
   const f = await fixture(t);
-  await fs.writeFile(path.join(f.root, "large.txt"), Buffer.alloc(5 * 1024 * 1024 + 1, 65));
+  await fs.writeFile(path.join(f.root, "large.txt"), Buffer.alloc(100 * 1024 * 1024 + 1, 65));
   const status = await f.brain.indexBrain();
   assert.equal(status.files, 0);
-  assert.match(status.errors[0].error, /5 MiB/);
+  assert.match(status.errors[0].error, /100 MiB/);
   await fs.writeFile(path.join(f.dataDir, "index.json"), "broken JSON");
   await assert.rejects(f.brain.indexBrain());
   assert.equal(await fs.readFile(path.join(f.dataDir, "index.json"), "utf8"), "broken JSON");

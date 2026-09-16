@@ -22,3 +22,9 @@ test("chat senza Brain mantiene la domanda e la cronologia recente", () => {
   assert.equal(result.messages.at(-1)!.content, "Continua");
   assert.deepEqual(result.sources, []);
 });
+
+test("domande trasversali possono usare fino a cinque fonti nel budget", () => {
+  const sources = Array.from({ length: 5 }, (_, i) => ({ id: `Cit. ${i + 1}`, source: `progetto-${i}`, text: `Fatto ${i}` }));
+  const result = localContext([{ role: "user", content: "Come ho utilizzato la PCA nei progetti?" }], sources, true, 4096, 512);
+  assert.equal(result.sources.length, 5);
+});

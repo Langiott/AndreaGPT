@@ -26,6 +26,8 @@ Contesto predefinito 4096, selezionabile 8192; output Brain predefinito 512 toke
 
 ## Brain Locale
 
+Nell'**Archivio Brain**, premi **Carica file** e seleziona uno o più documenti: il salvataggio in `ANDREA-BRAIN` avvia automaticamente la reindicizzazione. Il menu **Pacchetto** accanto al pulsante permette di scegliere: Piccolo (5 MiB/file, 10 MiB totali), Standard (20/40 MiB), Grande (50/100 MiB), Extra (100/200 MiB). La scelta viene ricordata nel browser. Massimo 50 file alla volta; il pacchetto si applica ai nuovi caricamenti e non esclude documenti gi? presenti. I nomi già presenti ricevono un suffisso numerico senza sovrascrivere gli originali. Eventuali errori di lettura dei documenti compaiono nell'archivio. In Docker, dove la cartella è montata in sola lettura, usare la procedura manuale seguente.
+
 1. Inserire documenti selezionati in `ANDREA-BRAIN` (creare la cartella se assente).
 2. Eseguire `npm run brain -- index`, oppure aprire Brain nella UI e premere Reindicizza.
 3. Attivare Usa Brain nella chat e porre una domanda precisa.
@@ -45,7 +47,7 @@ Indice persistente separato in `data/brain/index.json`: hash SHA-256, embedding 
 
 Chunk fino a 1400 caratteri con percorso, righe e sezione Markdown. Per Office le righe si riferiscono al **testo estratto**, non alle pagine originali. Retrieval ibrido lessicale/coseno, massimo 8 candidati; solo quelli che entrano nel contesto sono inviati e mostrati come fonti. Il filtro opzionale accetta un percorso relativo di file o cartella. Non e un riassunto integrale di 52 mila parole: domande specifiche funzionano meglio. Le soglie di similarita sono euristiche, soprattutto in italiano con nomic; anche con citazioni il modello puo sbagliare, verificare gli estratti.
 
-Limiti: 5 MiB per file, 2 MiB di testo estratto, 5000 file, 20000 chunk, indice massimo 256 MiB. Esclusi symlink/junction, file nascosti, `.env`, nomi di segreti/credenziali, chiavi private, `.git`, `node_modules`, `dist`, `build`, binari. Questi filtri non riconoscono ogni segreto possibile: selezionare e revisionare personalmente le fonti, evitando credenziali anche dentro normali file di codice.
+Limiti di indicizzazione: 100 MiB per file, 2 MiB di testo estratto, 5000 file, 20000 chunk, indice massimo 256 MiB. Esclusi symlink/junction, file nascosti, `.env`, nomi di segreti/credenziali, chiavi private, `.git`, `node_modules`, `dist`, `build`, binari. Questi filtri non riconoscono ogni segreto possibile: selezionare e revisionare personalmente le fonti, evitando credenziali anche dentro normali file di codice.
 
 ## Import GitHub
 
@@ -113,3 +115,11 @@ Le risposte Ollama mostrano **Tempi e consumo**: ricerca Brain, tempo fino al pr
 Brain conserva in memoria l'indice e i dati lessicali; verifica le informazioni del file a ogni accesso e invalida la cache quando l'indice cambia. I lockfile delle dipendenze sono esclusi dalla ricerca, anche per indici esistenti, e dalle nuove indicizzazioni. Il prompt locale riserva spazio alle fonti prima della cronologia, include fino a tre estratti e verifica il budget dopo aver composto istruzioni e documenti. Non occorre reindicizzare per usare queste modifiche.
 
 Benchmark facoltativo: `node --import tsx scripts/Benchmark-Brain.ts`. Usa il modello veloce già installato e un server locale temporaneo, senza cloud; ogni domanda ha un limite di 60 secondi. Si possono passare domande come argomenti. Stampa risposta, riferimenti e misure: l'output può contenere informazioni private. Non certifica automaticamente la correttezza della risposta.
+
+## Pipeline documenti Brain
+
+I documenti Office, OpenDocument, presentazioni, fogli di calcolo, EPUB e PDF testuali vengono convertiti localmente in Markdown con `@firecrawl/anydoc`. L'OCR remoto resta disattivato per privacy: i PDF scansionati sono segnalati nell'Archivio e non lasciano il computer. Per ODT e DOCX è disponibile anche il parser XML locale di riserva.
+
+La pipeline applica: conversione Markdown, chunking per frasi e intestazioni con sovrapposizione, embedding locale arricchito da percorso/sezione e indicizzazione ibrida lessicale-semantica. Per ogni repository viene creata nell'indice una panoramica virtuale `__panoramica_progetto.md` composta da nome, albero dei file e README. Serve alle domande generiche; i chunk originali restano disponibili per le domande puntuali.
+
+Durante **Reindicizza**, Archivio Brain mostra fase, contatore e file corrente. I file invariati riutilizzano i chunk e gli embedding già salvati. Brain è attivo al primo avvio di questa versione; quando viene disattivato, il pulsante mostra esplicitamente **Brain SPENTO** e nessun documento viene consultato.

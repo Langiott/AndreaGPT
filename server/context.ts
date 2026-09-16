@@ -21,10 +21,11 @@ export function localContext(input: LocalMessage[], sources: ContextSource[], br
   if (cost(render()) > budget) throw new Error("Input troppo lungo per il contesto locale. Riduci domanda/allegati o scegli 8192 token.");
   // Evidence has priority over old conversation. Three passages usually suffice
   // for a short answer and avoid filling a 4K context with redundant scenes.
+  const sourceLimit = /\b(?:come|quali|riassum\w*|progett\w*|confront\w*|spiega\w*|analizza\w*)\b/iu.test(question.content) ? 5 : 3;
   for (const source of sources.slice(0, 5)) {
     selected.push(source);
     if (cost(render()) > budget) selected.pop();
-    if (selected.length === 3) break;
+    if (selected.length === sourceLimit) break;
   }
   if (brain && sources.length && !selected.length) throw new Error("Spazio insufficiente per le fonti Brain: riduci la domanda o scegli 8192 token.");
   while (history.length && (cost(render(history)) > budget || history[0].role !== "user")) history.shift();

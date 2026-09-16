@@ -15,6 +15,7 @@
     "smoke:local": "tsx scripts/Smoke-Locale.ts"
   },
   "dependencies": {
+    "@firecrawl/anydoc": "^0.2.4",
     "@vitejs/plugin-react": "latest",
     "adm-zip": "^0.6.1",
     "cors": "latest",

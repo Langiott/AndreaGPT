@@ -65,11 +65,21 @@ app.use((request, response, next) => {
   next();
 });
 app.use(cors({ origin: process.env.NODE_ENV === "production" ? false : /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/ }));
+app.use("/api/brain/upload", express.json({ limit: "270mb" }));
 app.use(express.json({ limit: "20mb" }));
 
 app.get("/api/brain/status", async (_request, response) => {
   try { response.json(await (await brainModule()).getBrainStatus()); }
   catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Stato Brain non disponibile." }); }
+});
+app.post("/api/brain/upload", async (request, response) => {
+  if (process.env.OLLAMA_DOCKER_HOST === "1") {
+    response.status(403).json({ error: "In Docker la cartella documenti è in sola lettura. Copia i file in ANDREA-BRAIN sull'host e premi Reindicizza." }); return;
+  }
+  const parsed = z.object({ preset: z.union([z.literal(5), z.literal(20), z.literal(50), z.literal(100)]).default(20), files: z.array(z.object({ name: z.string().min(1).max(180), data: z.string().max(139_810_136) }).strict()).min(1).max(50) }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Caricamento non valido: scegli un pacchetto disponibile e massimo 50 file." }); return; }
+  try { response.json(await (await brainModule()).indexBrain(parsed.data.files, parsed.data.preset)); }
+  catch (error) { response.status(503).json({ error: `${error instanceof Error ? error.message : "Caricamento fallito."} Se i file risultano già salvati nell'archivio, premi Reindicizza per riprovare.` }); }
 });
 for (const action of ["index", "import"] as const) {
   app.post(`/api/brain/${action}`, async (request, response) => {

@@ -2,8 +2,9 @@ ANDREAGPT
 
 MODELLO: Qwen3.8-27B-GGUF
 HUGGING FACE: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+COME IMPLEMNETARE RAG:  https://datamasters.it/blog/come-creare-e-implementare-un-sistema-rag-da-zero/
 
-UPDATE GITHUB:
+UPDATE progetto GITHUB:
 cd /Desktop/AndreaGPT
 git status
 git add -A
@@ -11,4 +12,20 @@ git commit -m "Aggiornato 16/09 PM"
 git push origin main
 
 
-COME IMPLEMNETARE RAG:  https://datamasters.it/blog/come-creare-e-implementare-un-sistema-rag-da-zero/
+
+
+
+AndreaGPT è un'interfaccia conversazionale multi-modello, accessibile via browser, che permette di dialogare con diversi 
+LLM. Supporta sia modelli open-weight in locale, come Qwen3.8 da 27B, sia modelli via API, come MiniMax3. Si usa per 
+conversazioni generiche, anche con ricerca web, ma soprattutto per il question answering su documenti precaricati e 
+repository GitHub.
+Il sistema si basa su un'architettura RAG (Retrieval-Augmented Generation), che recupera dalla knowledge base le 
+informazioni rilevanti e le fornisce all'LLM come contesto per rispondere alla domanda.
+La pipeline di injection della RAG prevede:
+
+- Parsing dei documenti (PDF, DOCX, ecc.) e conversione in Markdown con la libreria anydoc
+- Crea un riassunto, per rispondere alle domande generiche
+- Divisione del testo in chunk 
+- Generazione degli embedding con il modello nomic-embed-text
+- Indicizzazione vettoriale degli embedding per la ricerca semantica
+
