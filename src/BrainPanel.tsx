@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, FileText, Folder, Search } from "lucide-react";
+import { ChevronRight, FileText, Folder, Search, X } from "lucide-react";
 import { BRAIN_UPLOAD_PRESETS, brainUploadPreset } from "./brainUploadLimits";
 
 interface BrainStatus {
@@ -28,6 +28,7 @@ export function BrainPanel({ locked, source, onSource, showInfo = false }: {
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [dismissedWarnings, setDismissedWarnings] = useState(false);
   const [presetId, setPresetId] = useState(() => {
     try { return brainUploadPreset(Number(localStorage.getItem("brain-upload-preset") ?? 20)).id; }
     catch { return 20; }
@@ -81,6 +82,8 @@ export function BrainPanel({ locked, source, onSource, showInfo = false }: {
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [status?.sources, query]);
+  const warningCount = status?.errors?.length ?? 0;
+  useEffect(() => { if (!warningCount) setDismissedWarnings(false); }, [warningCount]);
 
   async function refresh() {
     const response = await fetch("/api/brain/status");
@@ -133,7 +136,11 @@ export function BrainPanel({ locked, source, onSource, showInfo = false }: {
     {(busy || status?.indexing) && status?.progress && <div><progress max={Math.max(1, status.progress.total)} value={status.progress.completed} /><p className="brain-note">{status.progress.current ?? "Preparazione indice…"}</p></div>}
     {(error || status?.error) && <p className="error-banner" role="alert">{error || status?.error}</p>}
     {source && <div className="brain-filter-row"><span>Filtro attivo: <strong>{source}</strong></span><button aria-label="Rimuovi filtro" onClick={() => onSource("")} disabled={locked}>×</button></div>}
-    {!!status?.errors?.length && <ul className="brain-source-list">{status.errors.map((item, i) => <li key={`${item.path}-${i}`}><strong>{item.path}</strong>: {item.error}</li>)}</ul>}
+    {!!status?.errors?.length && !dismissedWarnings && <section className="brain-warning-card" role="alert">
+      <div><strong>{status.errors.length} warning archivio</strong><span>Puoi chiuderli: i file validi restano indicizzati.</span></div>
+      <button type="button" aria-label="Nascondi warning" onClick={() => setDismissedWarnings(true)}><X size={15} /></button>
+      <ul className="brain-source-list">{status.errors.map((item, i) => <li key={`${item.path}-${i}`}><strong>{item.path}</strong>: {item.error}</li>)}</ul>
+    </section>}
     <label className="brain-search"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Cerca file o progetto..." /></label>
     <div className="brain-explorer">{groups.map(([group, items]) => <details className="brain-group" key={group} open={Boolean(query) || source.includes(group)}><summary><ChevronRight size={15} /><Folder size={18} /><span><strong>{group}</strong><small>{items.length} file · {items.reduce((sum, item) => sum + (item.chunks ?? 0), 0)} estratti</small></span><button type="button" className={source === `progetti/${group}` ? "active" : ""} onClick={(e) => { e.preventDefault(); onSource(group === "Documenti personali" ? "" : `progetti/${group}`); }}>Usa progetto</button></summary><div className="brain-files">{items.map(item => <button type="button" key={item.id} className={source === item.id ? "active" : ""} onClick={() => onSource(item.id)}><FileText size={15} /><span>{item.id.split("/").at(-1)}</span><small>{item.chunks ?? 0}</small></button>)}</div></details>)}{status && !groups.length && <p className="empty-search">Nessun file trovato.</p>}</div>
     <div className="brain-actions brain-maintenance"><button onClick={() => void run("status")} disabled={busy}>Aggiorna stato</button><button onClick={() => void run("index")} disabled={busy || locked || status?.indexing}>Reindicizza</button></div>

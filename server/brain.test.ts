@@ -40,6 +40,16 @@ test("identità richiede il nome nel testo, favorisce presentazioni ed esclude l
   assert.equal((await reader.getBrainStatus()).files, 2);
 });
 
+test("refuso nel nome propone la correzione più vicina", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "nova.txt"), "Arbiter guida la spedizione verso il faro con calma.");
+  await f.brain.indexBrain();
+  assert.deepEqual(await f.brain.searchBrain("chi è Albiter?"), [], "il refuso non deve produrre risultati");
+  assert.deepEqual(await f.brain.suggestCorrection("chi è Albiter?"), ["Arbiter"]);
+  assert.deepEqual(await f.brain.suggestCorrection("chi è Zzzqqq?"), []);
+  assert.deepEqual(await f.brain.suggestCorrection("chi è?"), []);
+});
+
 test("caricamento multiplo indicizza automaticamente e conserva gli omonimi", async t => {
   const f = await fixture(t);
   await fs.writeFile(path.join(f.root, "appunti.txt"), "Originale");
@@ -70,10 +80,10 @@ test("il pacchetto scelto controlla il caricamento e rifiuta pacchetti sconosciu
   await assert.rejects(f.brain.indexBrain([file], 5), /5 MiB/);
   assert.deepEqual(await fs.readdir(f.root), []);
   await assert.rejects(f.brain.indexBrain([], 999), /Pacchetto/);
-  // A larger package admits the file; the separate extracted-text limit still applies.
+  // A larger package admits the file; large text is sampled instead of rejected.
   const result = await f.brain.indexBrain([file], 20);
   assert.equal((await fs.stat(path.join(f.root, file.name))).size, 6 * 1024 * 1024);
-  assert.match(result.errors[0].error, /Testo estratto/);
+  assert.ok(result.errors.every(error => !/Testo estratto/.test(error.error)));
   for (const preset of [5, 20, 50, 100]) {
     const status = await f.brain.indexBrain([{ name: `file-${preset}.txt`, data: Buffer.from("Il database Postgres conserva dati.").toString("base64") }], preset);
     assert.ok(status.sources.some(source => source.id === `file-${preset}.txt`));
@@ -211,6 +221,35 @@ test("ODT e DOCX veri estraggono testo XML in ordine, senza includere attributi"
   assert.equal(hit.lineKind, "extracted");
   assert.match(hit.citation, /testo estratto/);
   assert.ok(f.calls.flat().some(text => text.includes("Uno & due\nTre")));
+});
+
+test("notebook Jupyter indicizzati rendono cercabile codice Computer Vision", async t => {
+  const f = await fixture(t);
+  const project = path.join(f.root, "progetti", "Langiott--Computer-Vision-Deep-Learning");
+  await fs.mkdir(project, { recursive: true });
+  await fs.writeFile(path.join(project, "MaskRCNN.ipynb"), JSON.stringify({
+    cells: [
+      { cell_type: "markdown", source: ["# Computer Vision\n", "Segmentazione istanze"] },
+      { cell_type: "code", source: ["from mrcnn.config import Config\n", "MODELLO = 'Mask R-CNN'\n"] },
+    ],
+  }));
+  await f.brain.indexBrain();
+  const hit = (await f.brain.searchBrain("Come ho usato modello Mask RCNN nel progetto computer vision?"))[0];
+  assert.equal(hit.path, "progetti/Langiott--Computer-Vision-Deep-Learning/MaskRCNN.ipynb");
+  assert.match(hit.text, /Mask R-CNN|mrcnn/i);
+  assert.equal(hit.lineKind, "extracted");
+});
+
+test("notebook vuoti e file tabellari grandi non producono errori rumorosi", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "vuoto.ipynb"), "");
+  await fs.writeFile(path.join(f.root, "grande.csv"), `colonna,valore\n${Array.from({ length: 120_000 }, (_, index) => `riga-${index},database`).join("\n")}`);
+  const status = await f.brain.indexBrain();
+  assert.deepEqual(status.errors, []);
+  assert.ok(status.sources.some(source => source.id === "vuoto.ipynb" && source.chunks === 0));
+  const hit = (await f.brain.searchBrain("database colonna", "grande.csv"))[0];
+  assert.equal(hit.path, "grande.csv");
+  assert.match(hit.text, /Estratto indicizzabile|colonna,valore/);
 });
 
 test("batch limitati e fallimento embedding preservano indice precedente", async t => {

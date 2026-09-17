@@ -7,6 +7,10 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./certs/norton-shield-root.pem:/etc/ssl/certs/norton-shield-root.pem:ro
+    environment:
+      SSL_CERT_FILE: /etc/ssl/certs/norton-shield-root.pem
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/norton-shield-root.pem
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
       interval: 10s
@@ -29,6 +33,9 @@ services:
       OLLAMA_DOCKER_HOST: "1"
       BRAIN_ROOT: /app/ANDREA-BRAIN
       BRAIN_DATA_DIR: /app/data/brain
+      OCR_ROOT: /app/OCR
+      TESSERACT_LANG: ita+eng
+      OCR_ENGINE: doctr
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_API_BASE: ${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -37,7 +44,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./ANDREA-BRAIN:/app/ANDREA-BRAIN:ro
+      - ./certs/norton-shield-root.pem:/app/certs/norton-shield-root.pem:ro
       - brain-index:/app/data/brain
+      - ./OCR:/app/OCR
     depends_on:
       searxng:
         condition: service_healthy

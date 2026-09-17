@@ -14,12 +14,13 @@ const MODEL = "nomic-embed-text";
 const VERSION = 2;
 const MAX_FILE = BRAIN_MAX_FILE_BYTES;
 const MAX_TEXT = 2 * 1024 * 1024;
-const MAX_CHUNKS = 20_000;
+const MAX_TABULAR_SAMPLE = 420 * 1024;
+const MAX_CHUNKS = Number.parseInt(process.env.BRAIN_MAX_CHUNKS ?? "100000", 10);
 const MAX_FILES = 5_000;
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 180;
 const BATCH_SIZE = 8;
-const extensions = new Set(".md .markdown .txt .ts .tsx .js .jsx .mjs .cjs .py .rs .go .java .c .h .cpp .hpp .cs .css .scss .html .xml .json .yaml .yml .toml .sql .sh .ps1 .rb .php .vue .svelte .odt .ods .odp .doc .docx .docm .rtf .epub .ppt .pptx .pps .xls .xlsx .csv .pdf".split(" "));
+const extensions = new Set(".md .markdown .txt .ts .tsx .js .jsx .mjs .cjs .py .rs .go .java .c .h .cpp .hpp .cs .css .scss .html .xml .json .yaml .yml .toml .sql .sh .ps1 .rb .php .vue .svelte .odt .ods .odp .doc .docx .docm .rtf .epub .ppt .pptx .pps .xls .xlsx .csv .pdf .ipynb".split(" "));
 const excluded = /^(?:\..*|node_modules|dist|build|coverage|vendor|__pycache__|secrets?|credentials?)(?:$)|(?:secret|credential|password|token|private[-_]?key)|\.(?:pem|key|p12|pfx|keystore)$|^env(?:\.|$)/i;
 const run = promisify(execFile);
 
@@ -184,8 +185,40 @@ function fallbackOfficeMarkdown(buffer: Buffer, extension: string) {
   return text;
 }
 
-async function extract(buffer: Buffer, extension: string): Promise<{ text: string; lineKind: BrainChunk["lineKind"]; pages?: { num: number; text: string }[] }> {
-  if (/^\.(?:odt|ods|odp|doc|docx|docm|rtf|epub|ppt|pptx|pps|xls|xlsx|csv|pdf)$/i.test(extension)) {
+function sampledLargeText(text: string, source: string) {
+  if (Buffer.byteLength(text) <= MAX_TEXT) return text;
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const parts = [`# Estratto indicizzabile di ${path.basename(source)}`, `File grande: ${lines.length.toLocaleString("it-IT")} righe. Brain indicizza intestazione e prime righe per evitare un indice enorme.`];
+  if (lines[0]) parts.push(`Intestazione:\n${lines[0].slice(0, 8_000)}`);
+  let size = Buffer.byteLength(parts.join("\n\n"));
+  for (const line of lines.slice(1)) {
+    const next = `${line}\n`;
+    size += Buffer.byteLength(next);
+    if (size > MAX_TABULAR_SAMPLE) break;
+    parts.push(line);
+  }
+  return parts.join("\n");
+}
+
+function extractNotebookMarkdown(buffer: Buffer) {
+  if (!buffer.length) return "";
+  const notebook = JSON.parse(decodeBrainText(buffer)) as { cells?: Array<{ cell_type?: string; source?: string | string[] }> };
+  if (!Array.isArray(notebook.cells)) throw new Error("Notebook Jupyter non valido: celle mancanti.");
+  const parts: string[] = [];
+  notebook.cells.forEach((cell, index) => {
+    if (cell.cell_type !== "markdown" && cell.cell_type !== "code") return;
+    const source = Array.isArray(cell.source) ? cell.source.join("") : typeof cell.source === "string" ? cell.source : "";
+    const clean = source.replace(/\r\n?/g, "\n").trim();
+    if (!clean) return;
+    parts.push(cell.cell_type === "markdown" ? `# Cella ${index + 1} markdown\n${clean}` : `# Cella ${index + 1} codice\n\`\`\`python\n${clean}\n\`\`\``);
+  });
+  if (!parts.length) return "";
+  return parts.join("\n\n");
+}
+
+async function extract(buffer: Buffer, extension: string, source = ""): Promise<{ text: string; lineKind: BrainChunk["lineKind"]; pages?: { num: number; text: string }[] }> {
+  if (extension === ".csv") return { text: sampledLargeText(decodeBrainText(buffer), source), lineKind: "source" };
+  if (/^\.(?:odt|ods|odp|doc|docx|docm|rtf|epub|ppt|pptx|pps|xls|xlsx|pdf)$/i.test(extension)) {
     try {
       const { toMarkdownBytes, formatFromExtension } = await import("@firecrawl/anydoc/anydoc.js");
       const markdown = await toMarkdownBytes(buffer, formatFromExtension(extension), { ocr: "reject" });
@@ -199,7 +232,8 @@ async function extract(buffer: Buffer, extension: string): Promise<{ text: strin
       throw new Error(`Conversione Markdown fallita${code ? ` (${code})` : ""}: ${(error as Error).message}`);
     }
   }
-  const text = decodeBrainText(buffer);
+  if (extension === ".ipynb") return { text: extractNotebookMarkdown(buffer), lineKind: "extracted" };
+  const text = sampledLargeText(decodeBrainText(buffer), source);
   return { text, lineKind: "source" };
 }
 
@@ -389,10 +423,10 @@ export function createBrain(options: BrainOptions = {}) {
             if (previous.files[relative]?.hash === hash) {
               next.files[relative] = previous.files[relative];
               chunkCount += previous.files[relative].chunks.length;
-              if (chunkCount > MAX_CHUNKS) throw new Error("Troppi chunk.");
+              if (chunkCount > MAX_CHUNKS) throw new Error(`Troppi chunk: massimo ${MAX_CHUNKS}.`);
               continue;
             }
-            const extracted = await extract(buffer, path.extname(entry.name).toLowerCase());
+            const extracted = await extract(buffer, path.extname(entry.name).toLowerCase(), relative);
             if (Buffer.byteLength(extracted.text) > MAX_TEXT) throw new Error("Testo estratto maggiore di 2 MiB.");
             chunks = extracted.pages ? extracted.pages.flatMap(page => chunkBrainText(page.text, relative, "extracted").map(chunk => ({ ...chunk, page: page.num, id: createHash("sha256").update(`${chunk.id}:page:${page.num}`).digest("hex") }))) : chunkBrainText(extracted.text, relative, extracted.lineKind);
             chunks = chunks.map(chunk => ({ ...chunk, kind: "content" as const }));
@@ -402,7 +436,7 @@ export function createBrain(options: BrainOptions = {}) {
             continue;
           }
           chunkCount += chunks.length;
-          if (chunkCount > MAX_CHUNKS) throw new Error("Troppi chunk: massimo 20000.");
+          if (chunkCount > MAX_CHUNKS) throw new Error(`Troppi chunk: massimo ${MAX_CHUNKS}.`);
           const stored = chunks.map(chunk => ({ ...chunk, embedding: [] as number[] }));
           next.files[relative] = { hash, chunks: stored };
           pending.push(...stored);
@@ -476,8 +510,11 @@ export function createBrain(options: BrainOptions = {}) {
     if (!chunks.length) return [];
     // Anche le ricerche telegrafiche ("chi Nova?") sono domande biografiche.
     const identityQuestion = /^\s*chi\b(?:\s+(?:e|è|sia))?[\s:,-]+\S/iu.test(query);
-    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "sono", "essere", "sia", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "nel", "nella", "nei", "nelle", "per", "progetto", "progetti", "usato", "usata", "utilizzato", "utilizzata", "esiste", "creare"]);
-    const terms = [...new Set(tokens(query).filter(term => !stopWords.has(term)))];
+    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "sono", "essere", "sia", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "nel", "nella", "nei", "nelle", "per", "progetto", "progetti", "usato", "usata", "utilizzato", "utilizzata", "esiste", "creare", "trova", "trovami", "scrivi", "scrivimi", "codice", "modello"]);
+    const queryLower = query.toLocaleLowerCase("it");
+    const maskRcnnIntent = /\bmask\b/iu.test(queryLower) && /\b(?:r\s*-?\s*cnn|rcnn|mrcnn)\b/iu.test(queryLower);
+    const expandedQuery = maskRcnnIntent ? `${query} mrcnn r-cnn maskrcnn detectron2 defaultpredictor pred_masks instances segmentation segmentazione` : query;
+    const terms = [...new Set(tokens(expandedQuery).filter(term => !stopWords.has(term)))];
     const identityTerms = identityQuestion ? terms : [];
     const factualQuestion = !identityQuestion && /^\s*(?:che|quale|quali|dove|quando|quanto|quanta|quanti|quante)\b/iu.test(query);
     // Espansione generica dell'intento: migliora l'embedding delle domande
@@ -517,7 +554,8 @@ export function createBrain(options: BrainOptions = {}) {
       const profileBoost = Math.min(0.40, profileFacts * 0.10);
       const overviewRelevant = terms.length === 0 || terms.some(term => entries![i].body.has(term));
       const overviewBoost = overviewQuestion && chunk.kind === "overview" && overviewRelevant ? 0.12 : 0;
-      return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, rankLine, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + profileBoost + overviewBoost + window.coverage * 0.15, citation: `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}` };
+      const maskRcnnBoost = maskRcnnIntent && (/(?:computer[-_ ]vision|deep[-_ ]learning|detection|segmentazione|segmentation)/iu.test(chunk.path) || /\b(?:detectron2|defaultpredictor|pred_masks|instances|mrcnn|mask\s*r\s*-?\s*cnn)\b/iu.test(chunk.text)) ? 0.16 : 0;
+      return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, rankLine, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + profileBoost + overviewBoost + maskRcnnBoost + window.coverage * 0.15, citation: `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}` };
     }).filter(hit => hit.entityMatch && (hit.lexicalScore > 0 || hit.cosineScore > 0.25)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
     const selected: typeof ranked = [];
     if (identityQuestion) {
@@ -568,7 +606,51 @@ export function createBrain(options: BrainOptions = {}) {
       await fs.rm(staging, { recursive: true, force: true });
     }
   }
-  return { getBrainStatus, indexBrain, searchBrain, importBrainRepository };
+  // Quando una domanda su un nome non trova nulla, propone i termini
+  // indicizzati più vicini (refusi come "albiter" -> "Arbiter").
+  async function suggestCorrection(query: string): Promise<string[]> {
+    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "quanto", "quanta", "quanti", "quante", "e", "ed", "è", "sia", "essere", "sono", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "al", "allo", "alla", "ai", "agli", "alle", "dal", "dallo", "dalla", "dai", "dagli", "dalle", "nel", "nella", "nei", "nelle", "sul", "sulla", "sui", "sulle", "per", "con", "come", "non", "nome", "persona", "personaggio"]);
+    const terms = [...new Set(tokens(query).filter((term) => !stopWords.has(term) && term.length >= 4))];
+    if (!terms.length) return [];
+    const index = await load();
+    const vocab = new Set<string>();
+    for (const file of Object.values(index.files)) {
+      for (const chunk of file.chunks) {
+        for (const word of tokens(`${chunk.path} ${chunk.text}`)) {
+          if (word.length >= 4) vocab.add(word);
+        }
+      }
+    }
+    const suggestions: string[] = [];
+    for (const term of terms) {
+      let best = "";
+      let bestDistance = 3;
+      for (const word of vocab) {
+        if (word === term) { best = ""; break; }
+        if (Math.abs(word.length - term.length) > 2) continue;
+        const distance = editDistance(term, word);
+        if (distance < bestDistance) { bestDistance = distance; best = word; }
+      }
+      if (best) suggestions.push(best.charAt(0).toLocaleUpperCase("it") + best.slice(1));
+      if (suggestions.length >= 3) break;
+    }
+    return [...new Set(suggestions)];
+  }
+  return { getBrainStatus, indexBrain, searchBrain, suggestCorrection, importBrainRepository };
+}
+
+function editDistance(a: string, b: string) {
+  const previous = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const current = previous[j];
+      previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = current;
+    }
+  }
+  return previous[b.length];
 }
 
 const brain = createBrain();

@@ -5,8 +5,11 @@ dist
 *.log
 .vscode
 ANDREA-BRAIN
+OCR
 data
 .env.*
 *.pem
 *.key
 ANDREAGPT.txt
+# Il certificato CA serve dentro l'immagine per la scansione SSL dell'antivirus.
+!certs/norton-shield-root.pem

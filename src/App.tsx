@@ -28,7 +28,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mascotUrl from "../img/mascotte-no-sfondo.png";
-import { QUICK_PROMPTS, TASKS } from "./data";
+import { MASCOT_QUOTES, QUICK_PROMPTS, QUOTE_INTERVAL_MS, TASKS } from "./data";
 import { BrainPanel } from "./BrainPanel";
 import { UniverseBackground } from "./UniverseBackground";
 import { AppearanceSettings, fonts, useAppearance } from "./AppearanceSettings";
@@ -49,6 +49,15 @@ const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
 const MAX_ATTACHMENTS_SIZE = 12 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
 type Theme = "cosmic" | "normal";
+type YoloTask = "detect" | "segment" | "classify" | "pose" | "obb";
+interface CustomInstruction { id: string; title: string; text: string; enabled: boolean }
+
+const DEFAULT_INSTRUCTIONS: CustomInstruction[] = [
+  { id: "generali", title: "Generali", enabled: true, text: "Rispondi in italiano.\nSii chiaro, concreto e accurato.\nNiente parolacce o frasi volgari non richieste." },
+  { id: "brain", title: "Brain", enabled: true, text: "Usa solo fonti pertinenti.\nCita solo cio che supporta davvero la risposta.\nNon inventare se le fonti sono parziali." },
+  { id: "caveman", title: "Caveman", enabled: true, text: "Usa meno fonti.\nScarta fonti strane o incoerenti.\nRispondi in modo semplice e diretto." },
+  { id: "codice", title: "Codice", enabled: true, text: "Produci codice completo, sicuro e leggibile.\nSpiega le decisioni importanti.\nIncludi test e comandi quando servono." },
+];
 
 export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -59,6 +68,8 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadActiveMessages());
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [specialMode, setSpecialMode] = useState<"normal" | "ocr" | "yolo">("normal");
+  const [yoloTask, setYoloTask] = useState<YoloTask>("detect");
   const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
   const [brainEnabled, setBrainEnabled] = useState(() => {
     if (localStorage.getItem("andreagpt-brain-default-v2") !== "1") {
@@ -69,6 +80,7 @@ export default function App() {
     return localStorage.getItem("andreagpt-brain-enabled") !== "false";
   });
   const [brainSource, setBrainSource] = useState("");
+  const [cavemanEnabled, setCavemanEnabled] = useState(() => localStorage.getItem("andreagpt-caveman-enabled") === "true");
   const [brainOpen, setBrainOpen] = useState(false);
   const appearance = useAppearance();
   const [brainInfoOpen, setBrainInfoOpen] = useState(false);
@@ -76,12 +88,16 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [webAvailable, setWebAvailable] = useState<boolean | null>(null);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [taskMenuOpen, setTaskMenuOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState<CustomInstruction[]>(() => loadCustomInstructions());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(initialSettings);
+  const [quoteIndex, setQuoteIndex] = useState(() => Math.floor(Math.random() * MASCOT_QUOTES.length));
   const [theme, setTheme] = useState<Theme>(() => localStorage.getItem("andreagpt-theme") === "normal" ? "normal" : "cosmic");
   const [historyCollapsed, setHistoryCollapsed] = useState(() => localStorage.getItem("andreagpt-history-collapsed") === "true");
   const [modelsCollapsed, setModelsCollapsed] = useState(() => localStorage.getItem("andreagpt-models-collapsed") === "true");
@@ -100,6 +116,12 @@ export default function App() {
   });
   const estimatedTokens = Math.ceil(messages.reduce((total, message) => total + message.content.length, 0) / 4);
 
+  function refreshHealth() {
+    void readHealth()
+      .then((health) => setWebAvailable(Boolean(health.providers?.web ?? health.providers?.searxng ?? true)))
+      .catch(() => setWebAvailable(null));
+  }
+
   useEffect(() => {
     fetch("/api/models")
       .then(async (response) => {
@@ -114,6 +136,19 @@ export default function App() {
       })
       .catch(() => setError("Impossibile caricare il catalogo dei modelli."))
       .finally(() => setModelsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refreshHealth();
+    const timer = window.setInterval(refreshHealth, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setQuoteIndex((current) => (current + 1 + Math.floor(Math.random() * (MASCOT_QUOTES.length - 1))) % MASCOT_QUOTES.length);
+    }, QUOTE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -166,6 +201,10 @@ export default function App() {
   }, [brainEnabled]);
 
   useEffect(() => {
+    localStorage.setItem("andreagpt-caveman-enabled", String(cavemanEnabled));
+  }, [cavemanEnabled]);
+
+  useEffect(() => {
     localStorage.setItem("andreagpt-theme", theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "cosmic" ? "#FFF8E7" : "#080A08");
   }, [theme]);
@@ -174,6 +213,10 @@ export default function App() {
     localStorage.setItem("andreagpt-history-collapsed", String(historyCollapsed));
     localStorage.setItem("andreagpt-models-collapsed", String(modelsCollapsed));
   }, [historyCollapsed, modelsCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem("andreagpt-custom-instructions", JSON.stringify(customInstructions));
+  }, [customInstructions]);
 
   useEffect(() => {
     const disableContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -216,6 +259,7 @@ export default function App() {
     setInput("");
     setAttachments([]);
     setError("");
+    setSpecialMode("normal");
     textareaRef.current?.focus();
   }
 
@@ -227,6 +271,7 @@ export default function App() {
     setBrainEnabled(Boolean(conversation.brainPrivate));
     setAttachments([]);
     setError("");
+    setSpecialMode(/^OCR \d+$/i.test(conversation.title) ? "ocr" : /^YOLO \d+$/i.test(conversation.title) ? "yolo" : "normal");
     if (models.some((model) => model.id === conversation.modelId)) setSelectedModelId(conversation.modelId);
     setSidebarOpen(false);
   }
@@ -240,6 +285,7 @@ export default function App() {
       setBrainEnabled(Boolean(next?.brainPrivate));
       setActiveConversationId(next?.id ?? "");
       setMessages(next?.messages ?? []);
+      setSpecialMode(next?.title.match(/^OCR \d+$/i) ? "ocr" : next?.title.match(/^YOLO \d+$/i) ? "yolo" : "normal");
       setAttachments([]);
       if (next && models.some((model) => model.id === next.modelId)) setSelectedModelId(next.modelId);
     }
@@ -256,6 +302,8 @@ export default function App() {
   async function sendMessage(text = input) {
     const content = text.trim();
     if ((!content && !attachments.length) || loading || !selectedModel) return;
+    if (specialMode === "ocr") { await processOcrBatch(); return; }
+    if (specialMode === "yolo") { await processYoloBatch(); return; }
     if (brainPrivate && (!isOllama || webSearchEnabled)) { setError("Brain e cronologia privata possono usare solo Ollama, senza web."); return; }
     if (isOllama && [...messages.flatMap((m) => m.attachments || []), ...attachments].some((a) => a.kind !== "text")) { setError("Ollama accetta solo testo. Questa conversazione contiene immagini/PDF: avvia una nuova chat o usa testo estratto."); return; }
 
@@ -285,8 +333,9 @@ export default function App() {
           brain: brainEnabled,
           brainPrivate,
           brainSource: brainSource || undefined,
+          caveman: cavemanEnabled,
           messages: [
-            { role: "system", content: selectedTask.prompt },
+            { role: "system", content: [selectedTask.prompt, renderCustomInstructions(customInstructions)].filter(Boolean).join("\n\n") },
             ...history.filter((message) => message.content || message.attachments?.length).map((message) => ({ ...toApiMessage(message, history.indexOf(message) === attachmentMessageIndex), brainPrivate: message.brainPrivate })),
           ],
           ...settings,
@@ -386,7 +435,7 @@ export default function App() {
 
     try {
       const loaded = await Promise.all(nextFiles.map(readAttachment));
-      if (isOllama && loaded.some((a) => a.kind !== "text")) throw new Error("Il modello Ollama non ha multimodalita verificata: allega solo testo/codice.");
+      if (specialMode === "normal" && isOllama && loaded.some((a) => a.kind !== "text")) throw new Error("Il modello Ollama non ha multimodalita verificata: allega solo testo/codice.");
       setAttachments((current) => [...current, ...loaded]);
       setError(selectedFiles.length > availableSlots ? `Sono stati aggiunti solo i primi ${availableSlots} file.` : "");
     } catch (caught) {
@@ -394,6 +443,62 @@ export default function App() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  function openSpecialChat(mode: "ocr" | "yolo") {
+    abortRef.current?.abort();
+    setLoading(false); setMessages([]); setAttachments([]); setInput(""); setError(""); setBrainEnabled(false); setSpecialMode(mode);
+    if (mode === "yolo") setYoloTask("detect");
+    const prefix = mode === "ocr" ? "OCR" : "YOLO";
+    const nextNumber = conversations.reduce((max, conversation) => {
+      const match = conversation.title.match(new RegExp(`^${prefix} (\\d+)$`, "i"));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+    const id = crypto.randomUUID();
+    const title = `${prefix} ${nextNumber}`;
+    setActiveConversationId(id);
+    setConversations((current) => [{ id, title, customTitle: true, messages: [], modelId: selectedModelId, updatedAt: Date.now() }, ...current]);
+    textareaRef.current?.focus();
+  }
+
+  async function processOcrBatch() {
+    if (!attachments.length) { setError("OCR: allega una o più immagini o PDF."); return; }
+    const pending = attachments;
+    if (!activeConversationId) setActiveConversationId(crypto.randomUUID());
+    const assistantId = crypto.randomUUID();
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", content: "Esegui OCR sugli allegati.", attachments: pending }, { id: assistantId, role: "assistant", content: "Elaborazione OCR in corso…" }]);
+    setAttachments([]); setInput(""); setError(""); setLoading(true);
+    try {
+      const results: string[] = [];
+      for (const attachment of pending) {
+        if (!attachment.dataUrl) continue;
+        const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, data: attachment.dataUrl }) });
+        const result = await response.json() as { text?: string; error?: string; output?: string };
+        if (!response.ok) throw new Error(result.error || `OCR non riuscito per ${attachment.name}.`);
+        results.push(`### ${attachment.name}\n${result.text || "Nessun testo riconosciuto."}\n\n_Risultato salvato in ${result.output || "OCR/output"}._`);
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
+      }
+    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(caught instanceof Error ? caught.message : "OCR non riuscito."); }
+    finally { setLoading(false); }
+  }
+
+  async function processYoloBatch() {
+    const pending = attachments.filter((attachment) => attachment.kind === "image" && attachment.dataUrl);
+    if (!pending.length) { setError("YOLO: allega una o più immagini."); return; }
+    const assistantId = crypto.randomUUID();
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", content: "Analizza gli elementi nelle immagini con YOLO.", attachments }, { id: assistantId, role: "assistant", content: "Analisi YOLO in corso…" }]);
+    setAttachments([]); setInput(""); setError(""); setLoading(true);
+    try {
+      const results: string[] = [];
+      for (const attachment of pending) {
+        const response = await fetch("/api/yolo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, task: yoloTask, data: attachment.dataUrl }) });
+        const result = await response.json() as { text?: string; error?: string };
+        if (!response.ok) throw new Error(result.error || `YOLO non riuscito per ${attachment.name}.`);
+        results.push(`### ${attachment.name}\n${result.text || "Nessun elemento rilevato."}`);
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
+      }
+    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(caught instanceof Error ? caught.message : "Analisi YOLO non riuscita."); }
+    finally { setLoading(false); }
   }
 
   return (
@@ -451,10 +556,14 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
+          <button className="mascot-balloon" onClick={() => setQuoteIndex((current) => (current + 1) % MASCOT_QUOTES.length)} title="Clicca per un'altra frase" aria-label="Frase della mascotte, clicca per cambiarla">
+            <span className="mascot-quote">“{MASCOT_QUOTES[quoteIndex].text}”</span>
+            <span className="mascot-author">— {MASCOT_QUOTES[quoteIndex].author}</span>
+          </button>
           <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />
-          <div className={`api-status ${configured ? "online" : "offline"}`}><span />{configured ? "Catalogo pronto (Ollama senza chiavi)" : "Catalogo non disponibile"}</div>
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
+          <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
         </div>
       </aside>
       {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Chiudi menu" />}
@@ -465,10 +574,17 @@ export default function App() {
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Apri menu"><Menu size={21} /></button>
           <div className="model-title">
             <span className="status-dot" />
-            <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong><small>{selectedModel?.provider ?? "NVIDIA"} · Contesto usato: ~{estimatedTokens.toLocaleString("it-IT")} token</small></div>
+            {specialMode === "ocr"
+              ? <div><strong>OCR locale</strong><small>Estrazione testo da immagini e PDF</small></div>
+              : specialMode === "yolo"
+                ? <div><strong>Analisi immagine Yolo</strong><small>Detection, segmentazione e visione</small></div>
+                : <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong><small>{selectedModel?.provider ?? "NVIDIA"} · Contesto usato: ~{estimatedTokens.toLocaleString("it-IT")} token</small></div>}
           </div>
           <div className="topbar-actions">
-            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><BrainCircuit size={17} /><span>{brainEnabled ? "Brain attivo" : "Brain SPENTO"}</span></button>
+            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><img className="brain-symbol" src="/brain.png" alt="" /><span>{brainEnabled ? "Brain attivo" : "Brain disattivato"}</span></button>
+            <button className={`brain-library-button ocr-button ${specialMode === "ocr" ? "active" : ""}`} onClick={() => openSpecialChat("ocr")} disabled={loading} title="Apri una nuova chat OCR">OCR</button>
+            <button className={`brain-library-button yolo-button ${specialMode === "yolo" ? "active" : ""}`} onClick={() => openSpecialChat("yolo")} disabled={loading} title="Apri una nuova chat YOLO">YOLO</button>
+            <button className={`caveman-mode-button ${cavemanEnabled ? "active" : ""}`} onClick={() => setCavemanEnabled((enabled) => !enabled)} disabled={loading} aria-pressed={cavemanEnabled} title={cavemanEnabled ? "Caveman attivo: fonti piu severe e risposte dirette" : "Caveman disattivato"}><span>CV</span><strong>{cavemanEnabled ? "Caveman attivo" : "Caveman disattivato"}</strong></button>
             <button className="brain-library-button" onClick={() => setBrainOpen(true)} aria-label="Esplora file Brain" title="Esplora file e progetti"><Folder size={17} /><span>Archivio</span></button>
             <div className="task-selector">
               <button className="task-trigger" onClick={() => setTaskMenuOpen((value) => !value)}>
@@ -490,27 +606,18 @@ export default function App() {
 
         <section className={`conversation ${messages.length ? "has-messages" : ""}`}>
           {!messages.length ? (
-            <div className="welcome">
-              <h1>Ciao Cetriolo,<br /><em>oggi che facciamo?</em></h1>
-              <div className="task-grid">
-                {TASKS.slice(0, 4).map((task) => {
-                  const Icon = iconByName[task.icon as keyof typeof iconByName];
-                  return <button key={task.id} onClick={() => chooseTask(task.id)} className={task.id === taskId ? "active" : ""}><Icon size={19} /><span><strong>{task.name}</strong><small>{task.description}</small></span></button>;
-                })}
-              </div>
-              <div className="quick-row">
-                {QUICK_PROMPTS.map((prompt) => <button key={prompt.label} onClick={() => { setInput(prompt.text); textareaRef.current?.focus(); }}>{prompt.label}</button>)}
-              </div>
+            <div className={`welcome${specialMode !== "normal" ? " welcome-plain" : ""}`}>
+              {specialMode === "ocr" ? <div className="special-welcome-card"><span className="welcome-kicker">OCR LOCALE</span><h1>Pronto per<br /><em>leggere i tuoi file.</em></h1><p>Allega una o più immagini o PDF. Il testo verrà estratto localmente e salvato nella cartella OCR.</p><button className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button></div> : specialMode === "yolo" ? <div className="special-welcome-card"><span className="welcome-kicker">YOLO VISION</span><h1>Capisco gli<br /><em>elementi nell’immagine.</em></h1><p>Scegli il task, allega una o più immagini e avvia detection, segmentazione, classificazione, pose o OBB.</p><label className="special-task-select">Task YOLO<select value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option><option value="obb">Object detection orientata</option></select></label><button className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button></div> : <><h1>Ciao Cetriolo,<br /><em>oggi che facciamo?</em></h1><div className="task-grid">{TASKS.slice(0, 4).map((task) => { const Icon = iconByName[task.icon as keyof typeof iconByName]; return <button key={task.id} onClick={() => chooseTask(task.id)} className={task.id === taskId ? "active" : ""}><Icon size={19} /><span><strong>{task.name}</strong><small>{task.description}</small></span></button>; })}</div><div className="quick-row">{QUICK_PROMPTS.map((prompt) => <button key={prompt.label} onClick={() => { setInput(prompt.text); textareaRef.current?.focus(); }}>{prompt.label}</button>)}</div></>}
             </div>
           ) : (
             <div className="message-list">
               {messages.map((message) => (
                 <article key={message.id} className={`message ${message.role}`}>
-                  <div className="message-avatar">{message.role === "user" ? "TU" : <img src="/andreagpt-logo.png" alt="AndreaGPT" />}</div>
+                  <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
-                    <div className="message-meta">{message.role === "user" ? "Tu" : selectedModel?.name}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
+                    <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : selectedModel?.name}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
-                    {message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={brainPrivate || message.brainPrivate ? { img: ({ alt }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined}>{message.content}</ReactMarkdown> : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <ReactMarkdown remarkPlugins={[remarkGfm]} components={brainPrivate || message.brainPrivate ? { img: ({ alt }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined}>{message.content}</ReactMarkdown> : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
                     {message.brainSources && <details className="brain-citations" open={!message.brainSources.length}><summary>Fonti Brain recuperate ({message.brainSources.length})</summary>{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</details>}
                     {message.metrics && <details className="brain-citations"><summary>Tempi e consumo</summary><p>
                       {message.metrics.retrievalMs !== undefined && <>Ricerca: {(message.metrics.retrievalMs / 1000).toFixed(2)} s · </>}
@@ -526,10 +633,10 @@ export default function App() {
         </section>
 
         <footer className="composer-wrap">
-          {brainPrivate && <div className={`privacy-indicator ${brainEnabled ? "active" : "inactive"}`} role="status" aria-label={`Conversazione privata. Solo Ollama, web bloccato. ${brainEnabled ? "Retrieval Brain attivo." : "Retrieval spento; cronologia privata."}`} title={`Conversazione privata · Solo Ollama · Web bloccato · ${brainEnabled ? "Brain attivo" : "Retrieval spento"}`}><BrainCircuit size={21} /></div>}
           {error && <div className="error-banner" role="alert" aria-live="assertive"><span><strong>Attenzione</strong>{error}</span><button onClick={() => setError("")} aria-label="Chiudi notifica"><X size={20} /></button></div>}
           {!configured && configured !== null && <div className="config-banner"><Info size={15} /> Verifica il server AndreaGPT. Ollama locale non richiede chiavi cloud.</div>}
-          <div className="composer">
+          <div className={`composer ${specialMode !== "normal" ? "special-composer" : ""}`}>
+            {specialMode !== "normal" && <div className="special-composer-label"><strong>{specialMode === "ocr" ? "OCR locale" : "YOLO locale"}</strong><span>{specialMode === "ocr" ? "Allega immagini o PDF per estrarre testo" : "Allega immagini per rilevare gli elementi"}</span></div>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
             <div className="composer-row">
               <input
@@ -537,11 +644,11 @@ export default function App() {
                 className="file-input"
                 type="file"
                 multiple
-                accept="image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"
+                accept={specialMode === "ocr" ? "image/*,.pdf" : specialMode === "yolo" ? "image/*" : "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"}
                 onChange={(event) => void addAttachments(event.target.files ?? [])}
               />
               <button className="attach-button" onClick={() => fileInputRef.current?.click()} disabled={loading || attachments.length >= MAX_ATTACHMENTS} aria-label="Allega file o immagini" title="Allega file o immagini"><Paperclip size={18} /></button>
-              <button className={`web-search-button ${webSearchEnabled ? "active" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate} aria-pressed={webSearchEnabled} aria-label="Attiva ricerca web" title={brainPrivate ? "Web bloccato per privacy Brain" : webSearchEnabled ? "Ricerca web attiva" : "Attiva ricerca web"}><Globe2 size={18} /></button>
+              {specialMode === "normal" && <><button className={`web-search-button ${webSearchEnabled ? "active" : ""} ${webAvailable === false ? "unavailable" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false} aria-pressed={webSearchEnabled} aria-label="Attiva ricerca web" title="Attiva ricerca web"><Globe2 size={18} /></button><button className={`composer-brain-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} aria-label="Attiva Brain" title="Attiva Brain"><img src="/brain.png" alt="" /></button></>}
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -552,7 +659,7 @@ export default function App() {
                     void sendMessage();
                   }
                 }}
-                placeholder={`Scrivi a ${selectedModel?.name ?? "AndreaGPT"}...`}
+                placeholder={specialMode === "ocr" ? "Allega immagini o PDF per OCR locale..." : specialMode === "yolo" ? "Allega immagini per analisi YOLO..." : "Scrivi un messaggio..."}
                 rows={1}
               />
               {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!input.trim() && !attachments.length) || !selectedModel} aria-label="Invia"><Send size={18} /></button>}
@@ -572,6 +679,34 @@ export default function App() {
       )}
 
       {brainOpen && <Modal title={<span className="brain-title">Archivio Brain<button className="brain-info-button" aria-label="Informazioni sull'archivio Brain" aria-expanded={brainInfoOpen} aria-controls="brain-info" onClick={() => setBrainInfoOpen(!brainInfoOpen)}><Info size={18} /></button></span>} wide onClose={() => setBrainOpen(false)}><BrainPanel showInfo={brainInfoOpen} locked={loading} source={brainSource} onSource={setBrainSource} /></Modal>}
+
+      {instructionsOpen && (
+        <Modal title="Istruzioni" onClose={() => setInstructionsOpen(false)}>
+          <div className="instructions-panel editor">
+            <p>Le istruzioni attive vengono inviate al modello. La cartella <code>ISTRUZIONI</code> resta come copia fisica leggibile nel progetto.</p>
+            <div className="instruction-actions">
+              <button onClick={() => setCustomInstructions((current) => [...current, { id: crypto.randomUUID(), title: "Nuova istruzione", text: "", enabled: true }])}>Aggiungi istruzione</button>
+              <button onClick={() => setCustomInstructions(DEFAULT_INSTRUCTIONS)}>Ripristina base</button>
+            </div>
+            <ul className="instruction-list">
+              {customInstructions.map((instruction) => (
+                <li className={!instruction.enabled ? "disabled" : ""} key={instruction.id}>
+                  <details open={!instruction.text.trim()}>
+                    <summary>
+                      <label className="instruction-enable" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={instruction.enabled} onChange={(event) => setCustomInstructions((current) => current.map((item) => item.id === instruction.id ? { ...item, enabled: event.target.checked } : item))} /> Attiva</label>
+                      <strong>{instruction.title.trim() || "Istruzione"}</strong>
+                    </summary>
+                    <input className="instruction-title" value={instruction.title} onChange={(event) => setCustomInstructions((current) => current.map((item) => item.id === instruction.id ? { ...item, title: event.target.value } : item))} />
+                    <textarea value={instruction.text} rows={4} onChange={(event) => setCustomInstructions((current) => current.map((item) => item.id === instruction.id ? { ...item, text: event.target.value } : item))} placeholder={"Scrivi qui le regole, una per riga:\nRispondi in italiano.\nSii chiaro e accurato."} />
+                    <button className="instruction-delete" onClick={() => setCustomInstructions((current) => current.filter((item) => item.id !== instruction.id))}>Elimina</button>
+                  </details>
+                </li>
+              ))}
+            </ul>
+            <button className="primary-action" onClick={() => setInstructionsOpen(false)}>Salva istruzioni</button>
+          </div>
+        </Modal>
+      )}
 
       {settingsOpen && (
         <Modal title="Impostazioni" onClose={() => setSettingsOpen(false)}>
@@ -596,9 +731,8 @@ export default function App() {
           <label className="setting-field"><span><strong>Temperatura</strong><small>Valori bassi sono più precisi, valori alti più creativi.</small></span><output>{settings.temperature.toFixed(1)}</output></label>
           <input className="range" type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} />
           <label className="setting-field token-field"><span><strong>Token massimi</strong><small>Lunghezza massima della risposta.</small></span><input type="number" min="1" max="8192" value={settings.maxTokens} onChange={(event) => setSettings({ ...settings, maxTokens: Math.min(8192, Math.max(1, Number(event.target.value))) })} /></label>
-          <label className="setting-field brain-field"><span>Contesto Ollama</span><select value={settings.numCtx ?? (Number(models.find((m) => m.providerId === "ollama")?.context) || 4096)} onChange={(e) => setSettings({ ...settings, numCtx: Number(e.target.value) as 4096 | 8192 })}><option value={4096}>4096</option><option value={8192}>8192</option></select></label>
-          <label className="setting-field brain-field"><span>Output Ollama</span><select value={settings.ollamaMaxTokens ?? 512} onChange={(e) => setSettings({ ...settings, ollamaMaxTokens: Number(e.target.value) as 256 | 512 | 1024 })}><option value={256}>256 · breve</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option></select></label>
-          <p className="brain-note">Budget input conservativo: la cronologia meno recente viene rimossa se necessario. Il primo caricamento locale puo richiedere diversi minuti; Stop annulla la richiesta.</p>
+          <label className="setting-field brain-field"><span><strong>Contesto Ollama</strong></span><select value={settings.numCtx ?? (Number(models.find((m) => m.providerId === "ollama")?.context) || 4096)} onChange={(e) => setSettings({ ...settings, numCtx: Number(e.target.value) as 4096 | 8192 })}><option value={4096}>4096</option><option value={8192}>8192</option></select></label>
+          <label className="setting-field brain-field"><span><strong>Output Ollama</strong></span><select value={settings.ollamaMaxTokens ?? 512} onChange={(e) => setSettings({ ...settings, ollamaMaxTokens: Number(e.target.value) as 256 | 512 | 1024 })}><option value={256}>256 · breve</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option></select></label>
           </div>
           <button className="primary-action" onClick={() => setSettingsOpen(false)}>Salva impostazioni</button>
         </Modal>
@@ -667,6 +801,47 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toLocaleString("it-IT", { maximumFractionDigits: 1 })} MB`;
+}
+
+function saveTextResult(text: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function loadCustomInstructions(): CustomInstruction[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem("andreagpt-custom-instructions") ?? "null");
+    if (!Array.isArray(saved)) return DEFAULT_INSTRUCTIONS;
+    return saved.map((item): CustomInstruction => ({
+      id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+      title: typeof item.title === "string" ? item.title.slice(0, 80) : "Istruzione",
+      text: typeof item.text === "string" ? item.text.slice(0, 4000) : "",
+      enabled: item.enabled !== false,
+    }));
+  } catch {
+    return DEFAULT_INSTRUCTIONS;
+  }
+}
+
+function renderCustomInstructions(instructions: CustomInstruction[]) {
+  const active = instructions.filter((instruction) => instruction.enabled && instruction.text.trim());
+  if (!active.length) return "";
+  return `Istruzioni personalizzate attive:\n${active.map((instruction) => {
+    const title = instruction.title.trim() || "Istruzione";
+    const lines = instruction.text.split(/\n+/).map((line) => line.trim().replace(/^[-•]\s*/, "")).filter(Boolean);
+    if (lines.length <= 1) return `- ${title}: ${lines[0] ?? ""}`;
+    return `- ${title}:\n${lines.map((line) => `  - ${line}`).join("\n")}`;
+  }).join("\n")}`;
+}
+
+async function readHealth() {
+  const response = await fetch("/api/health");
+  if (!response.ok) throw new Error("Health non disponibile");
+  return response.json() as Promise<{ providers?: { searxng?: boolean; web?: boolean } }>;
 }
 
 function Modal({ title, onClose, children, wide = false }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode; wide?: boolean }) {

@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 
 const defaults = Object.entries(import.meta.glob<string>("../UNIVERSE/*.{webp,jpg,jpeg,png}", { eager: true, query: "?url", import: "default" }))
   .sort(([a], [b]) => a.localeCompare(b)).map(([id, url]) => ({ id, url, name: id.split("/").at(-1)! }));
@@ -82,20 +83,20 @@ export function useAppearance() {
 export function AppearanceSettings({ appearance }: { appearance: ReturnType<typeof useAppearance> }) {
   const { preferences, pictures, update, add, remove, error, busy } = appearance;
   return <>
-    <div className="settings-section appearance-settings">
-      <div className="settings-heading"><strong>Testo della chat</strong><small>Anteprima immediata nei messaggi e nella barra di scrittura.</small></div>
+    <details className="settings-section appearance-settings settings-collapse">
+      <summary className="settings-collapse-title"><span><strong>Testo della chat</strong><small>Anteprima immediata nei messaggi e nella barra di scrittura.</small></span><ChevronDown size={15} /></summary>
       <label>Carattere<select value={preferences.font} onChange={e => update({ ...preferences, font: e.target.value as keyof typeof fonts })}><option value="mono">Geist Mono · originale</option><option value="system">Arial · semplice</option><option value="serif">Georgia · classico</option></select></label>
       <label>Dimensione: {preferences.size} px<input type="range" min="12" max="24" step="1" value={preferences.size} onChange={e => update({ ...preferences, size: Number(e.target.value) })} /></label>
       <p style={{ fontFamily: fonts[preferences.font], fontSize: preferences.size }}>Il tuo prossimo viaggio inizia con una domanda.</p>
-    </div>
-    <div className="settings-section appearance-settings">
-      <div className="settings-heading"><strong>Sfondi della chat</strong><small>Le immagini cambiano ogni 5 minuti. Modifiche e immagini personali vengono salvate in questo browser.</small></div>
+    </details>
+    <details className="settings-section appearance-settings settings-collapse">
+      <summary className="settings-collapse-title"><span><strong>Sfondi della chat</strong><small>Le immagini cambiano ogni 5 minuti. Modifiche e immagini personali vengono salvate in questo browser.</small></span><ChevronDown size={15} /></summary>
       <label>Aggiungi immagini<input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={busy} onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ""; void add(files); }} /></label>
       {busy && <p role="status">Salvataggio immagini…</p>}
       {error && <p role="alert">{error}</p>}
       <div className="background-gallery">{pictures.map(picture => <div key={picture.id}><img src={picture.url} alt={picture.name} loading="lazy" /><button type="button" disabled={busy} aria-label={`Elimina sfondo ${picture.name}`} onClick={() => void remove(picture)}>Elimina</button></div>)}</div>
       {!pictures.length && <p>Nessuno sfondo: la chat usa il colore del tema.</p>}
       {!!preferences.hidden.length && <button type="button" onClick={() => update({ ...preferences, hidden: [] })}>Ripristina sfondi originali</button>}
-    </div>
+    </details>
   </>;
 }

@@ -28,3 +28,16 @@ test("domande trasversali possono usare fino a cinque fonti nel budget", () => {
   const result = localContext([{ role: "user", content: "Come ho utilizzato la PCA nei progetti?" }], sources, true, 4096, 512);
   assert.equal(result.sources.length, 5);
 });
+
+test("Caveman usa meno fonti e aggiunge istruzioni severe", () => {
+  const sources = Array.from({ length: 5 }, (_, i) => ({ id: `Cit. ${i + 1}`, source: `progetto-${i}`, text: `Fatto ${i}` }));
+  const result = localContext([{ role: "user", content: "Come ho utilizzato la PCA nei progetti?" }], sources, true, 4096, 512, true);
+  assert.equal(result.sources.length, 3);
+  assert.match(result.messages[0].content, /Caveman/);
+  assert.match(result.messages.at(-1)!.content, /fonte sembra fuori tema/);
+});
+
+test("Brain evita parolacce non richieste", () => {
+  const result = localContext([{ role: "user", content: "Spiega i puntatori" }], [{ id: "Cit. 1", source: "cpp.md", text: "Un puntatore contiene un indirizzo." }], true, 4096, 512);
+  assert.match(result.messages[0].content, /niente parolacce/i);
+});
