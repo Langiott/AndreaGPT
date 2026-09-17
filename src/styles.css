@@ -165,12 +165,16 @@ button { color: inherit; }
 @keyframes pulse { 0%, 70%, 100% { opacity: .25; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-3px); } }
 
 .composer-wrap { width: 100%; max-width: 900px; margin: auto; flex: 0 0 auto; padding: 0 38px 14px; background: linear-gradient(transparent, #080a08 25%); }
-.composer { min-height: 57px; display: flex; flex-direction: column; border: 1px solid #2b3129; background: #111411; border-radius: 13px; padding: 9px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+.composer { position: relative; min-height: 57px; display: flex; flex-direction: column; border: 1px solid #2b3129; background: #111411; border-radius: 13px; padding: 9px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
 .special-composer { border-color: rgba(183,243,74,.45); }
 .special-composer-label { display: flex; align-items: center; gap: 10px; padding: 0 5px 8px; color: #7d8777; font-size: 11px; }
 .special-composer-label strong { color: var(--lime); font-size: 12px; }
 .composer:focus-within { border-color: rgba(183,243,74,.4); box-shadow: 0 0 0 3px rgba(183,243,74,.04), 0 12px 40px rgba(0,0,0,.2); }
 .composer-row { width: 100%; display: flex; align-items: flex-end; }
+.mention-suggestions { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5; display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; padding: 6px; border: 1px solid #b9ad98; border-radius: 10px; background: #fffaf0; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+.mention-suggestions button { padding: 8px 10px; border: 0; background: transparent; color: #17140f; text-align: left; cursor: pointer; font: 12px Consolas, monospace; }
+.mention-suggestions button:hover { background: #eee3ce; }
+.mention-suggestions span { color: #6d7d43; font-weight: 700; }
 .composer textarea { width: 100%; min-height: 36px; max-height: 180px; resize: none; padding: 8px 10px 5px; border: 0; outline: 0; background: transparent; color: #e6ebe2; line-height: 1.45; font-size: 13px; }
 .composer textarea::placeholder { color: #596056; }
 .file-input { display: none; }

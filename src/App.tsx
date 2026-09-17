@@ -80,6 +80,8 @@ export default function App() {
     return localStorage.getItem("andreagpt-brain-enabled") !== "false";
   });
   const [brainSource, setBrainSource] = useState("");
+  const [brainPaths, setBrainPaths] = useState<string[]>([]);
+  const [mentionQuery, setMentionQuery] = useState("");
   const [cavemanEnabled, setCavemanEnabled] = useState(() => localStorage.getItem("andreagpt-caveman-enabled") === "true");
   const [brainOpen, setBrainOpen] = useState(false);
   const appearance = useAppearance();
@@ -115,6 +117,22 @@ export default function App() {
     return `${model.name} ${model.id} ${model.provider} ${model.tags.join(" ")}`.toLowerCase().includes(term);
   });
   const estimatedTokens = Math.ceil(messages.reduce((total, message) => total + message.content.length, 0) / 4);
+  const mentionSuggestions = brainPaths.filter(path => path.toLowerCase().includes(mentionQuery.toLowerCase())).slice(0, 8);
+  const mentionActive = /(?:^|\s)@[^\s]*$/u.test(input);
+
+  function updateChatInput(value: string) {
+    setInput(value); resizeInput(value);
+    const match = value.match(/(?:^|\s)@([^\s]*)$/u);
+    setMentionQuery(match?.[1] ?? "");
+  }
+
+  function chooseMention(path: string) {
+    const value = input.replace(/@[^\s]*$/u, `@${path} `);
+    updateChatInput(value);
+    textareaRef.current?.focus();
+  }
+
+  useEffect(() => { fetch("/api/brain/status").then(r => r.ok ? r.json() : null).then(data => setBrainPaths((data?.sources ?? []).map((s: { id: string }) => s.id))).catch(() => {}); }, []);
 
   function refreshHealth() {
     void readHealth()
@@ -308,6 +326,7 @@ export default function App() {
     if (isOllama && [...messages.flatMap((m) => m.attachments || []), ...attachments].some((a) => a.kind !== "text")) { setError("Ollama accetta solo testo. Questa conversazione contiene immagini/PDF: avvia una nuova chat o usa testo estratto."); return; }
 
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content, attachments, webSearch: webSearchEnabled, brainPrivate };
+    const mentionedSource = content.match(/(?:^|\s)@([^\s]+(?:\/[^\s]+)*)/u)?.[1] || brainSource;
     const conversationId = activeConversationId || crypto.randomUUID();
     if (!activeConversationId) setActiveConversationId(conversationId);
     const assistantId = crypto.randomUUID();
@@ -332,7 +351,7 @@ export default function App() {
           conversationId,
           brain: brainEnabled,
           brainPrivate,
-          brainSource: brainSource || undefined,
+          brainSource: mentionedSource || undefined,
           caveman: cavemanEnabled,
           messages: [
             { role: "system", content: [selectedTask.prompt, renderCustomInstructions(customInstructions)].filter(Boolean).join("\n\n") },
@@ -652,7 +671,7 @@ export default function App() {
               <textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(event) => resizeInput(event.target.value)}
+                onChange={(event) => updateChatInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
@@ -660,8 +679,10 @@ export default function App() {
                   }
                 }}
                 placeholder={specialMode === "ocr" ? "Allega immagini o PDF per OCR locale..." : specialMode === "yolo" ? "Allega immagini per analisi YOLO..." : "Scrivi un messaggio..."}
+                title={brainPaths.length ? `Per filtrare Brain usa @ seguito dal percorso: ${brainPaths.slice(0, 3).join(", ")}` : "Usa @percorso per citare una fonte Brain"}
                 rows={1}
               />
+              {mentionActive && mentionSuggestions.length > 0 && <div className="mention-suggestions">{mentionSuggestions.map(path => <button type="button" key={path} onClick={() => chooseMention(path)}><span>@</span>{path}</button>)}</div>}
               {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!input.trim() && !attachments.length) || !selectedModel} aria-label="Invia"><Send size={18} /></button>}
             </div>
           </div>

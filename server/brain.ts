@@ -522,7 +522,7 @@ export function createBrain(options: BrainOptions = {}) {
     const semanticQuery = identityQuestion
       ? `Identità, descrizione, caratteristiche, storia e ruolo di ${identityTerms.join(" ")}. Domanda: ${query}`
       : query;
-    const overviewQuestion = /\b(?:riassum|panoramica|in generale|parla di|contiene|quali progetti|che progetti|cosa ho fatto|come ho usato|come ho utilizzato)\b/iu.test(query);
+    const overviewQuestion = /\b(?:riassum|panoramica|in generale|parla di|contiene|quali progetti|che progetti|cosa ho fatto|come ho usato|come ho utilizzato|come ho realizzato|come ho creato|come ho costruito|nel mio progetto)\b/iu.test(query);
     const [vector] = await embed([`search_query: ${semanticQuery}`]);
     const documentTokens = entries.map(entry => entry.words);
     const documents = entries.map(entry => entry.counts);
