@@ -400,7 +400,7 @@ app.post("/api/chat", async (request, response) => {
         temperature: parsed.data.temperature,
         max_tokens: parsed.data.maxTokens,
         stream: true,
-        ...(usesOllama ? { think: false, keep_alive: "30m", options: { num_ctx: parsed.data.numCtx, num_predict: parsed.data.maxTokens, temperature: parsed.data.temperature } } : {}),
+        ...(usesOllama ? { think: false, keep_alive: "30m", options: { num_ctx: parsed.data.numCtx, num_predict: parsed.data.maxTokens, temperature: parsed.data.brain ? 0.2 : parsed.data.temperature, repeat_penalty: 1.2 } } : {}),
       }),
       signal: controller.signal,
       redirect: usesOllama ? "error" : "follow",
