@@ -12,7 +12,9 @@
     "check": "tsc --noEmit",
     "test": "tsx --test server/*.test.ts",
     "brain": "tsx server/brain-cli.ts",
-    "smoke:local": "tsx scripts/Smoke-Locale.ts"
+    "smoke:local": "tsx scripts/Smoke-Locale.ts",
+    "benchmark:router": "tsx scripts/Benchmark-Router.ts",
+    "benchmark:retrieval": "tsx scripts/Benchmark-Retrieval.ts"
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.2.4",
@@ -22,13 +24,17 @@
     "dotenv": "latest",
     "express": "latest",
     "fast-xml-parser": "^5.11.1",
+    "katex": "^0.18.7",
     "lucide-react": "latest",
     "pdf-parse": "2.4.5",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "latest",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "latest",
+    "remark-math": "^6.0.0",
     "tsx": "latest",
+    "typescript": "^5.9.3",
     "undici": "^8.10.2",
     "vite": "latest",
     "zod": "latest"
@@ -40,10 +46,9 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "concurrently": "latest",
-    "typescript": "^5.9.3"
+    "concurrently": "latest"
   },
   "engines": {
-    "node": ">=22.3.0"
+    "node": ">=22.13.0"
   }
 }

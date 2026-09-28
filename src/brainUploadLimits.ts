@@ -7,6 +7,6 @@ export const BRAIN_UPLOAD_PRESETS = [
 export const BRAIN_MAX_FILE_BYTES = 100 * 1024 * 1024;
 export function brainUploadPreset(id: number) {
   const preset = BRAIN_UPLOAD_PRESETS.find(item => item.id === id);
-  if (!preset) throw new Error("Pacchetto di caricamento non valido.");
+  if (!preset) throw new Error("Limite di caricamento non valido.");
   return preset;
 }

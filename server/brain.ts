@@ -9,6 +9,9 @@ import AdmZip from "adm-zip";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { localOllamaUrl } from "./local";
 import { BRAIN_MAX_FILE_BYTES, brainUploadPreset } from "../src/brainUploadLimits";
+import { JsonLineWorker } from "./json-line-worker";
+import { retrievalTokens as tokens, selectPassages, oneEditApart } from "./retrieval";
+import { BrainStore } from "./brainStore";
 
 const MODEL = "nomic-embed-text";
 const VERSION = 2;
@@ -19,7 +22,10 @@ const MAX_CHUNKS = Number.parseInt(process.env.BRAIN_MAX_CHUNKS ?? "100000", 10)
 const MAX_FILES = 5_000;
 const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 180;
-const BATCH_SIZE = 8;
+// Ollama accetta più testi per richiesta. Un batch più grande riduce molto
+// l'overhead HTTP; la concorrenza resta configurabile per non saturare la RAM.
+const BATCH_SIZE = Math.max(1, Math.min(64, Number(process.env.BRAIN_EMBED_BATCH ?? 32) || 32));
+const EMBED_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.BRAIN_EMBED_CONCURRENCY ?? 3) || 3));
 const extensions = new Set(".md .markdown .txt .ts .tsx .js .jsx .mjs .cjs .py .rs .go .java .c .h .cpp .hpp .cs .css .scss .html .xml .json .yaml .yml .toml .sql .sh .ps1 .rb .php .vue .svelte .odt .ods .odp .doc .docx .docm .rtf .epub .ppt .pptx .pps .xls .xlsx .csv .pdf .ipynb".split(" "));
 const excluded = /^(?:\..*|node_modules|dist|build|coverage|vendor|__pycache__|secrets?|credentials?)(?:$)|(?:secret|credential|password|token|private[-_]?key)|\.(?:pem|key|p12|pfx|keystore)$|^env(?:\.|$)/i;
 const run = promisify(execFile);
@@ -56,11 +62,14 @@ export interface BrainStatus {
   indexing: boolean;
   errors: { path: string; error: string }[];
   progress?: { phase: "scanning" | "extracting" | "embedding" | "saving" | "complete"; completed: number; total: number; current?: string };
+  turboVec?: { enabled: boolean; ready: boolean; building: boolean; count?: number; dimension?: number; error?: string };
 }
 export interface BrainSearchResult extends BrainChunk {
   score: number;
   lexicalScore: number;
   cosineScore: number;
+  /** Score normalizzato della rete Micelio usato per la propagazione semantica. */
+  micelioScore?: number;
   citation: string;
 }
 export interface BrainOptions {
@@ -68,6 +77,13 @@ export interface BrainOptions {
   dataDir?: string;
   ollamaUrl?: string;
   embed?: (texts: string[]) => Promise<number[][]>;
+  backend?: "legacy" | "sqlite";
+  turbo?: boolean;
+}
+
+export interface BrainSearchContext {
+  metrics: Record<string, number>;
+  queryVector?: number[];
 }
 
 function inside(root: string, target: string) {
@@ -246,8 +262,56 @@ export function validateBrainRepositoryUrl(input: string): string {
   const repoPath = url.pathname.replace(/\/$/, "").replace(/\.git$/, "");
   return `https://github.com${repoPath}.git`;
 }
+export interface BrainDiagnostics { root: string; dataDir: string; documentsOnDisk: number; indexedFiles: number; indexedChunks: number; index: { present: boolean; valid: boolean; updatedAt: string | null; errors: number; embeddingDimension?: number }; embeddings: { checked: number; valid: number; invalid: number; dimensions: number[] }; backups: { path: string; present: boolean }[]; turboVec: NonNullable<BrainStatus["turboVec"]>; verdict: string[]; }
+interface BrainFeedback { id: string; query: string; terms: string[]; sources: string[]; rating: 1 | -1; createdAt: string }
+export interface BrainSemanticSupportSource { citation: string; text: string; retrievalScore?: number }
+export interface BrainSemanticSupport {
+  checked: boolean;
+  score: number;
+  label: "forte" | "media" | "debole";
+  answerAlignment: number;
+  queryAlignment: number;
+  graphCohesion: number;
+  sources: Array<{ citation: string; score: number }>;
+}
+export interface BrainGraphNode {
+  id: string;
+  label: string;
+  type: "collection" | "file" | "chunk";
+  path: string;
+  chunks: number;
+  files: number;
+  score: number;
+  vitality: number;
+  active: boolean;
+  central: boolean;
+  degree: number;
+  weightedDegree: number;
+  betweenness: number;
+  closeness: number;
+  centrality: number;
+  preview?: string;
+}
+export interface BrainGraphEdge { source: string; target: string; similarity: number; flow: number }
+export interface BrainGraph {
+  level: "collections" | "files" | "chunks";
+  scope: string;
+  query: string;
+  nodes: BrainGraphNode[];
+  edges: BrainGraphEdge[];
+  truncated: boolean;
+  totals: { nodes: number; edges: number; active: number; passive: number; central: number };
+}
 
-function tokens(text: string) { return text.toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) ?? []; }
+export function validateBrainProfileUrl(input: string): string {
+  let url: URL;
+  try { url = new URL(input); } catch { throw new Error("URL profilo GitHub HTTPS non valido."); }
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password || url.search || url.hash || !/^\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/?$/.test(url.pathname)) {
+    throw new Error("Usare https://github.com/utente senza credenziali, query o frammenti.");
+  }
+  return `https://github.com${url.pathname.replace(/\/$/, "")}`;
+}
+
 function identityExcerpt(text: string, names: string[]) {
   const lower = text.toLocaleLowerCase("it");
   const positions = names.map(name => lower.indexOf(name.toLocaleLowerCase("it"))).filter(position => position >= 0);
@@ -275,7 +339,9 @@ function sentenceWindow(text: string, terms: string[]) {
   });
   const windowText = sentences.slice(Math.max(0, best - 1), Math.min(sentences.length, best + 2)).join(" ").slice(0, CHUNK_SIZE);
   const windowWords = new Set(tokens(windowText));
-  return { text: windowText, coverage: terms.length ? terms.filter(term => windowWords.has(term)).length / terms.length : 0 };
+  // Chunks already have a bounded size. Keep the surrounding evidence intact:
+  // an answer or a negation can occur more than one sentence after the match.
+  return { text, coverage: terms.length ? terms.filter(term => windowWords.has(term)).length / terms.length : 0 };
 }
 function cosine(a: number[], b: number[]) {
   if (a.length !== b.length) throw new Error("Dimensioni embedding cambiate: ricreare l'indice.");
@@ -287,16 +353,77 @@ function cosine(a: number[], b: number[]) {
 export function createBrain(options: BrainOptions = {}) {
   const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const root = path.resolve(options.root ?? process.env.BRAIN_ROOT ?? path.join(workspace, "ANDREA-BRAIN"));
-  const dataDir = path.resolve(options.dataDir ?? process.env.BRAIN_DATA_DIR ?? path.join(workspace, "data/brain"));
+  const dataDir = path.resolve(options.dataDir ?? process.env.BRAIN_DATA_DIR ?? path.join(root, ".index"));
   const indexPath = path.join(dataDir, "index.json");
+  const turboIndexPath = path.join(dataDir, "index.tvim");
+  const turboMetaPath = path.join(dataDir, "index.turbovec.json");
+  const feedbackPath = path.join(dataDir, "feedback.json");
+  const store = new BrainStore(path.join(dataDir, "retrieval"), indexPath);
+  let storeVocabulary: { generation: string; words: string[] } | undefined;
+  const backupPaths = [path.join(dataDir, "index.backup.json"), path.join(dataDir, "index.previous.json")];
+  const turboScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "turbovec_bridge.py");
+  const turboEnabled = options.turbo ?? (process.env.BRAIN_TURBOVEC !== "0" && !options.embed);
+  const useStore = turboEnabled && (options.backend ?? process.env.BRAIN_RETRIEVAL_BACKEND) === "sqlite";
+  const turboWorker = turboEnabled ? new JsonLineWorker(process.env.TURBOVEC_PYTHON || process.env.DOCTR_PYTHON || "python", [turboScript, "serve"], 30_000) : undefined;
   const ollama = new URL(localOllamaUrl(options.ollamaUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"));
   let indexing = false;
   let importing = false;
   let progress: BrainStatus["progress"];
+  let turboBuilding = false;
+  let turboInfo: NonNullable<BrainStatus["turboVec"]> = { enabled: turboEnabled, ready: false, building: false };
   const empty = (): BrainIndex => ({ version: VERSION, model: MODEL, updatedAt: null, files: {}, errors: [] });
   let cachedIndex: { stamp: string; value: BrainIndex } | undefined;
-  const lexicalCache = new WeakMap<BrainIndex, Map<string, { chunk: StoredChunk; words: string[]; body: Set<string>; counts: Map<string, number> }[]>>();
+  const queryEmbeddings = new Map<string, { expires: number; value: Promise<number[]> }>();
+  function embedQuery(text: string): Promise<number[]> {
+    if (process.env.RAG_OPTIMIZE === "0") return embed([text]).then(values => values[0]);
+    const cached = queryEmbeddings.get(text);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    if (queryEmbeddings.size >= 64) queryEmbeddings.delete(queryEmbeddings.keys().next().value!);
+    const value = embed([text]).then(values => values[0]);
+    queryEmbeddings.set(text, { expires: Date.now() + 300_000, value });
+    void value.catch(() => { if (queryEmbeddings.get(text)?.value === value) queryEmbeddings.delete(text); });
+    return value;
+  }
+  const lexicalCache = new WeakMap<BrainIndex, Map<string, { chunk: StoredChunk; turboId: number; words: string[]; body: Set<string>; counts: Map<string, number> }[]>>();
   const noiseFile = (name: string) => /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock)$/i.test(name);
+
+  async function loadFeedback(): Promise<BrainFeedback[]> {
+    try {
+      await noLinks(feedbackPath);
+      const parsed = JSON.parse(await fs.readFile(feedbackPath, "utf8"));
+      return Array.isArray(parsed) ? parsed.slice(-2000) : [];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  function feedbackBoost(feedback: BrainFeedback[], query: string, sourcePath: string) {
+    const queryTerms = new Set(tokens(query).filter(term => term.length > 2));
+    if (!queryTerms.size) return 0;
+    let weighted = 0, weight = 0;
+    for (const entry of feedback) {
+      const exactChunk = /:\d+(?:-\d+)?/u.test(sourcePath);
+      if (!entry.sources.some(source => exactChunk ? source === sourcePath : source === sourcePath || source.startsWith(`${sourcePath}/`) || sourcePath.startsWith(`${source}/`))) continue;
+      const overlap = entry.terms.filter(term => queryTerms.has(term)).length / Math.max(queryTerms.size, entry.terms.length, 1);
+      if (overlap < 0.2) continue;
+      weighted += entry.rating * overlap; weight += overlap;
+    }
+    return weight ? Math.max(-0.14, Math.min(0.14, weighted / weight * 0.10)) : 0;
+  }
+
+  async function recordBrainFeedback(input: { query: string; rating: 1 | -1; sources: string[] }) {
+    const query = input.query.trim().slice(0, 600);
+    const sources = [...new Set(input.sources.map(source => source.replace(/\\/g, "/").trim()).filter(source => source && !source.includes("..") && !path.isAbsolute(source)))].slice(0, 8);
+    if (!query || !sources.length) throw new Error("Feedback senza domanda o fonti.");
+    const feedback = await loadFeedback();
+    feedback.push({ id: randomUUID(), query, terms: [...new Set(tokens(query).filter(term => term.length > 2))].slice(0, 16), sources, rating: input.rating, createdAt: new Date().toISOString() });
+    await fs.mkdir(dataDir, { recursive: true });
+    const temporary = `${feedbackPath}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(feedback.slice(-2000), null, 2), { encoding: "utf8", flag: "wx" });
+    await fs.rename(temporary, feedbackPath);
+    return { saved: true, count: Math.min(feedback.length, 2000) };
+  }
 
   async function load(): Promise<BrainIndex> {
     await noLinks(indexPath);
@@ -311,15 +438,25 @@ export function createBrain(options: BrainOptions = {}) {
       return index;
     } catch (error) {
       cachedIndex = undefined;
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty();
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        for (const backup of backupPaths) {
+          try {
+            const backupIndex = JSON.parse(await fs.readFile(backup, "utf8")) as BrainIndex;
+            if (backupIndex.version === VERSION && backupIndex.model === MODEL && backupIndex.files && Array.isArray(backupIndex.errors)) return backupIndex;
+          } catch { /* prova il backup successivo */ }
+        }
+        return empty();
+      }
       throw error;
     }
   }
 
   async function embed(texts: string[]): Promise<number[][]> {
-    const vectors: number[][] = [];
-    for (let offset = 0; offset < texts.length; offset += BATCH_SIZE) {
-      const batch = texts.slice(offset, offset + BATCH_SIZE);
+    const batchSize = options.embed ? 8 : BATCH_SIZE;
+    const batches = Array.from({ length: Math.ceil(texts.length / batchSize) }, (_, i) => texts.slice(i * batchSize, (i + 1) * batchSize));
+    const vectors: number[][][] = new Array(batches.length);
+    for (let offset = 0; offset < batches.length; offset += EMBED_CONCURRENCY) {
+      const active = batches.slice(offset, offset + EMBED_CONCURRENCY).map(async (batch, worker) => {
       let values: number[][];
       if (options.embed) values = await options.embed(batch);
       else {
@@ -332,17 +469,273 @@ export function createBrain(options: BrainOptions = {}) {
         values = (await response.json() as { embeddings: number[][] }).embeddings;
       }
       if (!Array.isArray(values) || values.length !== batch.length || values.some(v => !Array.isArray(v) || !v.length || v.length > 8192 || v.some(n => !Number.isFinite(n)) || !v.some(n => n !== 0))) throw new Error("Risposta embedding non valida.");
-      vectors.push(...values);
+        vectors[offset + worker] = values;
+      });
+      await Promise.all(active);
     }
-    if (vectors.some(v => v.length !== vectors[0].length)) throw new Error("Dimensioni embedding incoerenti.");
-    return vectors;
+    const flattened = vectors.flat();
+    if (flattened.length && flattened.some(v => v.length !== flattened[0].length)) throw new Error("Dimensioni embedding incoerenti.");
+    return flattened;
   }
 
   function status(index: BrainIndex): BrainStatus {
-    return { sources: Object.entries(index.files).map(([id, file]) => ({ id, chunks: file.chunks.length })), root, indexPath, model: MODEL, indexedAt: index.updatedAt, files: Object.keys(index.files).length, chunks: Object.values(index.files).reduce((sum, file) => sum + file.chunks.length, 0), indexing, errors: index.errors, progress };
+    return { sources: Object.entries(index.files).map(([id, file]) => ({ id, chunks: file.chunks.length })), root, indexPath, model: MODEL, indexedAt: index.updatedAt, files: Object.keys(index.files).length, chunks: Object.values(index.files).reduce((sum, file) => sum + file.chunks.length, 0), indexing, errors: index.errors, progress, turboVec: { ...turboInfo, building: turboBuilding } };
   }
 
-  async function getBrainStatus() { return status(await load()); }
+  async function getBrainStatus() {
+    const meta = useStore ? await store.open() : undefined;
+    if (meta) return { sources: store.files(), root, indexPath, model: meta.model, indexedAt: meta.updatedAt,
+      files: meta.files, chunks: meta.count, indexing, errors: meta.errors, progress,
+      turboVec: { enabled: turboEnabled, ready: turboEnabled, building: false, count: meta.count, dimension: meta.dimension } };
+    return status(await load());
+  }
+
+  async function deleteBrainSource(source: string) {
+    const normalized = source.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (!normalized || normalized.split("/").some(part => part === "." || part === "..") || normalized.includes(":")) throw new Error("Fonte Brain non valida.");
+    if (indexing || importing) throw new Error("Attendere la fine dell'operazione Brain in corso.");
+    const current = await load();
+    if (!current.files[normalized]) throw new Error("La fonte non è presente nell'indice Brain.");
+    const next: BrainIndex = { ...current, files: { ...current.files }, updatedAt: new Date().toISOString() };
+    delete next.files[normalized];
+    const serialized = JSON.stringify(next);
+    if (Buffer.byteLength(serialized) > 256 * 1024 * 1024) throw new Error("Indice maggiore di 256 MiB.");
+    await fs.mkdir(dataDir, { recursive: true });
+    const temporary = `${indexPath}.${process.pid}.delete.tmp`;
+    const output = await fs.open(temporary, "wx", 0o600);
+    try { await output.writeFile(serialized); await output.sync(); } finally { await output.close(); }
+    try {
+      await fs.rm(backupPaths[1], { force: true });
+      try { await fs.rename(backupPaths[0], backupPaths[1]); } catch { /* nessun backup precedente */ }
+      try { await fs.rename(indexPath, backupPaths[0]); } catch { /* indice principale assente */ }
+      await fs.rename(temporary, indexPath);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+    cachedIndex = undefined;
+    return { ...status(next), deleted: normalized, warning: "La fonte è stata rimossa solo dall'indice Brain. Il file nell'archivio non è stato eliminato; reindicizzando verrà aggiunto di nuovo." };
+  }
+  async function diagnose(): Promise<BrainDiagnostics> {
+    const verdict: string[] = []; let index = empty(); let present = false;
+    try { await fs.access(indexPath); present = true; index = await load(); } catch { verdict.push("Indice principale assente o non leggibile."); }
+    let documentsOnDisk = 0;
+    const walk = async (directory: string): Promise<void> => { for (const entry of await fs.readdir(directory, { withFileTypes: true })) { if (entry.name === ".index") continue; const full = path.join(directory, entry.name); if (entry.isDirectory()) await walk(full); else if (extensions.has(path.extname(entry.name).toLowerCase())) documentsOnDisk++; } };
+    try { await walk(root); } catch { verdict.push("Archivio documenti non raggiungibile."); }
+    const chunks = Object.values(index.files).flatMap(file => file.chunks); const dimensions = [...new Set(chunks.map(chunk => chunk.embedding?.length ?? 0))].sort((a, b) => a - b); const invalid = chunks.filter(chunk => !Array.isArray(chunk.embedding) || !chunk.embedding.length || chunk.embedding.some(value => !Number.isFinite(value))).length;
+    if (!present || !index.updatedAt) verdict.push("Eseguire la reindicizzazione: non esiste un indice completo.");
+    if (documentsOnDisk > Object.keys(index.files).length) verdict.push("Più documenti sul disco che nell'indice: archivio parzialmente indicizzato.");
+    if (invalid) verdict.push("Embedding vuoti o non validi."); if (dimensions.length > 1) verdict.push("Dimensioni embedding non uniformi."); if (!turboInfo.ready) verdict.push("TurboVec non pronto: attivo il fallback JSON/ibrido."); if (!verdict.length) verdict.push("Estrazione, embedding, indice e TurboVec coerenti.");
+    const backups = await Promise.all(backupPaths.map(async backup => { try { await fs.access(backup); return { path: backup, present: true }; } catch { return { path: backup, present: false }; } }));
+    return { root, dataDir, documentsOnDisk, indexedFiles: Object.keys(index.files).length, indexedChunks: chunks.length, index: { present, valid: present && Boolean(index.updatedAt), updatedAt: index.updatedAt, errors: index.errors.length, embeddingDimension: dimensions.length === 1 ? dimensions[0] : undefined }, embeddings: { checked: chunks.length, valid: chunks.length - invalid, invalid, dimensions }, backups, turboVec: { ...turboInfo, building: turboBuilding }, verdict };
+  }
+
+  async function getBrainGraph(input: { level?: "collections" | "files" | "chunks"; scope?: string; query?: string; threshold?: number; limit?: number } = {}): Promise<BrainGraph> {
+    const level = input.level ?? "collections";
+    const scope = (input.scope ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    const query = (input.query ?? "").trim().slice(0, 600);
+    const threshold = Math.max(0.35, Math.min(0.95, input.threshold ?? 0.60));
+    const limit = Math.max(12, Math.min(140, input.limit ?? (level === "collections" ? 60 : 100)));
+    if (scope.split("/").some(part => part === "." || part === "..") || scope.includes(":")) throw new Error("Ambito Micelio non valido.");
+    const index = await load();
+    type Candidate = { id: string; label: string; type: BrainGraphNode["type"]; path: string; chunks: StoredChunk[]; files: number; preview?: string; vector: number[] };
+    const centroid = (chunks: StoredChunk[]) => {
+      const usable = chunks.filter(chunk => chunk.embedding.length).slice(0, 240);
+      if (!usable.length) return [];
+      const vector = new Array(usable[0].embedding.length).fill(0) as number[];
+      for (const chunk of usable) for (let i = 0; i < vector.length; i++) vector[i] += chunk.embedding[i] / usable.length;
+      const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+      return vector.map(value => value / norm);
+    };
+    const collectionPath = (filePath: string) => {
+      const match = /^progetti\/([^/]+)/.exec(filePath);
+      return match ? `progetti/${match[1]}` : "Documenti personali";
+    };
+    let candidates: Candidate[] = [];
+    if (level === "collections") {
+      const groups = new Map<string, Array<[string, BrainFile]>>();
+      for (const entry of Object.entries(index.files)) {
+        const group = collectionPath(entry[0]);
+        groups.set(group, [...(groups.get(group) ?? []), entry]);
+      }
+      candidates = [...groups.entries()].map(([group, files]) => {
+        const chunks = files.flatMap(([, file]) => file.chunks);
+        return { id: `collection:${group}`, label: group === "Documenti personali" ? group : group.slice("progetti/".length), type: "collection", path: group, chunks, files: files.length, vector: centroid(chunks) };
+      });
+    } else if (level === "files") {
+      if (!scope) throw new Error("Scegli una raccolta per esplorare i file.");
+      candidates = Object.entries(index.files).filter(([filePath]) => collectionPath(filePath) === scope).map(([filePath, file]) => ({ id: `file:${filePath}`, label: filePath.split("/").at(-1) ?? filePath, type: "file", path: filePath, chunks: file.chunks, files: 1, vector: centroid(file.chunks), preview: file.chunks[0]?.text.slice(0, 260) }));
+    } else {
+      const file = index.files[scope];
+      if (!file) throw new Error("File Micelio non trovato nell'indice.");
+      const source = file.chunks;
+      const selected = source.length <= limit ? source : Array.from({ length: limit }, (_, i) => source[Math.floor(i * (source.length - 1) / Math.max(1, limit - 1))]);
+      candidates = selected.map((chunk, i) => ({ id: `chunk:${chunk.id}:${i}`, label: chunk.section || `Estratto ${i + 1}`, type: "chunk", path: chunk.path, chunks: [chunk], files: 1, vector: centroid([chunk]), preview: chunk.text.slice(0, 320) }));
+    }
+    const originalTotal = candidates.length;
+    if (candidates.length > limit) candidates = candidates.sort((a, b) => b.chunks.length - a.chunks.length || a.label.localeCompare(b.label)).slice(0, limit);
+    candidates = candidates.filter(candidate => candidate.vector.length);
+    const similarities = candidates.map(() => new Map<number, number>());
+    for (let i = 0; i < candidates.length; i++) for (let j = i + 1; j < candidates.length; j++) {
+      const similarity = cosine(candidates[i].vector, candidates[j].vector);
+      if (similarity >= threshold) { similarities[i].set(j, similarity); similarities[j].set(i, similarity); }
+    }
+    const edgeMap = new Map<string, BrainGraphEdge>();
+    similarities.forEach((neighbors, i) => {
+      [...neighbors.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).forEach(([j, similarity]) => {
+        const a = Math.min(i, j), b = Math.max(i, j), key = `${a}:${b}`;
+        edgeMap.set(key, { source: candidates[a].id, target: candidates[b].id, similarity, flow: similarity });
+      });
+    });
+    const edges = [...edgeMap.values()];
+    const degree = candidates.map(candidate => edges.filter(edge => edge.source === candidate.id || edge.target === candidate.id).length);
+    const maxDegree = Math.max(1, ...degree);
+    const maxChunks = Math.max(1, ...candidates.map(candidate => candidate.chunks.length));
+    const adjacency = candidates.map(() => [] as Array<{ node: number; distance: number }>);
+    edges.forEach(edge => {
+      const a = candidates.findIndex(candidate => candidate.id === edge.source);
+      const b = candidates.findIndex(candidate => candidate.id === edge.target);
+      if (a < 0 || b < 0) return;
+      const distance = Math.max(0.001, 1 - edge.similarity);
+      adjacency[a].push({ node: b, distance });
+      adjacency[b].push({ node: a, distance });
+    });
+    const weightedDegree = candidates.map((_, i) => adjacency[i].reduce((sum, edge) => sum + (1 - edge.distance), 0));
+    const maxWeightedDegree = Math.max(1, ...weightedDegree);
+    const closeness = candidates.map((_, source) => {
+      const distances = Array(candidates.length).fill(Number.POSITIVE_INFINITY) as number[];
+      const visited = new Set<number>();
+      distances[source] = 0;
+      for (let step = 0; step < candidates.length; step++) {
+        let current = -1;
+        for (let i = 0; i < distances.length; i++) if (!visited.has(i) && (current < 0 || distances[i] < distances[current])) current = i;
+        if (current < 0 || !Number.isFinite(distances[current])) break;
+        visited.add(current);
+        for (const edge of adjacency[current]) distances[edge.node] = Math.min(distances[edge.node], distances[current] + edge.distance);
+      }
+      const reachable = distances.filter((distance, i) => i !== source && Number.isFinite(distance));
+      return reachable.length ? reachable.length / reachable.reduce((sum, distance) => sum + distance, 0) : 0;
+    });
+    const maxCloseness = Math.max(0.0001, ...closeness);
+    const betweenness = candidates.map(() => 0);
+    // Brandes su distanze pesate: con le dimensioni della vista Micelio resta leggero
+    // e rende visibili anche i nodi-ponte, non solo quelli con molti legami.
+    for (let source = 0; source < candidates.length; source++) {
+      const stack: number[] = [], predecessors = candidates.map(() => [] as number[]);
+      const sigma = Array(candidates.length).fill(0) as number[]; sigma[source] = 1;
+      const distances = Array(candidates.length).fill(Number.POSITIVE_INFINITY) as number[]; distances[source] = 0;
+      const queue = new Set<number>([source]);
+      while (queue.size) {
+        const current = [...queue].reduce((best, value) => distances[value] < distances[best] ? value : best);
+        queue.delete(current); stack.push(current);
+        for (const edge of adjacency[current]) {
+          const nextDistance = distances[current] + edge.distance;
+          if (nextDistance < distances[edge.node] - 1e-9) {
+            distances[edge.node] = nextDistance; sigma[edge.node] = sigma[current]; predecessors[edge.node] = [current]; queue.add(edge.node);
+          } else if (Math.abs(nextDistance - distances[edge.node]) < 1e-9) {
+            sigma[edge.node] += sigma[current]; predecessors[edge.node].push(current);
+          }
+        }
+      }
+      const dependency = Array(candidates.length).fill(0) as number[];
+      while (stack.length) {
+        const node = stack.pop()!;
+        for (const predecessor of predecessors[node]) dependency[predecessor] += (sigma[predecessor] / Math.max(1, sigma[node])) * (1 + dependency[node]);
+        if (node !== source) betweenness[node] += dependency[node];
+      }
+    }
+    const maxBetweenness = Math.max(0.0001, ...betweenness);
+    const centrality = candidates.map((_, i) => 0.45 * degree[i] / maxDegree + 0.30 * betweenness[i] / maxBetweenness + 0.25 * closeness[i] / maxCloseness);
+    const maxCentrality = Math.max(0.0001, ...centrality);
+    let direct = candidates.map(() => 0);
+    if (query) {
+      const [queryVector] = await embed([`search_query: ${query}`]);
+      const queryTerms = new Set(tokens(query));
+      direct = candidates.map(candidate => {
+        const semantic = Math.max(0, cosine(queryVector, candidate.vector));
+        const words = new Set(tokens(`${candidate.path} ${candidate.label} ${candidate.preview ?? ""}`));
+        const lexical = queryTerms.size ? [...queryTerms].filter(term => words.has(term)).length / queryTerms.size : 0;
+        return Math.min(1, semantic * 0.72 + lexical * 0.28);
+      });
+    }
+    const propagated = candidates.map(() => 0), propagatedWeight = candidates.map(() => 0);
+    edges.forEach(edge => {
+      const a = candidates.findIndex(candidate => candidate.id === edge.source), b = candidates.findIndex(candidate => candidate.id === edge.target);
+      if (a >= 0 && b >= 0) {
+        propagated[a] += direct[b] * edge.similarity; propagatedWeight[a] += edge.similarity;
+        propagated[b] += direct[a] * edge.similarity; propagatedWeight[b] += edge.similarity;
+      }
+    });
+    propagated.forEach((value, i) => { propagated[i] = propagatedWeight[i] ? value / propagatedWeight[i] : 0; });
+    const learnedFeedback = query ? await loadFeedback() : [];
+    const rawScores = candidates.map((candidate, i) => query ? Math.max(0, 2.5 * direct[i] + 0.45 * propagated[i] + 0.05 * degree[i] / maxDegree - 0.08 * candidate.chunks.length / maxChunks + feedbackBoost(learnedFeedback, query, candidate.path)) : 0);
+    const maxScore = Math.max(0, ...rawScores);
+    // Come nel FactoryMicelio originale: una piccola "working set" evita che
+    // l'intera rete diventi attiva e consumi inutilmente il budget di contesto.
+    const activeIds = new Set(query
+      ? rawScores.map((score, i) => ({ score, i })).filter(item => item.score > 0 && item.score >= maxScore * 0.46).sort((a, b) => b.score - a.score).slice(0, 7).map(item => item.i)
+      : centrality.map((score, i) => ({ score, i })).filter(item => item.score > 0).sort((a, b) => b.score - a.score).slice(0, Math.max(3, Math.ceil(candidates.length * 0.25))).map(item => item.i));
+    const centralIds = new Set(centrality.map((score, i) => ({ score, i })).filter(item => item.score > 0).sort((a, b) => b.score - a.score).slice(0, Math.max(3, Math.ceil(candidates.length * 0.2))).map(item => item.i));
+    const nodes = candidates.map((candidate, i): BrainGraphNode => ({ id: candidate.id, label: candidate.label, type: candidate.type, path: candidate.path, chunks: candidate.chunks.length, files: candidate.files, score: maxScore ? rawScores[i] / maxScore : centrality[i] / maxCentrality, vitality: 0.50 * centrality[i] / maxCentrality + 0.25 * degree[i] / maxDegree + 0.25 * Math.min(1, candidate.chunks.length / maxChunks), active: activeIds.has(i), central: centralIds.has(i), degree: degree[i], weightedDegree: weightedDegree[i] / maxWeightedDegree, betweenness: betweenness[i] / maxBetweenness, closeness: closeness[i] / maxCloseness, centrality: centrality[i] / maxCentrality, preview: candidate.preview }));
+    const activeNodeIds = new Set(nodes.filter(node => node.active).map(node => node.id));
+    for (const edge of edges) edge.flow = query && activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target) ? Math.min(1, edge.similarity * 0.65 + 0.35) : edge.similarity * 0.35;
+    return { level, scope, query, nodes, edges, truncated: originalTotal > candidates.length, totals: { nodes: nodes.length, edges: edges.length, active: activeIds.size, passive: nodes.length - activeIds.size, central: centralIds.size } };
+  }
+
+  async function assessSemanticSupport(query: string, answer: string, sources: BrainSemanticSupportSource[], context?: BrainSearchContext): Promise<BrainSemanticSupport> {
+    const emptySupport: BrainSemanticSupport = { checked: false, score: 0, label: "debole", answerAlignment: 0, queryAlignment: 0, graphCohesion: 0, sources: [] };
+    if (!query.trim() || !answer.trim() || !sources.length) return emptySupport;
+    // An abstention contains no factual answer to validate against the sources.
+    if (/\b(?:non (?:ho trovato|forniscono|contengono|dispongo)|nessuna informazione|informazioni insufficienti)\b/iu.test(answer)) return emptySupport;
+    const meta = useStore ? await store.open() : undefined;
+    const storedSources = meta ? store.sources(sources.map(source => source.citation)) : undefined;
+    const index = meta ? empty() : await load();
+    const resolved = sources.flatMap(source => {
+      const storedVector = storedSources?.get(source.citation);
+      if (storedVector) return [{ ...source, vector: storedVector }];
+      const marker = /^(.*?)(?: \(pagina \d+\))?:(\d+)-(\d+)/u.exec(source.citation);
+      const sourcePath = marker?.[1];
+      const startLine = Number(marker?.[2]);
+      const endLine = Number(marker?.[3]);
+      const chunks = sourcePath ? index.files[sourcePath]?.chunks ?? [] : [];
+      const chunk = chunks.find(item => item.startLine === startLine && item.endLine === endLine) ?? chunks.find(item => source.text.includes(item.text.slice(0, 120)) || item.text.includes(source.text.slice(0, 120)));
+      return chunk?.embedding?.length ? [{ ...source, vector: chunk.embedding }] : [];
+    });
+    if (!resolved.length) return emptySupport;
+    const [queryVector, [answerVector]] = await Promise.all([
+      context?.queryVector ? Promise.resolve(context.queryVector) : embedQuery(`search_query: ${query.slice(0, 2_000)}`),
+      embed([answer.replace(/\[Cit\.\s*\d+\]/giu, "").slice(0, 8_000)]),
+    ]);
+    const normalizeCosine = (value: number) => Math.max(0, Math.min(1, value));
+    const answerTerms = new Set(tokens(answer));
+    const sourceScores = resolved.map(source => {
+      const queryAlignment = normalizeCosine(cosine(queryVector, source.vector));
+      const answerAlignment = normalizeCosine(cosine(answerVector, source.vector));
+      const sourceTerms = new Set(tokens(source.text));
+      const lexical = answerTerms.size ? [...answerTerms].filter(term => sourceTerms.has(term)).length / Math.max(8, Math.min(answerTerms.size, 32)) : 0;
+      const score = Math.max(0, Math.min(1, 0.60 * answerAlignment + 0.25 * queryAlignment + 0.15 * Math.min(1, lexical)));
+      return { citation: source.citation, score, answerAlignment, queryAlignment, retrievalScore: source.retrievalScore ?? 0, vector: source.vector };
+    });
+    const weightedAverage = (key: "answerAlignment" | "queryAlignment") => {
+      const totalWeight = sourceScores.reduce((sum, source) => sum + Math.max(0.1, source.retrievalScore), 0);
+      return sourceScores.reduce((sum, source) => sum + source[key] * Math.max(0.1, source.retrievalScore), 0) / totalWeight;
+    };
+    const pairSimilarities: number[] = [];
+    for (let i = 0; i < sourceScores.length; i++) for (let j = i + 1; j < sourceScores.length; j++) pairSimilarities.push(normalizeCosine(cosine(sourceScores[i].vector, sourceScores[j].vector)));
+    const graphCohesion = pairSimilarities.length ? pairSimilarities.reduce((sum, value) => sum + value, 0) / pairSimilarities.length : 1;
+    const answerAlignment = weightedAverage("answerAlignment");
+    const queryAlignment = weightedAverage("queryAlignment");
+    // Cohesion describes the sources, not whether they answer the question.
+    const score = answerAlignment * queryAlignment;
+    return {
+      checked: true,
+      score,
+      label: score >= 0.70 ? "forte" : score >= 0.45 ? "media" : "debole",
+      answerAlignment,
+      queryAlignment,
+      graphCohesion,
+      sources: sourceScores.map(source => ({ citation: source.citation, score: source.score })),
+    };
+  }
 
   async function indexBrain(uploads: Array<{ name: string; data: string }> = [], presetId = 20): Promise<BrainStatus> {
     const preset = brainUploadPreset(presetId);
@@ -474,9 +867,13 @@ export function createBrain(options: BrainOptions = {}) {
       if (Buffer.byteLength(serialized) > 256 * 1024 * 1024) throw new Error("Indice maggiore di 256 MiB.");
       const output = await fs.open(temporary, "wx", 0o600);
       try { await output.writeFile(serialized); await output.sync(); } finally { await output.close(); }
+      await fs.rm(backupPaths[1], { force: true });
+      try { await fs.rename(backupPaths[0], backupPaths[1]); } catch { /* primo indice: nessun backup precedente */ }
+      try { await fs.rename(indexPath, backupPaths[0]); } catch { /* primo indice: nessun indice precedente */ }
       await fs.rename(temporary, indexPath);
       cachedIndex = undefined;
       progress = { phase: "complete", completed: all.length, total: all.length };
+      void rebuildTurboIndex().catch(() => undefined);
       return { ...status(next), indexing: false };
     } finally {
       indexing = false;
@@ -485,58 +882,192 @@ export function createBrain(options: BrainOptions = {}) {
     }
   }
 
-  async function searchBrain(query: string, sourceFilter?: string): Promise<BrainSearchResult[]> {
-    if (!query.trim() || query.length > CHUNK_SIZE) throw new Error("Query richiesta, massimo 1400 caratteri.");
+  async function rebuildTurboIndex() {
+    if (!turboEnabled) return turboInfo;
+    if (turboBuilding) return { ...turboInfo, building: true };
+    if (useStore) {
+      const ready = await store.open();
+      if (ready) return { enabled: true, ready: true, building: false, count: ready.count, dimension: ready.dimension };
+      turboBuilding = true;
+      try {
+        const python = process.env.TURBOVEC_PYTHON || process.env.DOCTR_PYTHON || "python";
+        await run(python, [path.join(path.dirname(fileURLToPath(import.meta.url)), "brain_store.py"), "--source", indexPath, "--output", store.root], { shell: false, windowsHide: true, timeout: 20 * 60_000, maxBuffer: 2_000_000 });
+        const meta = await store.open();
+        if (!meta) throw new Error("Snapshot SQLite non valido dopo la costruzione.");
+        return { enabled: true, ready: true, building: false, count: meta.count, dimension: meta.dimension };
+      } finally { turboBuilding = false; }
+    }
+    turboBuilding = true;
+    const temporaryIndex = path.join(dataDir, `turbovec-${randomUUID()}.tvim`);
+    const temporaryMeta = path.join(dataDir, `turbovec-${randomUUID()}.json`);
+    try {
+      const index = await load();
+      const count = Object.values(index.files).reduce((sum, file) => sum + file.chunks.length, 0);
+      if (!count || !index.updatedAt) { turboInfo = { enabled: true, ready: false, building: false }; return turboInfo; }
+      try {
+        const existing = JSON.parse(await fs.readFile(turboMetaPath, "utf8")) as { updatedAt?: string; count?: number; dimension?: number };
+        await fs.access(turboIndexPath);
+        if (existing.updatedAt === index.updatedAt && existing.count === count) {
+          turboInfo = { enabled: true, ready: true, building: false, count, dimension: existing.dimension };
+          return turboInfo;
+        }
+      } catch { /* Indice TurboVec assente o non aggiornato. */ }
+      await fs.mkdir(dataDir, { recursive: true });
+      const python = process.env.TURBOVEC_PYTHON || process.env.DOCTR_PYTHON || "python";
+      await run(python, [turboScript, "build", "--source", indexPath, "--output", temporaryIndex, "--metadata", temporaryMeta], { shell: false, windowsHide: true, timeout: 10 * 60_000, maxBuffer: 2_000_000 });
+      const metadata = JSON.parse(await fs.readFile(temporaryMeta, "utf8")) as { count: number; dimension: number };
+      await fs.rename(temporaryIndex, turboIndexPath);
+      await fs.rename(temporaryMeta, turboMetaPath);
+      turboInfo = { enabled: true, ready: true, building: false, count: metadata.count, dimension: metadata.dimension };
+      return turboInfo;
+    } catch (error) {
+      turboInfo = { enabled: true, ready: false, building: false, error: error instanceof Error ? error.message.slice(0, 220) : String(error) };
+      return turboInfo;
+    } finally {
+      turboBuilding = false;
+      await fs.rm(temporaryIndex, { force: true });
+      await fs.rm(temporaryMeta, { force: true });
+    }
+  }
+
+  async function turboSearch(index: BrainIndex, vector: number[], allowlist?: number[]) {
+    if (!turboEnabled) return undefined;
+    try {
+      const metadata = JSON.parse(await fs.readFile(turboMetaPath, "utf8")) as { updatedAt?: string; count?: number };
+      if (metadata.updatedAt !== index.updatedAt) return undefined;
+      const parsed = await turboWorker!.request<{ results: Array<{ id: number; score: number }> }>({ index: turboIndexPath, vector, allowlist, k: 512 });
+      return new Map(parsed.results.map(item => [item.id, item.score]));
+    } catch { return undefined; }
+  }
+
+  async function searchBrain(query: string, sourceFilter?: string, context: BrainSearchContext = { metrics: {} }): Promise<BrainSearchResult[]> {
+    const began = performance.now();
+    const measure = (name: string, start: number) => { context.metrics[name] = performance.now() - start; };
+    if (!query.trim() || query.length > 1400) throw new Error("Query richiesta, massimo 1400 caratteri.");
     const filter = sourceFilter?.replace(/\\/g, "/").replace(/\/$/, "");
     if (filter && (filter.startsWith("/") || filter.split("/").some(part => part === ".." || part === ".") || filter.includes(":"))) throw new Error("Filtro sorgente non valido: usare un percorso relativo.");
-    const index = await load();
+    const meta = useStore ? await store.open() : undefined;
+    context.metrics.sqliteBackend = meta ? 1 : 0;
+    const index = meta ? { ...empty(), updatedAt: meta.updatedAt } : await load();
+    measure("indexLoadMs", began);
+    const lexicalStarted = performance.now();
     let prepared = lexicalCache.get(index);
     if (!prepared) { prepared = new Map(); lexicalCache.set(index, prepared); }
     const key = filter ?? "";
     let entries = prepared.get(key);
     if (!entries) {
-      entries = Object.values(index.files).flatMap(file => file.chunks)
-        .filter(chunk => !noiseFile(chunk.path) && (!filter || chunk.path === filter || chunk.path.startsWith(`${filter}/`)))
-        .map(chunk => {
+      entries = Object.values(index.files).flatMap(file => file.chunks).map((chunk, turboId) => ({ chunk, turboId }))
+        .filter(({ chunk }) => !noiseFile(chunk.path) && (!filter || chunk.path === filter || chunk.path.startsWith(`${filter}/`)))
+        .map(({ chunk, turboId }) => {
           const words = tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`);
           const counts = new Map<string, number>();
           for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
-          return { chunk, words, counts, body: new Set(tokens(chunk.text)) };
+          return { chunk, turboId, words, counts, body: new Set(tokens(chunk.text)) };
         });
       if (prepared.size >= 8) prepared.clear();
       prepared.set(key, entries);
     }
-    const chunks = entries.map(entry => entry.chunk);
-    if (!chunks.length) return [];
+    let chunks = entries.map(entry => entry.chunk);
+    if (!meta && !chunks.length) return [];
     // Anche le ricerche telegrafiche ("chi Nova?") sono domande biografiche.
-    const identityQuestion = /^\s*chi\b(?:\s+(?:e|è|sia))?[\s:,-]+\S/iu.test(query);
-    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "sono", "essere", "sia", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "nel", "nella", "nei", "nelle", "per", "progetto", "progetti", "usato", "usata", "utilizzato", "utilizzata", "esiste", "creare", "trova", "trovami", "scrivi", "scrivimi", "codice", "modello"]);
+    // Anche "panoramica del personaggio X" è una richiesta biografica.
+    // Senza questo ramo, il recupero premia codice o scene che citano X.
+    const identityQuestion = /^\s*chi\b(?:\s+(?:e|è|sia))?[\s:,-]+\S/iu.test(query)
+      || /\b(?:personaggio|protagonista|profilo)\b.*\b\p{L}[\p{L}\p{N}_-]{2,}\b/iu.test(query);
+    const roleQuestion = /\b(?:lavoro|professione|mestiere|occupazione|ruolo|che\s+cosa\s+fa)\b/iu.test(query);
+    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "tipo", "fa", "lavoro", "professione", "mestiere", "occupazione", "ruolo", "personaggio", "protagonista", "profilo", "panoramica", "completa", "completo", "sono", "essere", "sia", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "nel", "nella", "nei", "nelle", "per", "progetto", "progetti", "usato", "usata", "utilizzato", "utilizzata", "esiste", "creare", "trova", "trovami", "scrivi", "scrivimi", "codice", "modello"]);
     const queryLower = query.toLocaleLowerCase("it");
     const maskRcnnIntent = /\bmask\b/iu.test(queryLower) && /\b(?:r\s*-?\s*cnn|rcnn|mrcnn)\b/iu.test(queryLower);
     const expandedQuery = maskRcnnIntent ? `${query} mrcnn r-cnn maskrcnn detectron2 defaultpredictor pred_masks instances segmentation segmentazione` : query;
     const terms = [...new Set(tokens(expandedQuery).filter(term => !stopWords.has(term)))];
+    // Expand only an unambiguous one-edit typo absent from the index. Names in
+    // identity questions remain exact, and the original term is kept as well.
+    const corrections = new Map<string, string>();
+    if (!identityQuestion) {
+      if (meta && storeVocabulary?.generation !== meta.generation) storeVocabulary = { generation: meta.generation, words: store.vocabulary() };
+      const vocabulary = new Set(meta ? storeVocabulary!.words : entries.flatMap(entry => [...entry.counts.keys()]));
+      for (const term of terms) {
+        if (term.length < 6 || vocabulary.has(term)) continue;
+        const matches: string[] = [];
+        for (const word of vocabulary) {
+          if (oneEditApart(term, word)) matches.push(word);
+          if (matches.length > 1) break;
+        }
+        if (matches.length === 1) corrections.set(term, matches[0]);
+      }
+      for (const correction of corrections.values()) if (!terms.includes(correction)) terms.push(correction);
+    }
     const identityTerms = identityQuestion ? terms : [];
     const factualQuestion = !identityQuestion && /^\s*(?:che|quale|quali|dove|quando|quanto|quanta|quanti|quante)\b/iu.test(query);
     // Espansione generica dell'intento: migliora l'embedding delle domande
     // brevissime senza conoscere in anticipo nomi, ruoli o risposte.
     const semanticQuery = identityQuestion
       ? `Identità, descrizione, caratteristiche, storia e ruolo di ${identityTerms.join(" ")}. Domanda: ${query}`
-      : query;
+      : roleQuestion ? `Professione, lavoro, ruolo, incarico e organizzazione del soggetto. Domanda: ${query}`
+      : tokens(query).map(term => corrections.get(term) ?? term).join(" ");
     const overviewQuestion = /\b(?:riassum|panoramica|in generale|parla di|contiene|quali progetti|che progetti|cosa ho fatto|come ho usato|come ho utilizzato|come ho realizzato|come ho creato|come ho costruito|nel mio progetto)\b/iu.test(query);
-    const [vector] = await embed([`search_query: ${semanticQuery}`]);
+    measure("queryPrepareMs", lexicalStarted);
+    const embeddingStarted = performance.now();
+    const vectorPromise = embedQuery(`search_query: ${semanticQuery}`).then(vector => { measure("embeddingMs", embeddingStarted); return vector; });
+    // FTS runs while Ollama is generating the query vector.
+    const ftsStarted = performance.now();
+    const lexicalHits = meta ? store.lexical(terms, filter, 96) : [];
+    measure("ftsMs", ftsStarted);
+    const vector = await vectorPromise;
+    context.queryVector = vector;
+    const turboStarted = performance.now();
+    const dimension = Number(process.env.BRAIN_PCA_DIM ?? meta?.dimension ?? vector.length);
+    let turboScores: Map<number, number> | undefined;
+    if (meta) {
+      if (!meta.variants[String(dimension)]) throw new Error(`Dimensione PCA ${dimension} non disponibile: ricostruire lo snapshot.`);
+      const directory = path.join(store.root, meta.generation);
+      const result = await turboWorker!.request<{ results: Array<{ id: number; score: number }> }>({
+        index: path.join(directory, `vectors-${dimension}.tvim`), vector,
+        projection: dimension === meta.dimension ? undefined : path.join(directory, `pca-${dimension}.npz`),
+        allowlist: filter ? store.allowed(filter) : undefined,
+        k: Math.max(16, Math.min(512, Number(process.env.BRAIN_VECTOR_CANDIDATES) || 96)),
+      });
+      turboScores = new Map(result.results.map(hit => [hit.id, hit.score]));
+      if ((await store.open())?.generation !== meta.generation) throw new Error("Indice aggiornato durante la ricerca: ripetere la richiesta.");
+      measure("turboVecMs", turboStarted);
+      const hydrateStarted = performance.now();
+      entries = store.chunks([...lexicalHits.map(hit => hit.id), ...turboScores.keys()])
+        .filter(({chunk}) => !noiseFile(chunk.path)).map(({chunk,turboId}) => {
+          const words = tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`);
+          const counts = new Map<string,number>();
+          for (const word of words) counts.set(word,(counts.get(word) ?? 0)+1);
+          return {chunk,turboId,words,counts,body:new Set(tokens(chunk.text))};
+        });
+      chunks = entries.map(entry => entry.chunk);
+      measure("candidateLoadMs", hydrateStarted);
+    } else turboScores = await turboSearch(index, vector, filter ? entries.map(entry => entry.turboId) : undefined);
+    if (!meta) measure("turboVecMs", turboStarted);
+    context.metrics.retrievalCandidates = chunks.length;
+    const rankingStarted = performance.now();
+    const lexicalScores = new Map(lexicalHits.map(hit => [hit.id, hit.score / (1 + hit.score)]));
     const documentTokens = entries.map(entry => entry.words);
     const documents = entries.map(entry => entry.counts);
     const averageLength = documentTokens.reduce((sum, words) => sum + words.length, 0) / documentTokens.length || 1;
-    const weights = terms.map(term => Math.log(1 + (chunks.length - documents.filter(doc => doc.has(term)).length + 0.5) / (documents.filter(doc => doc.has(term)).length + 0.5)));
-    const ranked = chunks.map((chunk, i) => {
+    const weights = terms.map(term => {
+      let count = 0;
+      for (const doc of documents) if (doc.has(term)) count++;
+      return Math.log(1 + (chunks.length - count + 0.5) / (count + 0.5));
+    });
+    const learnedFeedback = await loadFeedback();
+    const vectors = new Map<string, number[]>();
+    const rankedBase = chunks.map((chunk, i) => {
+      vectors.set(chunk.id, chunk.embedding);
       const bm25 = terms.reduce((sum, term, j) => {
         const frequency = documents[i].get(term) ?? 0;
         if (!frequency) return sum;
         const saturation = frequency * 2.2 / (frequency + 1.2 * (0.25 + 0.75 * documentTokens[i].length / averageLength));
         return sum + weights[j] * saturation;
       }, 0);
-      const lexicalScore = bm25 / (1 + bm25);
-      const cosineScore = cosine(vector, chunk.embedding);
+      const lexicalScore = meta ? lexicalScores.get(entries![i].turboId) ?? 0 : bm25 / (1 + bm25);
+      // ANN only returns a shortlist: missing scores are not negative evidence.
+      // Scores from PCA/quantization are candidate selectors only. Final scores
+      // share the original geometry, including lexical-only candidates.
+      const cosineScore = meta ? cosine(vector, chunk.embedding) : turboScores?.get(entries![i].turboId) ?? cosine(vector, chunk.embedding);
       const { embedding: _embedding, ...source } = chunk;
       const entityMatch = !identityQuestion || identityTerms.some(term => entries![i].body.has(term));
       // Prefer descriptions of the requested entity over repeated dialogue mentions.
@@ -548,6 +1079,10 @@ export function createBrain(options: BrainOptions = {}) {
       });
       const window = factualQuestion ? sentenceWindow(chunk.text, terms) : { text: chunk.text, coverage: 0 };
       const focused = identityQuestion ? identityExcerpt(chunk.text, identityTerms) : window.text;
+      const roleEvidence = roleQuestion && chunk.text.split(/[.!?\n]/u).some(sentence => {
+        const sentenceTerms = new Set<string>(tokens(sentence));
+        return /\b(?:lavora|lavorare|cadett\w*|riparator\w*|membro|incarico|missione)\b/iu.test(sentence) && terms.some(term => sentenceTerms.has(term));
+      });
       const entityPosition = identityQuestion ? Math.min(...identityTerms.map(term => chunk.text.toLocaleLowerCase("it").indexOf(term)).filter(position => position >= 0)) : 0;
       const rankLine = chunk.startLine + (entityPosition > 0 ? (chunk.text.slice(0, entityPosition).match(/\n/g) ?? []).length : 0);
       const profileFacts = identityQuestion ? new Set(focused.toLocaleLowerCase("it").match(/\b(?:protagonista|amic[oa]|riparator\w*|medic\w*|biolog\w*|coltivator\w*|ingegner\w*|scienziat\w*|pilot\w*|principessa|principe|orfan[oa]|lavora|professione|ruolo)\b/giu) ?? []).size : 0;
@@ -555,24 +1090,47 @@ export function createBrain(options: BrainOptions = {}) {
       const overviewRelevant = terms.length === 0 || terms.some(term => entries![i].body.has(term));
       const overviewBoost = overviewQuestion && chunk.kind === "overview" && overviewRelevant ? 0.12 : 0;
       const maskRcnnBoost = maskRcnnIntent && (/(?:computer[-_ ]vision|deep[-_ ]learning|detection|segmentazione|segmentation)/iu.test(chunk.path) || /\b(?:detectron2|defaultpredictor|pred_masks|instances|mrcnn|mask\s*r\s*-?\s*cnn)\b/iu.test(chunk.text)) ? 0.16 : 0;
-      return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, rankLine, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + profileBoost + overviewBoost + maskRcnnBoost + window.coverage * 0.15, citation: `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}` };
+      const citation = `${chunk.path}${chunk.page ? ` (pagina ${chunk.page})` : ""}:${chunk.startLine}-${chunk.endLine}${chunk.lineKind === "extracted" ? " (testo estratto)" : ""}`;
+      const codeNoisePenalty = identityQuestion && /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|h|hpp|cs)$/iu.test(chunk.path) && !description && profileFacts < 2 ? 0.45 : 0;
+      return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, roleEvidence, rankLine, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + (roleEvidence ? 0.65 : 0) + profileBoost + overviewBoost + maskRcnnBoost + window.coverage * 0.15 + feedbackBoost(learnedFeedback, query, citation) - codeNoisePenalty, citation };
     }).filter(hit => hit.entityMatch && (hit.lexicalScore > 0 || hit.cosineScore > 0.25)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-    const selected: typeof ranked = [];
-    if (identityQuestion) {
-      // One strong passage per distant section gives long books broad coverage
-      // instead of returning five near-duplicate scenes from the same chapter.
-      const sections = new Set<string>();
-      for (const hit of ranked) {
-        const section = `${hit.path}:${Math.floor(hit.rankLine / 250)}`;
-        if (!sections.has(section)) { selected.push(hit); sections.add(section); }
-        if (selected.length === 5) break;
-      }
+    // Propagazione Micelio: i candidati semanticamente vicini condividono
+    // una parte del segnale. In questo modo un passaggio utile può portare
+    // con sé i nodi collegati, senza affidarsi soltanto al match lessicale.
+    measure("rankingMs", rankingStarted);
+    const graphStarted = performance.now();
+    const graphCandidates = rankedBase.slice(0, 96);
+    const neighbors = new Map<string, Array<{ id: string; similarity: number }>>();
+    const cachedGraph = meta?.graph && process.env.BRAIN_PRECOMPUTED_GRAPH === "1";
+    if (cachedGraph) {
+      const chunkIds = new Map(entries.map(entry => [entry.turboId, entry.chunk.id]));
+      for (const [id, links] of store.edges(entries.map(entry => entry.turboId))) neighbors.set(chunkIds.get(id)!, links.map(link => ({id:chunkIds.get(link.id)!,similarity:link.similarity})));
     }
-    for (const hit of ranked) {
-      if (selected.length === 5) break;
-      if (!selected.includes(hit)) selected.push(hit);
+    for (let i = 0; !cachedGraph && i < graphCandidates.length; i++) for (let j = i + 1; j < graphCandidates.length; j++) {
+      const left = graphCandidates[i], right = graphCandidates[j];
+      const leftVector = vectors.get(left.id), rightVector = vectors.get(right.id);
+      if (!leftVector || !rightVector) continue;
+      const similarity = cosine(leftVector, rightVector);
+      if (similarity < 0.58) continue;
+      neighbors.set(left.id, [...(neighbors.get(left.id) ?? []), { id: right.id, similarity }]);
+      neighbors.set(right.id, [...(neighbors.get(right.id) ?? []), { id: left.id, similarity }]);
     }
-    return selected.map(({ entityMatch: _entityMatch, rankLine: _rankLine, ...hit }) => hit);
+    const graphNeighbors = new Map<string, Array<{ id: string; similarity: number }>>();
+    neighbors.forEach((items, id) => graphNeighbors.set(id, items.sort((a, b) => b.similarity - a.similarity).slice(0, 4)));
+    const maxBaseScore = Math.max(0.0001, ...graphCandidates.map(hit => Math.max(0, hit.score)));
+    const maxDegree = Math.max(1, ...[...graphNeighbors.values()].map(items => items.length));
+    const ranked = rankedBase.map(hit => {
+      const links = graphNeighbors.get(hit.id) ?? [];
+      const propagated = links.reduce((sum, link) => sum + (rankedBase.find(candidate => candidate.id === link.id)?.score ?? 0) * link.similarity, 0) / (links.reduce((sum, link) => sum + link.similarity, 0) || 1);
+      const graphScore = Math.max(0, Math.min(1, 0.72 * Math.max(0, hit.score) / maxBaseScore + 0.20 * propagated / maxBaseScore + 0.08 * links.length / maxDegree));
+      return { ...hit, score: hit.score + 0.20 * propagated + 0.04 * links.length / maxDegree, micelioScore: graphScore };
+    }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    measure("graphMs", graphStarted);
+    const selectionStarted = performance.now();
+    const selected = selectPassages(ranked, 5);
+    measure("selectionMs", selectionStarted);
+    measure("retrievalTotalMs", began);
+    return selected.map(({ entityMatch: _entityMatch, roleEvidence: _roleEvidence, rankLine: _rankLine, ...hit }) => hit);
   }
 
   async function importBrainRepository(input: string): Promise<{ path: string; url: string; branch: string; commit: string }> {
@@ -580,16 +1138,20 @@ export function createBrain(options: BrainOptions = {}) {
     if (indexing || importing) throw new Error("Operazione brain gia in corso.");
     importing = true;
     const projects = path.join(root, "progetti");
-    const [, owner, repo] = new URL(url).pathname.split("/");
-    const destination = path.join(projects, `${owner}--${repo.replace(/\.git$/, "")}`);
+    const repo = new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? "repository";
+    const destination = path.join(projects, repo.replace(/\.git$/, ""));
     const staging = path.join(projects, `.import-${randomUUID()}`);
     const isolated = path.join(staging, "config");
     const checkout = path.join(staging, "repo");
     try {
+      progress = { phase: "scanning", completed: 0, total: 0, current: `Importazione GitHub: ${repo}` };
       await noLinks(projects); await noLinks(destination);
       await fs.mkdir(projects, { recursive: true });
-      try { await fs.lstat(destination); throw new Error("Repository gia presente; import non sovrascrive file."); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try {
+        await fs.lstat(destination);
+        progress = { phase: "complete", completed: 1, total: 1, current: `Repository già presente, saltato: ${repo}` };
+        return { path: path.relative(root, destination).split(path.sep).join("/"), url, branch: "existing", commit: "existing" };
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       await fs.mkdir(isolated, { recursive: true });
       // Never inherit Git config, credential helpers, hooks, filters, or an interactive prompt.
       const env: NodeJS.ProcessEnv = {};
@@ -600,6 +1162,7 @@ export function createBrain(options: BrainOptions = {}) {
       const commit = (await run("git", ["-C", checkout, "rev-parse", "HEAD"], { shell: false, timeout: 10_000, env })).stdout.trim();
       const branch = (await run("git", ["-C", checkout, "symbolic-ref", "--short", "HEAD"], { shell: false, timeout: 10_000, env })).stdout.trim();
       await fs.rename(checkout, destination);
+      progress = { phase: "complete", completed: 1, total: 1, current: `Repository importato: ${repo}` };
       return { path: path.relative(root, destination).split(path.sep).join("/"), url, branch, commit };
     } finally {
       importing = false;
@@ -636,7 +1199,8 @@ export function createBrain(options: BrainOptions = {}) {
     }
     return [...new Set(suggestions)];
   }
-  return { getBrainStatus, indexBrain, searchBrain, suggestCorrection, importBrainRepository };
+  return { getBrainStatus, diagnose, getBrainGraph, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
+    close: () => { turboWorker?.close(); store.close(); } };
 }
 
 function editDistance(a: string, b: string) {
@@ -654,4 +1218,4 @@ function editDistance(a: string, b: string) {
 }
 
 const brain = createBrain();
-export const { getBrainStatus, indexBrain, searchBrain, importBrainRepository } = brain;
+export const { getBrainStatus, getBrainGraph, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, importBrainRepository, rebuildTurboIndex, recordBrainFeedback } = brain;

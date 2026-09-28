@@ -1,33 +1,45 @@
 import type { ModelInfo } from "../src/types";
 
-export const OLLAMA_MODEL = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M";
-export const OLLAMA_FAST_MODEL = "qwen2.5-coder:7b";
-export const OLLAMA_MODELS = new Set([OLLAMA_MODEL, OLLAMA_FAST_MODEL]);
-export const OLLAMA_NUM_CTX = process.env.OLLAMA_NUM_CTX === "8192" ? 8192 : 4096;
+export const OLLAMA_MODEL = "openbmb/minicpm5-2b:latest";
+export const OLLAMA_CODER_MODEL = "qwen2.5-coder:7b";
+export const OLLAMA_QWEN3_14B = "qwen3:14b";
+export const OLLAMA_MODELS = new Set([OLLAMA_MODEL, OLLAMA_CODER_MODEL, OLLAMA_QWEN3_14B]);
+// I modelli piccoli restano a 4096 per limitare memoria e latenza.
+export const OLLAMA_NUM_CTX = 4096;
 export const OLLAMA_INFO: ModelInfo = {
-  id: OLLAMA_MODEL, name: "Qwen3.8 27B (locale)", provider: "Ollama", providerId: "ollama",
-  description: "GGUF UD-Q4_K_M, circa 16.5 GB di pesi, non di RAM totale. Solo testo; primo caricamento potenzialmente lento.",
-  tags: ["Locale", "Brain", "Solo testo"], context: String(OLLAMA_NUM_CTX), featured: true,
+  id: OLLAMA_MODEL, name: "MiniCPM5 2B (locale)", provider: "Ollama", providerId: "ollama",
+  description: "Modello OpenBMB compatto da 2B, eseguito interamente in locale. Adatto a chat, scrittura, codice e consultazione Brain.",
+  tags: ["Locale", "Brain", "Veloce", "2B", "Codice"], context: String(OLLAMA_NUM_CTX), featured: true,
 };
-export const OLLAMA_FAST_INFO: ModelInfo = {
-  id: OLLAMA_FAST_MODEL, name: "Qwen 2.5 7B (veloce)", provider: "Ollama", providerId: "ollama",
-  description: "Modello locale leggero già installato. Molto più rapido del 27B; adatto a risposte brevi, codice e consultazione Brain.",
-  tags: ["Locale", "Brain", "Veloce", "Codice"], context: "4096", featured: true,
+export const OLLAMA_CODER_INFO: ModelInfo = {
+  id: OLLAMA_CODER_MODEL, name: "Qwen 2.5 Coder 7B (locale)", provider: "Ollama", providerId: "ollama",
+  description: "Modello locale specializzato nello sviluppo software, disponibile insieme a MiniCPM5 2B.",
+  tags: ["Locale", "Brain", "Codice", "7B"], context: String(OLLAMA_NUM_CTX), featured: true,
+};
+export const OLLAMA_QWEN3_INFO: ModelInfo = {
+  id: OLLAMA_QWEN3_14B, name: "Qwen3 14B (locale)", provider: "Ollama", providerId: "ollama",
+  description: "Qwen3 denso da 14B in GGUF Q4_K_M (~9,3 GB). Il più capace dei locali: ragionamento, codice e italiano. Richiede ~10 GB di RAM/VRAM.",
+  // L'interfaccia supporta 4096/8192; evitare valori come "40K", che
+  // Number("40K") trasformerebbe in NaN causando il fallback a 4096.
+  tags: ["Locale", "Brain", "Ragionamento", "Codice", "14B"], context: "8192", featured: true,
+};
+export const GLM_INFO: ModelInfo = {
+  id: "z-ai/glm-5.2", name: "GLM 5.2", provider: "OpenRouter · Z.ai", providerId: "openrouter",
+  description: "Modello cloud per ragionamento, coding e attività complesse a lungo contesto.",
+  tags: ["Cloud", "Ragionamento", "Codice"], context: "1M", featured: true,
+};
+export const GEMMA_INFO: ModelInfo = {
+  id: "google/gemma-4-31b-it:free", name: "Gemma 4 31B", provider: "OpenRouter · Google", providerId: "openrouter",
+  description: "Modello Gemma multimodale di Google disponibile tramite OpenRouter.",
+  tags: ["Cloud", "Gemma", "Multimodale"], context: "256K", featured: true,
+};
+export const MINIMAX_INFO: ModelInfo = {
+  id: "minimaxai/minimax-m3", name: "MiniMax M3", provider: "NVIDIA", providerId: "nvidia",
+  description: "Modello generalista MiniMax M3 disponibile tramite NVIDIA API Catalog.",
+  tags: ["Cloud", "Multilingua"], featured: true,
 };
 
 const DESCRIPTIONS: Record<string, Partial<ModelInfo>> = {
-  "nvidia/nemotron-3.5-lightning-30b-a3b": {
-    name: "Nemotron 3.5 Lightning 30B",
-    description: "Modello NVIDIA rapido per conversazione, scrittura e richieste quotidiane.",
-    tags: ["Generale", "Veloce", "NVIDIA"],
-    featured: true,
-  },
-  "nvidia/nemotron-3-super-120b-a12b": {
-    name: "Nemotron 3 Super 120B",
-    description: "Modello NVIDIA avanzato per analisi, ragionamento e istruzioni articolate.",
-    tags: ["Generale", "Ragionamento", "NVIDIA"],
-    featured: true,
-  },
   "minimaxai/minimax-m3": {
     name: "MiniMax M3",
     description: "Modello generalista per conversazione, contenuti e problem solving.",
@@ -60,13 +72,6 @@ const DESCRIPTIONS: Record<string, Partial<ModelInfo>> = {
     tags: ["Visione", "Multimodale"],
     context: "128K",
   },
-  "nvidia/llama-3.1-nemotron-ultra-253b-v1": {
-    name: "Llama Nemotron Ultra 253B",
-    description: "Modello NVIDIA ottimizzato per ragionamento avanzato, istruzioni e risposte accurate.",
-    tags: ["Ragionamento", "NVIDIA"],
-    context: "128K",
-    featured: true,
-  },
   "deepseek-ai/deepseek-r1": {
     name: "DeepSeek R1",
     description: "Modello orientato al ragionamento, alla matematica e alla risoluzione di problemi complessi.",
@@ -91,8 +96,6 @@ const DESCRIPTIONS: Record<string, Partial<ModelInfo>> = {
 
 const FALLBACK_MODEL_IDS = [
   "minimaxai/minimax-m3",
-  "nvidia/nemotron-3.5-lightning-30b-a3b",
-  "nvidia/nemotron-3-super-120b-a12b",
 ];
 
 export const FALLBACK_MODELS: ModelInfo[] = FALLBACK_MODEL_IDS.map((id) => ({
@@ -112,6 +115,12 @@ export function humanizeModelId(id: string) {
     .split("-")
     .map((word) => (/^\d/.test(word) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1)))
     .join(" ");
+}
+
+export function humanizeOllamaId(id: string) {
+  const cleaned = id.replace(/^.*\//, "").replace(/[:_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const titled = (cleaned || id).split(" ").map((word) => (/^\d/.test(word) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1))).join(" ");
+  return titled.replace(/\s+latest$/i, "") || titled;
 }
 
 export function enrichModel(id: string): ModelInfo {

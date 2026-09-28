@@ -6,6 +6,35 @@ import path from "node:path";
 import AdmZip from "adm-zip";
 import { chunkBrainText, createBrain, validateBrainRepositoryUrl } from "./brain";
 
+test("retrieval conserva fatti lontani dalla frase che corrisponde alla domanda", async t => {
+  const f = await fixture(t);
+  const text = "Il database Postgres è descritto qui. Si usa in produzione. Gestisce diversi servizi. Il backup è eseguito ogni notte alle 03:00.";
+  await fs.writeFile(path.join(f.root, "database.txt"), text);
+  await f.brain.indexBrain();
+  const hits = await f.brain.searchBrain("Quale database Postgres?");
+  assert.equal(hits[0].text.replace(/\s+/g, " "), text);
+});
+
+test("ricerca lessicale riconosce accenti e nomi nei percorsi con underscore", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "reti_di_Petri.txt"), "Affidabilità del sistema.");
+  await f.brain.indexBrain();
+  for (const query of ["affidabilita", "Petri"]) {
+    assert.ok((await f.brain.searchBrain(query))[0].lexicalScore > 0);
+  }
+});
+
+test("refuso tecnico non ambiguo recupera retrieval senza correggere nomi", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "ricerca.txt"), "Il retrieval combina BM25 e ricerca vettoriale per recuperare documenti pertinenti.");
+  await fs.writeFile(path.join(f.root, "nova.txt"), "Nova pilota una navicella con Sapez.");
+  await f.brain.indexBrain();
+  const hits = await f.brain.searchBrain("Parlami metodi retrival");
+  assert.equal(hits[0].path, "ricerca.txt");
+  assert.ok(hits[0].lexicalScore > 0);
+  assert.ok(f.calls.flat().includes("search_query: parlami metodi retrieval"));
+});
+
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "andreagpt-brain-test-"));
   t.after(() => fs.rm(temporary, { recursive: true, force: true }));
@@ -38,6 +67,65 @@ test("identità richiede il nome nel testo, favorisce presentazioni ed esclude l
   await fs.writeFile(path.join(f.root, "new.txt"), "Il giardino contiene un fiore.");
   await f.brain.indexBrain();
   assert.equal((await reader.getBrainStatus()).files, 2);
+});
+
+test("query embedding condiviso ma risultati aggiornati dopo reindicizzazione", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "uno.txt"), "Il database Postgres conserva dati.");
+  await f.brain.indexBrain();
+  const before = f.calls.length;
+  await Promise.all([f.brain.searchBrain("database Postgres"), f.brain.searchBrain("database Postgres")]);
+  assert.equal(f.calls.length - before, 1);
+  await fs.writeFile(path.join(f.root, "due.txt"), "Il database Postgres conserva dati con backup giornalieri.");
+  await f.brain.indexBrain();
+  assert.ok((await f.brain.searchBrain("database Postgres")).some(hit => hit.path === "due.txt"));
+});
+
+test("Micelio misura l'allineamento semantico tra risposta e fonti", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "database.txt"), "Il database Postgres conserva dati con backup giornalieri.");
+  await f.brain.indexBrain();
+  const hit = (await f.brain.searchBrain("database Postgres"))[0];
+  const source = { citation: hit.citation, text: hit.text, retrievalScore: hit.score };
+  const supported = await f.brain.assessSemanticSupport("database Postgres", "Il database Postgres conserva i dati.", [source]);
+  const unsupported = await f.brain.assessSemanticSupport("database Postgres", "Il giardino contiene un fiore.", [source]);
+  assert.equal(supported.checked, true);
+  assert.ok(supported.score > unsupported.score);
+  assert.equal(supported.sources.length, 1);
+  const abstention = await f.brain.assessSemanticSupport("database Postgres", "Le fonti non forniscono informazioni sul database Postgres.", [source]);
+  assert.equal(abstention.checked, false);
+  assert.equal(abstention.score, 0);
+  assert.equal(unsupported.label, "debole");
+  const context = {metrics:{},queryVector:[1,0,0]};
+  const callsBefore=f.calls.length;
+  await f.brain.assessSemanticSupport("database Postgres", "Il database Postgres conserva dati.", [source],context);
+  assert.equal(f.calls.length,callsBefore+1);
+  assert.equal(f.calls.at(-1)!.length,1,"grounding deve generare solo l'embedding della risposta");
+});
+
+test("Micelio costruisce viste raccolta-file-estratti e non marca centrali nodi isolati", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "database-a.txt"), "Database Postgres alpha.");
+  await fs.writeFile(path.join(f.root, "database-b.txt"), "Database Postgres beta.");
+  await fs.writeFile(path.join(f.root, "giardino.txt"), "Il giardino contiene un fiore.");
+  await fs.writeFile(path.join(f.root, "misc.txt"), "Note senza categoria specifica.");
+  await f.brain.indexBrain();
+
+  const collections = await f.brain.getBrainGraph({ level: "collections", threshold: 0.95 });
+  assert.equal(collections.nodes.length, 1);
+  assert.equal(collections.nodes[0].label, "Documenti personali");
+
+  const files = await f.brain.getBrainGraph({ level: "files", scope: "Documenti personali", threshold: 0.95 });
+  assert.equal(files.nodes.length, 4);
+  assert.equal(files.totals.nodes, files.totals.active + files.totals.passive);
+  assert.equal(files.totals.central, files.nodes.filter(node => node.central).length);
+  assert.ok(files.nodes.filter(node => node.central).every(node => node.centrality > 0));
+  assert.ok(files.edges.every(edge => files.nodes.some(node => node.id === edge.source) && files.nodes.some(node => node.id === edge.target)));
+  assert.ok(files.nodes.every(node => [node.score, node.vitality, node.weightedDegree, node.betweenness, node.closeness, node.centrality].every(Number.isFinite)));
+
+  const chunks = await f.brain.getBrainGraph({ level: "chunks", scope: files.nodes[0].path, threshold: 0.95 });
+  assert.ok(chunks.nodes.length > 0);
+  assert.equal(chunks.nodes.every(node => node.type === "chunk"), true);
 });
 
 test("refuso nel nome propone la correzione più vicina", async t => {
@@ -79,7 +167,7 @@ test("il pacchetto scelto controlla il caricamento e rifiuta pacchetti sconosciu
   const file = { name: "documento.txt", data: Buffer.alloc(6 * 1024 * 1024, 65).toString("base64") };
   await assert.rejects(f.brain.indexBrain([file], 5), /5 MiB/);
   assert.deepEqual(await fs.readdir(f.root), []);
-  await assert.rejects(f.brain.indexBrain([], 999), /Pacchetto/);
+  await assert.rejects(f.brain.indexBrain([], 999), /Limite di caricamento non valido/);
   // A larger package admits the file; large text is sampled instead of rejected.
   const result = await f.brain.indexBrain([file], 20);
   assert.equal((await fs.stat(path.join(f.root, file.name))).size, 6 * 1024 * 1024);
@@ -152,6 +240,17 @@ test("domande biografiche privilegiano presentazioni esplicite rispetto alle sce
   ].join("\n"));
   await f.brain.indexBrain();
   assert.match((await f.brain.searchBrain("Chi è Esita?"))[0].text, /principessa ape/);
+});
+
+test("panoramica del personaggio non recupera citazioni di codice come biografia", async t => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.root, "server"));
+  await fs.writeFile(path.join(f.root, "storia.txt"), "Nova è il protagonista, un orfano cresciuto su Capler14 e protetto dal droide Sapez.");
+  await fs.writeFile(path.join(f.root, "server", "brain.ts"), "const prompt = 'Nova'; // riferimento tecnico senza descrizione del personaggio");
+  await f.brain.indexBrain();
+  const hits = await f.brain.searchBrain("Fammi una panoramica completa del personaggio Nova");
+  assert.equal(hits[0].path, "storia.txt");
+  assert.match(hits[0].text, /orfano.*Capler14/i);
 });
 
 test("profili separano personaggi adiacenti e coprono sezioni lontane", async t => {
@@ -301,7 +400,7 @@ test("file oltre limite escluso; indice corrotto non viene sovrascritto", async 
   assert.equal(await fs.readFile(path.join(f.dataDir, "index.json"), "utf8"), "broken JSON");
 });
 
-test("Office minuscolo o con DTD rifiutato; import non sovrascrive destinazioni esistenti", async t => {
+test("Office minuscolo o con DTD rifiutato; import salta destinazioni esistenti", async t => {
   const f = await fixture(t);
   await fs.writeFile(path.join(f.root, "tiny.docx"), Buffer.from([1]));
   const odt = new AdmZip();
@@ -311,9 +410,10 @@ test("Office minuscolo o con DTD rifiutato; import non sovrascrive destinazioni 
   assert.equal(status.files, 0);
   assert.equal(status.errors.length, 2);
   assert.equal(f.calls.length, 0);
-  const destination = path.join(f.root, "progetti", "owner--repo");
+  const destination = path.join(f.root, "progetti", "repo");
   await fs.mkdir(destination, { recursive: true });
   await fs.writeFile(path.join(destination, "keep.txt"), "preserve");
-  await assert.rejects(f.brain.importBrainRepository("https://github.com/owner/repo"), /non sovrascrive/);
+  const imported = await f.brain.importBrainRepository("https://github.com/owner/repo");
+  assert.equal(imported.branch, "existing");
   assert.equal(await fs.readFile(path.join(destination, "keep.txt"), "utf8"), "preserve");
 });

@@ -15,6 +15,16 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   const requests: Record<string, any>[] = [];
   let cancelled = false;
   const mock = createServer(async (req, res) => {
+    if (req.url === "/api/tags") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ models: [] }));
+      return;
+    }
+    if (req.url?.startsWith("/search")) {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ results: [{ title: "Latest technical AI research benchmark", url: "https://example.test/paper", content: "technical AI research method benchmark results", publishedDate: "2026-09-23" }] }));
+      return;
+    }
     let body = "";
     for await (const part of req) body += part;
     requests.push({ ...JSON.parse(body), authorization: req.headers.authorization });
@@ -34,13 +44,30 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   const port = (portProbe.address() as { port: number }).port;
   await new Promise<void>(resolve => portProbe.close(() => resolve()));
   const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, PORT: String(port), DOTENV_CONFIG_PATH: "__no_env_for_tests__", NVIDIA_API_KEY: "", OPENROUTER_API_KEY: "", OLLAMA_DOCKER_HOST: "0", OLLAMA_BASE_URL: `http://127.0.0.1:${(mock.address() as { port: number }).port}` },
+    env: { ...process.env, PORT: String(port), DOTENV_CONFIG_PATH: "__no_env_for_tests__", NVIDIA_API_KEY: "", OPENROUTER_API_KEY: "", PERPLEXITY_API_KEY: "", FIRECRAWL_API_KEY: "", OLLAMA_DOCKER_HOST: "0", OLLAMA_BASE_URL: `http://127.0.0.1:${(mock.address() as { port: number }).port}`, SEARXNG_URL: `http://127.0.0.1:${(mock.address() as { port: number }).port}` },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => { child.kill(); });
   await Promise.race([once(child.stdout!, "data"), once(child, "exit").then(() => { throw new Error("Server terminato prima dell'avvio"); })]);
   const base = `http://127.0.0.1:${port}`;
-  const payload = { provider: "ollama", model: "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", conversationId: randomUUID(), messages: [{ role: "system", content: "Assistente locale" }, { role: "user", content: "SYNTHETIC_PRIVATE" }], maxTokens: 512, numCtx: 4096, brainPrivate: true };
+  const catalog = await fetch(`${base}/api/models`).then((response) => response.json()) as { models: Array<{ id: string }> };
+  assert.deepEqual(catalog.models.map((model) => model.id), [
+    "openbmb/minicpm5-2b:latest",
+    "qwen2.5-coder:7b",
+    "qwen3:14b",
+    "z-ai/glm-5.2",
+    "google/gemma-4-31b-it:free",
+    "minimaxai/minimax-m3",
+  ]);
+  const newsResponse = await fetch(`${base}/api/research`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "ai" }) });
+  assert.equal(newsResponse.status, 200, "News deve ricevere e validare il corpo JSON");
+  const news = await newsResponse.json() as { article?: string; sources?: unknown[] };
+  assert.ok(news.article);
+  assert.doesNotMatch(news.article!, /utente ha richiesto|non ho ricevuto|testo completo delle fonti/i);
+  assert.match(news.article!, /^##\s/m);
+  assert.equal(news.sources?.length, 1);
+  requests.length = 0;
+  const payload = { provider: "ollama", model: "openbmb/minicpm5-2b:latest", conversationId: randomUUID(), messages: [{ role: "system", content: "Assistente locale" }, { role: "user", content: "SYNTHETIC_PRIVATE" }], maxTokens: 512, numCtx: 4096, brainPrivate: true };
   const post = (body: object, headers = {}) => fetch(`${base}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
   const result = await post(payload);
   assert.equal(result.status, 200);
@@ -55,6 +82,12 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   assert.equal((await post(payload, { Origin: "http://localhost:9999" })).status, 403);
   assert.equal((await post({ ...payload, messages: [{ role: "user", content: "x".repeat(10000) }] })).status, 400);
   assert.equal(requests.length, 1, "richieste rifiutate prima di qualsiasi chiamata upstream");
+  assert.equal((await post({...payload,conversationId:randomUUID(),brainPrivate:false,codeAgent:true,provider:"nvidia"})).status,403,"agente codice privato anche senza flag del client");
+  const qwenResult = await post({ ...payload, model: "qwen3:14b", numCtx: 8192 });
+  assert.equal(qwenResult.status, 200);
+  await qwenResult.text();
+  assert.equal(requests.at(-1)!.model, "qwen3:14b", "il server inoltra Qwen 14B senza sostituirlo con MiniCPM");
+  assert.equal(requests.at(-1)!.options.num_ctx, 8192);
   const mutation = await fetch(`${base}/api/brain/index`, { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
   assert.equal(mutation.status, 403);
   const controller = new AbortController();

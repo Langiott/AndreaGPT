@@ -1,11 +1,12 @@
 /// <reference types="vite/client" />
 import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Pin } from "lucide-react";
+import { createId } from "./compat";
 
-const defaults = Object.entries(import.meta.glob<string>("../UNIVERSE/*.{webp,jpg,jpeg,png}", { eager: true, query: "?url", import: "default" }))
-  .sort(([a], [b]) => a.localeCompare(b)).map(([id, url]) => ({ id, url, name: id.split("/").at(-1)! }));
+const defaults = Object.entries(import.meta.glob<string>("../img/universe/*.{webp,jpg,jpeg,png}", { eager: true, query: "?url", import: "default" }))
+  .sort(([a], [b]) => a.localeCompare(b)).map(([id, url]) => ({ id, url, name: id.split("/").slice(-1)[0] }));
 export const fonts = { mono: '"Geist Mono", Consolas, monospace', system: 'Arial, Helvetica, sans-serif', serif: 'Georgia, "Times New Roman", serif' };
-type Preferences = { font: keyof typeof fonts; size: number; hidden: string[] };
+type Preferences = { font: keyof typeof fonts; size: number; hidden: string[]; pinned?: string };
 type Picture = { id: string; name: string; url: string };
 type StoredPicture = { id: string; name: string; file: Blob };
 
@@ -31,7 +32,10 @@ export function useAppearance() {
   const [preferences, setPreferences] = useState<Preferences>(() => {
     try {
       const value = JSON.parse(localStorage.getItem("andreagpt-appearance") ?? "{}");
-      return { font: Object.hasOwn(fonts, value.font) ? value.font : "mono", size: Number.isFinite(value.size) ? Math.max(12, Math.min(24, value.size)) : 14, hidden: Array.isArray(value.hidden) ? value.hidden.filter((id: unknown) => typeof id === "string") : [] };
+      const hidden = Array.isArray(value.hidden)
+        ? value.hidden.filter((id: unknown): id is string => typeof id === "string").map((id: string) => id.replace("../UNIVERSE/", "../img/universe/"))
+        : [];
+      return { font: Object.prototype.hasOwnProperty.call(fonts, value.font) ? value.font : "mono", size: Number.isFinite(value.size) ? Math.max(12, Math.min(24, value.size)) : 14, hidden, pinned: typeof value.pinned === "string" ? value.pinned : undefined };
     } catch { return { font: "mono", size: 14, hidden: [] }; }
   });
   const [custom, setCustom] = useState<Picture[]>([]);
@@ -59,7 +63,7 @@ export function useAppearance() {
         const url = URL.createObjectURL(file);
         try {
           const image = new Image(); image.src = url; await image.decode();
-          const id = crypto.randomUUID();
+          const id = createId();
           await picturesStore("readwrite", store => store.put({ id, name: file.name, file }));
           setCustom(previous => [...previous, { id, name: file.name, url }]);
         } catch (error) { URL.revokeObjectURL(url); throw error; }
@@ -80,21 +84,26 @@ export function useAppearance() {
   return { preferences, pictures, update, add, remove, error, busy };
 }
 
+export function SettingsInfo({ text }: { text: string }) {
+  void text;
+  return null;
+}
+
 export function AppearanceSettings({ appearance }: { appearance: ReturnType<typeof useAppearance> }) {
   const { preferences, pictures, update, add, remove, error, busy } = appearance;
+  const [pinMode, setPinMode] = useState(false);
   return <>
     <details className="settings-section appearance-settings settings-collapse">
-      <summary className="settings-collapse-title"><span><strong>Testo della chat</strong><small>Anteprima immediata nei messaggi e nella barra di scrittura.</small></span><ChevronDown size={15} /></summary>
+      <summary className="settings-collapse-title"><span><strong>Testo della chat</strong><SettingsInfo text="Anteprima immediata nei messaggi e nella barra di scrittura." /></span><ChevronDown size={15} /></summary>
       <label>Carattere<select value={preferences.font} onChange={e => update({ ...preferences, font: e.target.value as keyof typeof fonts })}><option value="mono">Geist Mono · originale</option><option value="system">Arial · semplice</option><option value="serif">Georgia · classico</option></select></label>
       <label>Dimensione: {preferences.size} px<input type="range" min="12" max="24" step="1" value={preferences.size} onChange={e => update({ ...preferences, size: Number(e.target.value) })} /></label>
       <p style={{ fontFamily: fonts[preferences.font], fontSize: preferences.size }}>Il tuo prossimo viaggio inizia con una domanda.</p>
     </details>
     <details className="settings-section appearance-settings settings-collapse">
-      <summary className="settings-collapse-title"><span><strong>Sfondi della chat</strong><small>Le immagini cambiano ogni 5 minuti. Modifiche e immagini personali vengono salvate in questo browser.</small></span><ChevronDown size={15} /></summary>
-      <label>Aggiungi immagini<input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={busy} onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ""; void add(files); }} /></label>
+      <summary className="settings-collapse-title"><span><strong>Sfondi della chat</strong><SettingsInfo text="Le immagini cambiano ogni 5 minuti. Con Fissa puoi scegliere uno sfondo permanente." /></span><span className="background-actions"><label className="background-action"><span>Carica</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={busy} onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ""; void add(files); }} /></label><button type="button" className={pinMode ? "active" : ""} onClick={e => { e.preventDefault(); setPinMode(value => !value); }}><Pin size={13} /> Fissa</button><ChevronDown size={15} /></span></summary>
       {busy && <p role="status">Salvataggio immagini…</p>}
       {error && <p role="alert">{error}</p>}
-      <div className="background-gallery">{pictures.map(picture => <div key={picture.id}><img src={picture.url} alt={picture.name} loading="lazy" /><button type="button" disabled={busy} aria-label={`Elimina sfondo ${picture.name}`} onClick={() => void remove(picture)}>Elimina</button></div>)}</div>
+      <div className={`background-gallery ${pinMode ? "pin-mode" : ""}`}>{pictures.map(picture => <div key={picture.id} className={preferences.pinned === picture.id ? "pinned" : ""}><button type="button" className="background-preview" disabled={busy} onClick={() => pinMode && update({ ...preferences, pinned: preferences.pinned === picture.id ? undefined : picture.id })}><img src={picture.url} alt={picture.name} loading="lazy" />{preferences.pinned === picture.id && <span className="background-pin-badge" title="Sfondo fissato"><Pin size={12} fill="currentColor" /></span>}</button><div className="background-card-actions"><span>{picture.name}</span><button type="button" disabled={busy} aria-label={`Elimina sfondo ${picture.name}`} onClick={() => void remove(picture)}>Elimina</button></div></div>)}</div>
       {!pictures.length && <p>Nessuno sfondo: la chat usa il colore del tema.</p>}
       {!!preferences.hidden.length && <button type="button" onClick={() => update({ ...preferences, hidden: [] })}>Ripristina sfondi originali</button>}
     </details>

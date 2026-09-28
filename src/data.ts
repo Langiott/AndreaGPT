@@ -1,6 +1,7 @@
 import type { TaskPreset } from "./types";
+import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "./language";
 
-const cleanTone = " Usa un tono pulito: niente parolacce, volgarita o frasi in inglese inserite per colore, salvo richiesta esplicita dell'utente.";
+const cleanTone = ` ${ITALIAN_TECHNICAL_LANGUAGE_RULES} Usa un tono pulito: niente parolacce o volgarita.`;
 
 export const TASKS: TaskPreset[] = [
   {
@@ -10,7 +11,7 @@ export const TASKS: TaskPreset[] = [
     description: "Ricerca, scrittura, sintesi e problem solving quotidiano.",
     prompt: `Sei AndreaGPT, un assistente accurato e concreto. Rispondi in italiano, salvo richiesta diversa. Distingui chiaramente fatti, ipotesi e limiti.${cleanTone}`,
     icon: "sparkles",
-    suggestedModel: "meta/llama-3.1-70b-instruct",
+    suggestedModel: "openbmb/minicpm5-2b:latest",
   },
   {
     id: "code",
@@ -19,7 +20,7 @@ export const TASKS: TaskPreset[] = [
     description: "Python, JavaScript, TypeScript, Node.js e altri linguaggi.",
     prompt: `Agisci da senior software engineer. Produci codice completo, sicuro e idiomatico. Spiega le decisioni importanti, includi comandi e test quando servono. Chiedi chiarimenti solo se indispensabili.${cleanTone}`,
     icon: "code",
-    suggestedModel: "qwen/qwen2.5-coder-32b-instruct",
+    suggestedModel: "qwen2.5-coder:7b",
   },
   {
     id: "reasoning",
@@ -28,7 +29,7 @@ export const TASKS: TaskPreset[] = [
     description: "Analisi complesse, matematica, logica e pianificazione.",
     prompt: `Risolvi il problema con rigore. Verifica assunzioni e risultati, mostra i passaggi utili senza divagare e segnala ogni incertezza.${cleanTone}`,
     icon: "brain",
-    suggestedModel: "deepseek-ai/deepseek-r1",
+    suggestedModel: "openbmb/minicpm5-2b:latest",
   },
   {
     id: "data",
@@ -37,7 +38,7 @@ export const TASKS: TaskPreset[] = [
     description: "Analisi, estrazione, classificazione e report.",
     prompt: `Agisci come data analyst. Organizza i risultati in modo verificabile, usa tabelle quando chiariscono i dati e non inventare valori mancanti.${cleanTone}`,
     icon: "chart",
-    suggestedModel: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    suggestedModel: "openbmb/minicpm5-2b:latest",
   },
   {
     id: "creative",
@@ -46,7 +47,7 @@ export const TASKS: TaskPreset[] = [
     description: "Ideazione, copywriting, storytelling e revisione testi.",
     prompt: `Agisci come autore ed editor. Crea testi originali, coerenti con tono e pubblico richiesti, evitando formule generiche e ripetizioni.${cleanTone}`,
     icon: "pen",
-    suggestedModel: "mistralai/mistral-large-2-instruct",
+    suggestedModel: "openbmb/minicpm5-2b:latest",
   },
   {
     id: "vision",
@@ -55,7 +56,7 @@ export const TASKS: TaskPreset[] = [
     description: "Comprensione visuale e ragionamento multimodale.",
     prompt: `Analizza con precisione i contenuti visuali forniti. Se un dettaglio non e leggibile o certo, dichiaralo esplicitamente.${cleanTone}`,
     icon: "eye",
-    suggestedModel: "meta/llama-3.2-90b-vision-instruct",
+    suggestedModel: "openbmb/minicpm5-2b:latest",
   },
 ];
 
