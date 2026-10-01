@@ -10,7 +10,7 @@
     "start:prod": "node --use-system-ca --import tsx backend/index.ts",
     "preview": "vite preview",
     "check": "tsc --noEmit",
-    "test": "tsx --test backend/*.test.ts backend/brain/*_test.ts backend/code/*_test.ts backend/retrieval/*_test.ts backend/search/*_test.ts backend/grounding/*_test.ts backend/context/*_test.ts backend/router/*_test.ts backend/model/*_test.ts backend/http/*_test.ts frontend/utils/*_test.ts",
+    "test": "tsx --test backend/*.test.ts backend/utils/*.test.ts backend/brain/*_test.ts backend/code/*_test.ts backend/retrieval/*_test.ts backend/search/*_test.ts backend/grounding/*_test.ts backend/context/*_test.ts backend/router/*_test.ts backend/model/*_test.ts backend/http/*_test.ts frontend/utils/*_test.ts",
     "brain": "tsx backend/brain/brain_cli.ts",
     "smoke:local": "tsx scripts/test/smoke_locale.ts",
     "benchmark:router": "tsx scripts/benchmark/benchmark_router.ts",

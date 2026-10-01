@@ -55,6 +55,8 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   assert.deepEqual(catalog.models.map((model) => model.id), [
     "openbmb/minicpm5-2b:latest",
     "qwen3:14b",
+    "qwen3-coder:30b-a3b-q4_K_M",
+    "ornith-1.5:9b",
     "z-ai/glm-5.2",
     "google/gemma-4-31b-it:free",
     "minimaxai/minimax-m3",
