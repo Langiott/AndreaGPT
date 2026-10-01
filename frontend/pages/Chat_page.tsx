@@ -4,6 +4,7 @@ import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
  * Collega conversazioni, Brain, Web, file, modelli e strumenti locali.
  */
 import { modelForPrivateChat } from "../model/model_selection";
+import { diagnosticReport as buildDiagnosticReport } from "../utils/diagnostic_report";
 import {
   Network,
   Cpu,
@@ -646,67 +647,11 @@ export default function App() {
     }
   }
 
+  // Il testo del report sta in utils/diagnostic_report.ts: qui si cerca solo il messaggio utente che lo ha generato.
   function diagnosticReport(message: ChatMessage) {
-    if (!message.diagnostics) return "";
     const messageIndex = messages.findIndex(item => item.id === message.id);
     const requestMessage = messageIndex > 0 ? [...messages.slice(0, messageIndex)].reverse().find(item => item.role === "user") : undefined;
-    const failures = message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error");
-    const statusCounts = message.diagnostics.events.reduce<Record<string, number>>((counts, event) => ({ ...counts, [event.status]: (counts[event.status] ?? 0) + 1 }), {});
-    const formatDuration = (value: number | undefined) => value === undefined ? "—" : value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(2)} ms`;
-    const metricLabels: Record<string, string> = {
-      retrievalMs: "Ricerca fonti", firstTokenMs: "Primo token", totalMs: "Tempo totale", routerLatencyMs: "Latenza router",
-      routerRoute: "Percorso router", routerConfidence: "Confidenza router", prompt_eval_count: "Token in ingresso", eval_count: "Token generati",
-      load_duration: "Caricamento modello (ns)", prompt_eval_duration: "Elaborazione prompt (ns)", eval_duration: "Generazione (ns)",
-      cpuUserMs: "CPU utente", cpuSystemMs: "CPU sistema", rssMb: "RAM server (MiB)",
-    };
-    const metrics = message.metrics ? Object.entries(message.metrics).map(([key, value]) => {
-      const duration = ["retrievalMs", "firstTokenMs", "totalMs", "routerLatencyMs", "cpuUserMs", "cpuSystemMs"].includes(key) && typeof value === "number" ? formatDuration(value) : String(value);
-      return `- ${metricLabels[key] ?? key}: ${duration}`;
-    }).join("\n") : "- Nessuna metrica disponibile";
-    const brainSources = message.brainSources?.length ? message.brainSources.map((source, index) => `- [${source.id || index + 1}] ${source.source}\n  Estratto: ${source.text}`).join("\n") : "- Nessuna fonte Brain";
-    const webSources = message.webSources?.length ? message.webSources.map(source => `- [${source.source}] ${source.title}\n  URL: ${source.url}\n  Estratto: ${source.excerpt}`).join("\n") : "- Nessuna fonte Web";
-    const attachments = requestMessage?.attachments?.length ? requestMessage.attachments.map(attachment => `- ${attachment.name} · ${attachment.type || attachment.kind} · ${attachment.size} byte`).join("\n") : "- Nessun allegato";
-    const events = message.diagnostics.events.map(event => {
-      const details = event.details ? `\n${Object.entries(event.details).map(([key, value]) => `  - ${key}: ${value ?? "—"}`).join("\n")}` : "";
-      return `[${event.at}] ${event.status.toUpperCase()} · ${event.stage.toUpperCase()} · ${event.message}${event.durationMs !== undefined ? ` · ${event.durationMs} ms` : ""}${details}`;
-    }).join("\n\n");
-    return `REPORT DIAGNOSTICO ANDREAGPT
-Request ID: ${message.diagnostics.requestId}
-Data richiesta: ${message.diagnostics.events[0]?.at ?? "—"}
-Esito: ${failures.length ? `${failures.length} avvisi/errori` : "Nessun problema rilevato"}
-Eventi: ${message.diagnostics.events.length} totali · ${statusCounts.ok ?? 0} ok · ${statusCounts.info ?? 0} info · ${statusCounts.warning ?? 0} warning · ${statusCounts.error ?? 0} error
-
-CONFIGURAZIONE
-- Modello: ${message.modelName ?? "—"}
-- ID modello: ${message.modelId ?? "—"}
-- Provider: ${message.modelProvider ?? "—"}
-- Brain: ${message.brainPrivate || Boolean(message.brainSources?.length) ? "attivo" : "non richiesto"}
-- Web: ${message.webSearch || Boolean(message.webSources?.length) ? "attivo" : "non richiesto"}
-
-RICHIESTA UTENTE
-${requestMessage?.content || "—"}
-
-ALLEGATI
-${attachments}
-
-RISPOSTA ASSOCIATA
-${message.content || "—"}
-
-DIMENSIONI
-- Richiesta: ${requestMessage?.content.length ?? 0} caratteri (circa ${Math.ceil((requestMessage?.content.length ?? 0) / 4)} token)
-- Risposta: ${message.content.length} caratteri (circa ${Math.ceil(message.content.length / 4)} token)
-
-TEMPI E METRICHE
-${metrics}
-
-FONTI BRAIN
-${brainSources}
-
-FONTI WEB
-${webSources}
-
-EVENTI DIAGNOSTICI
-${events || "—"}`;
+    return buildDiagnosticReport(message, requestMessage);
   }
 
   async function copyDiagnosticReport(message: ChatMessage) {
