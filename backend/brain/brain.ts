@@ -991,6 +991,11 @@ export function createBrain(options: BrainOptions = {}) {
     if (turboBuilding) return { ...turboInfo, building: true };
     if (useStore) {
       const ready = await store.open();
+      if (ready) {
+        // Avvia subito Python e carica l'indice: la prima domanda non aspetta.
+        const dim = Number(process.env.BRAIN_PCA_DIM ?? ready.dimension), dir = path.join(store.root, ready.generation);
+        if (ready.variants[String(dim)]) void turboWorker?.request({ index: path.join(dir, `vectors-${dim}.tvim`), vector: Array(ready.dimension).fill(1), projection: dim === ready.dimension ? undefined : path.join(dir, `pca-${dim}.npz`), k: 1 }).catch(() => undefined);
+      }
       if (ready) return { enabled: true, ready: true, building: false, count: ready.count, dimension: ready.dimension };
       turboBuilding = true;
       try {
