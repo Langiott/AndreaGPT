@@ -32,13 +32,14 @@ export function useAppearance() {
   const [preferences, setPreferences] = useState<Preferences>(() => {
     try {
       const value = JSON.parse(localStorage.getItem("andreagpt-appearance") ?? "{}");
-      const hidden = Array.isArray(value.hidden)
-        ? value.hidden.filter((id: unknown): id is string => typeof id === "string").map((id: string) => id.replace("../UNIVERSE/", "../../img/universe/").replace("../img/universe/", "../../img/universe/"))
-        : [];
-      return { font: Object.prototype.hasOwnProperty.call(fonts, value.font) ? value.font : "mono", size: Number.isFinite(value.size) ? Math.max(12, Math.min(24, value.size)) : 14, hidden, pinned: typeof value.pinned === "string" ? value.pinned : undefined };
+      // I percorsi delle immagini sono cambiati nel tempo: nascosti e fissato vanno portati al percorso attuale.
+      const migrate = (id: string) => id.replace("../UNIVERSE/", "../../img/universe/").replace(/^\.\.\/img\/universe\//, "../../img/universe/");
+      const hidden = Array.isArray(value.hidden) ? value.hidden.filter((id: unknown): id is string => typeof id === "string").map(migrate) : [];
+      return { font: Object.prototype.hasOwnProperty.call(fonts, value.font) ? value.font : "mono", size: Number.isFinite(value.size) ? Math.max(12, Math.min(24, value.size)) : 14, hidden, pinned: typeof value.pinned === "string" ? migrate(value.pinned) : undefined };
     } catch { return { font: "mono", size: 14, hidden: [] }; }
   });
   const [custom, setCustom] = useState<Picture[]>([]);
+  const [loaded, setLoaded] = useState(false); // sfondi letti dal browser: evita uno sfondo a caso all'avvio
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -47,7 +48,8 @@ export function useAppearance() {
     picturesStore("readonly", store => store.getAll()).then(data => {
       if (!active) return;
       setCustom((data as StoredPicture[]).map(item => { const url = URL.createObjectURL(item.file); urls.push(url); return { id: item.id, name: item.name, url }; }));
-    }).catch(() => { if (active) setError("Impossibile leggere gli sfondi salvati nel browser."); });
+    }).catch(() => { if (active) setError("Impossibile leggere gli sfondi salvati nel browser."); })
+      .finally(() => { if (active) setLoaded(true); });
     return () => { active = false; urls.forEach(url => URL.revokeObjectURL(url)); };
   }, []);
   const pictures = [...defaults.filter(item => !preferences.hidden.includes(item.id)), ...custom];
@@ -72,7 +74,10 @@ export function useAppearance() {
     finally { setBusy(false); }
   }
   async function remove(picture: Picture) {
-    if (defaults.some(item => item.id === picture.id)) { update({ ...preferences, hidden: [...preferences.hidden, picture.id] }); return; }
+    // Eliminando lo sfondo fissato si toglie anche il fissaggio.
+    const pinned = preferences.pinned === picture.id ? undefined : preferences.pinned;
+    if (defaults.some(item => item.id === picture.id)) { update({ ...preferences, hidden: [...preferences.hidden, picture.id], pinned }); return; }
+    if (pinned !== preferences.pinned) update({ ...preferences, pinned });
     setBusy(true); setError("");
     try {
       await picturesStore("readwrite", store => store.delete(picture.id));
@@ -81,7 +86,7 @@ export function useAppearance() {
     } catch { setError("Impossibile eliminare l'immagine. Riprova."); }
     finally { setBusy(false); }
   }
-  return { preferences, pictures, update, add, remove, error, busy };
+  return { preferences, pictures, update, add, remove, error, busy, loaded };
 }
 
 export function SettingsInfo({ text }: { text: string }) {

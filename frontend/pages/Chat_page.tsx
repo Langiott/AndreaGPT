@@ -120,7 +120,18 @@ function AudioWelcomeCard({ variant, recording, transcribing, fileName, idleTitl
   </div>;
 }
 
-const initialSettings: ChatSettings = { temperature: 0.6, maxTokens: 2048, ollamaMaxTokens: 512 };
+const initialSettings: ChatSettings = { temperature: 0.3, maxTokens: 2048, ollamaMaxTokens: 512 };
+/** Impostazioni di generazione salvate nel browser: restano dopo la chiusura dell'app. */
+function loadSettings(): ChatSettings {
+  try {
+    const saved = JSON.parse(localStorage.getItem("andreagpt-settings") || "{}");
+    return {
+      temperature: Number.isFinite(saved.temperature) ? Math.max(0, Math.min(2, saved.temperature)) : initialSettings.temperature,
+      maxTokens: Number.isFinite(saved.maxTokens) ? Math.max(1, Math.min(8192, saved.maxTokens)) : initialSettings.maxTokens,
+      ollamaMaxTokens: Number.isFinite(saved.ollamaMaxTokens) ? saved.ollamaMaxTokens : initialSettings.ollamaMaxTokens,
+    };
+  } catch { return initialSettings; }
+}
 type OllamaProfile = { numCtx: 4096 | 8192; maxTokens: 256 | 512 | 1024 | 2048 | 4096 };
 const OLLAMA_PROFILES_STORAGE = "andreagpt-ollama-profiles-v1";
 
@@ -294,7 +305,7 @@ export default function App() {
   const [renameDialog, setRenameDialog] = useState<{ id: string; title: string } | null>(null);
   const [outputFiles, setOutputFiles] = useState<{ images: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; ocr: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; yolo: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; compactChat: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }> }>({ images: [], ocr: [], yolo: [], compactChat: [] });
   const [compactingChat, setCompactingChat] = useState(false);
-  const [settings, setSettings] = useState<ChatSettings>(initialSettings);
+  const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [ollamaProfiles, setOllamaProfiles] = useState<Record<string, OllamaProfile>>(() => loadOllamaProfiles());
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [diagnosticReportMessageId, setDiagnosticReportMessageId] = useState("");
@@ -791,6 +802,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("andreagpt-brain-ranking", JSON.stringify(brainRanking)); } catch { /* sessione privata */ }
   }, [brainRanking]);
+
+  useEffect(() => {
+    try { localStorage.setItem("andreagpt-settings", JSON.stringify(settings)); } catch { /* sessione privata */ }
+  }, [settings]);
 
   useEffect(() => {
     localStorage.setItem("andreagpt-brain-enabled", String(brainEnabled));
@@ -1483,7 +1498,7 @@ export default function App() {
       {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Chiudi menu" />}
 
       <main className="main-panel" style={{ "--chat-font": fonts[appearance.preferences.font], "--chat-font-size": `${appearance.preferences.size}px` } as React.CSSProperties}>
-        <UniverseBackground key={`${appearance.pictures.map(picture => picture.id).join("|")}:${appearance.preferences.pinned ?? ""}`} images={appearance.pictures.map(picture => ({ id: picture.id, url: picture.url }))} pinnedId={appearance.preferences.pinned} />
+        {appearance.loaded && <UniverseBackground key={`${appearance.pictures.map(picture => picture.id).join("|")}:${appearance.preferences.pinned ?? ""}`} images={appearance.pictures.map(picture => ({ id: picture.id, url: picture.url }))} pinnedId={appearance.preferences.pinned} />}
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Apri menu"><Menu size={21} /></button>
           <div className="model-title">
@@ -1751,14 +1766,12 @@ export default function App() {
             <label className="setting-field token-field"><span><strong>Seed</strong></span><input type="number" min="0" max="2147483647" value={imageSettings.seed} onChange={event => setImageSettings(current => ({ ...current, seed: Math.max(0, Math.min(2147483647, Number(event.target.value))) }))} /></label>
             <p className="cookbook-note">Il backend seleziona automaticamente CUDA, Intel XPU oppure CPU. Per Intel Arc serve una build PyTorch con supporto XPU; i file sono salvati in <code>OUTPUT/Image</code>.</p>
           </div>
-          <div className="settings-section brain-ranking-settings">
-            <div className="settings-heading"><strong>Ricerca nel Brain</strong><SettingsInfo text="Come vengono scelte le fonti dai tuoi documenti. Misura l'effetto con: npm run valuta:brain -- --confronta" /></div>
-            <div className="convert-options" role="group" aria-label="Opzioni di ricerca nel Brain">
-              <label><input type="checkbox" checked={brainRanking.micelio} onChange={event => setBrainRanking(current => ({ ...current, micelio: event.target.checked }))} /> <span><strong>Micelio</strong><small>gli estratti collegati a molte fonti forti salgono di posizione</small></span></label>
-              <label><input type="checkbox" checked={brainRanking.fuzzy} onChange={event => setBrainRanking(current => ({ ...current, fuzzy: event.target.checked }))} /> <span><strong>Fuzzy (temi)</strong><small>terzo canale: propone le fonti con gli stessi temi della domanda e le fonde con embedding e lessicale</small></span></label>
-            </div>
-            <p className="cookbook-note">Ultima misura su 47 domande: spenti Recall@5 85%, Micelio 85%. Il canale fuzzy è nuovo: da misurare con npm run valuta:brain -- --confronta.</p>
-          </div>
+          <details className="settings-section brain-ranking-settings settings-collapse">
+            <summary className="settings-collapse-title"><span><strong>Ricerca nel Brain</strong><SettingsInfo text="Come vengono scelte le fonti dai tuoi documenti. Misura l'effetto con: npm run valuta:brain -- --confronta" /></span><ChevronDown size={15} /></summary>
+            <label className="setting-field"><span><strong>Micelio</strong><SettingsInfo text="Gli estratti collegati a molte fonti forti salgono di posizione (similarità coseno tra estratti)." /></span><input type="checkbox" checked={brainRanking.micelio} onChange={event => setBrainRanking(current => ({ ...current, micelio: event.target.checked }))} /></label>
+            <label className="setting-field"><span><strong>Fuzzy (temi)</strong><SettingsInfo text="Terzo canale: propone le fonti con gli stessi temi della domanda e le fonde con embedding e lessicale." /></span><input type="checkbox" checked={brainRanking.fuzzy} onChange={event => setBrainRanking(current => ({ ...current, fuzzy: event.target.checked }))} /></label>
+            <p className="cookbook-note">Ultima misura su 47 domande: spenti Recall@5 85%, Micelio 85%. Fuzzy da misurare.</p>
+          </details>
           <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />
           <div className="settings-section generation-settings">
             <div className="settings-heading"><strong>Generazione</strong><SettingsInfo text="Configura il comportamento delle risposte." /></div>

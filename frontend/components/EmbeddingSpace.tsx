@@ -27,7 +27,7 @@ interface Snapshot { stats: SpreadStats; shape: Ellipsoid | null }
 /** Riga A → B di una statistica, con la variazione relativa. */
 function Compare({ label, hint, before, after, format }: { label: string; hint: string; before?: number; after: number; format: (value: number) => string }) {
   const change = before ? (after - before) / before : 0;
-  return <div title={hint}><dt>{label}</dt><dd>{before !== undefined && <span className="muted">{format(before)} → </span>}{format(after)}{before !== undefined && Math.abs(change) >= 0.005 && <small className="espace-change">{change > 0 ? "+" : ""}{Math.round(change * 100)}%</small>}</dd><small>{hint}</small></div>;
+  return <div title={hint}><dt>{label}</dt><dd>{before !== undefined && <span className="muted">{format(before)} → </span>}{format(after)}{before !== undefined && Math.abs(change) >= 0.005 && <small className="espace-change">{change > 0 ? "+" : ""}{Math.round(change * 100)}%</small>}</dd></div>;
 }
 
 /** Ruota un punto (yaw attorno all'asse verticale, pitch attorno all'orizzontale). */
@@ -229,53 +229,55 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
       </div>
       <aside className="espace-side">
         {data && <>
-          <section className="espace-summary" aria-label="Riepilogo dello spazio">
-            <h4>Riepilogo</h4>
-            <dl>
+          <details className="espace-panel" open>
+            <summary>Riepilogo</summary>
+            <dl className="espace-stats">
               <div title="Lunghezza di ogni vettore di embedding"><dt>Dimensioni</dt><dd>{data.dimension}</dd></div>
               <div title={data.shown < data.total ? "Estratti mostrati sul totale indicizzato" : "Estratti (chunk) indicizzati"}><dt>Chunk</dt><dd>{data.shown < data.total ? `${data.shown} / ${data.total}` : data.total}</dd></div>
               <div title="Assi principali usati per la vista 3D"><dt>Componenti PCA</dt><dd>{data.explained.length}</dd></div>
               {chapters > 0 && <div title="Capitoli riconosciuti negli estratti"><dt>Capitoli</dt><dd>{chapters}</dd></div>}
             </dl>
-            <ul className="espace-variance">{data.explained.map((value, i) => <li key={i}><span>PC{i + 1}</span><i><b style={{ width: percent(value) }} /></i><span>{percent(value)}</span></li>)}</ul>
-            <p className="muted">Varianza conservata in 3D: <b>{percent(data.explained.reduce((sum, value) => sum + value, 0))}</b> delle {data.dimension} dimensioni.</p>
-          </section>
-          {files.length > 0 && <section className="espace-spread" aria-label="Documenti e dispersione">
-            <h4>Documenti e dispersione</h4>
+            <ul className="espace-variance" title={`Varianza delle ${data.dimension} dimensioni conservata da ogni componente`}>
+              {data.explained.map((value, i) => <li key={i}><span>PC{i + 1}</span><i><b style={{ width: percent(value) }} /></i><span>{percent(value)}</span></li>)}
+              <li className="espace-variance-total"><span>3D</span><i><b style={{ width: percent(data.explained.reduce((sum, value) => sum + value, 0)) }} /></i><span>{percent(data.explained.reduce((sum, value) => sum + value, 0))}</span></li>
+            </ul>
+          </details>
+          {data.query && <details className="espace-panel" open>
+            <summary>Vicini della domanda{data.query.group && <span className="muted"> · {data.query.group}</span>}</summary>
+            <ol>{data.query.nearest.map(item => <li key={item.index} onPointerEnter={() => setHover(item.index)}>{percent(item.similarity)} · {fileName(data.points[item.index].path)}:{data.points[item.index].lines}</li>)}</ol>
+          </details>}
+          {data.groups && <details className="espace-panel">
+            <summary title={data.groups.note || undefined}>{data.groups.title}</summary>
+            {data.groups.metrics.length > 0 && <dl className="espace-stats">{data.groups.metrics.map(metric => <div key={metric.label} title={metric.hint}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl>}
+            <ul className="espace-legend">{legend.map(item => <li key={item.label} title={item.name}><i style={{ background: groupColor(item.label) }} /><span>{item.name}</span><span className="muted">{item.count}</span></li>)}</ul>
+          </details>}
+          {files.length > 0 && <details className="espace-panel">
+            <summary>Documenti e dispersione</summary>
             <div className="espace-spread-actions">
               <button type="button" onClick={() => setExcluded(new Set())}>Tutti</button>
               <button type="button" onClick={() => setExcluded(new Set(files.map(file => file.path)))}>Nessuno</button>
-              <label><input type="checkbox" checked={showSpread} onChange={event => setShowSpread(event.target.checked)} /> Centro ed ellissoide</label>
+              <label title="Mostra centro ed ellissoide della selezione nella vista 3D"><input type="checkbox" checked={showSpread} onChange={event => setShowSpread(event.target.checked)} /> Ellissoide</label>
             </div>
-            <ul className="espace-files">{files.map(file => <li key={file.path}><label title={file.path}><input type="checkbox" checked={!excluded.has(file.path)} onChange={() => toggleFile(file.path)} /><span>{fileName(file.path)}</span><span className="muted">{file.count}</span></label></li>)}</ul>
-            {selection?.stats ? <>
-              <dl className="espace-metrics">
-                <Compare label="Chunk selezionati" hint={`${selection.stats.files} documenti su ${files.length}.`} before={snapshot?.stats.count} after={selection.stats.count} format={value => String(value)} />
-                <Compare label="Varianza totale" hint={`Distanza quadratica media dei chunk dal centro, su tutte le ${data.dimension} dimensioni (0 = tutti uguali).`} before={snapshot?.stats.total} after={selection.stats.total} format={decimal} />
-                <Compare label="Dentro i documenti" hint="Quanto sono sparsi i chunk di uno stesso documento." before={snapshot ? snapshot.stats.within / (snapshot.stats.total || 1) : undefined} after={selection.stats.within / (selection.stats.total || 1)} format={percent} />
-                <Compare label="Tra i documenti" hint="Quanto sono lontani i centri dei documenti: 0% con un documento solo." before={snapshot ? snapshot.stats.between / (snapshot.stats.total || 1) : undefined} after={selection.stats.between / (selection.stats.total || 1)} format={percent} />
+            <details className="espace-subpanel">
+              <summary>Documenti <span className="muted">{files.length - files.filter(file => excluded.has(file.path)).length}/{files.length}</span></summary>
+              <ul className="espace-files">{files.map(file => <li key={file.path}><label title={file.path}><input type="checkbox" checked={!excluded.has(file.path)} onChange={() => toggleFile(file.path)} /><span>{fileName(file.path)}</span><span className="muted">{file.count}</span></label></li>)}</ul>
+            </details>
+            {selection?.stats && <>
+              <dl className="espace-stats">
+                <Compare label="Chunk" hint={`${selection.stats.files} documenti su ${files.length}`} before={snapshot?.stats.count} after={selection.stats.count} format={value => String(value)} />
+                <Compare label="Varianza" hint={`Distanza quadratica media dei chunk dal centro, su ${data.dimension} dimensioni (0 = tutti uguali)`} before={snapshot?.stats.total} after={selection.stats.total} format={decimal} />
+                {(selection.stats.files > 1 || (snapshot?.stats.files ?? 0) > 1) && <>
+                  <Compare label="Dentro i doc." hint="Quota della varianza dovuta ai chunk di uno stesso documento" before={snapshot ? snapshot.stats.within / (snapshot.stats.total || 1) : undefined} after={selection.stats.within / (selection.stats.total || 1)} format={percent} />
+                  <Compare label="Tra i doc." hint="Quota della varianza dovuta alla distanza tra i centri dei documenti" before={snapshot ? snapshot.stats.between / (snapshot.stats.total || 1) : undefined} after={selection.stats.between / (selection.stats.total || 1)} format={percent} />
+                </>}
               </dl>
-              {shift && <div className="espace-shift">
-                <strong>Spostamento del centro A → B: {shift.verdict}</strong>
-                <span>{decimal(shift.distance)} nelle {data.dimension} dimensioni, cioè <b>{shift.relative.toLocaleString("it-IT", { maximumFractionDigits: 2 })}×</b> la distanza tipica di un chunk dal centro di A ({decimal(shift.typical)}).</span>
-              </div>}
+              {shift && <p className="espace-shift" title={`${decimal(shift.distance)} nelle ${data.dimension} dimensioni; distanza tipica di un chunk dal centro di A: ${decimal(shift.typical)}`}>Centro A → B: <b>{shift.verdict}</b> · {shift.relative.toLocaleString("it-IT", { maximumFractionDigits: 2 })}×</p>}
               <div className="espace-spread-actions">
-                <button type="button" onClick={() => setSnapshot({ stats: selection.stats!, shape: selection.shape })} title="Salva la selezione attuale come riferimento A">{snapshot ? "Aggiorna A" : "Fissa come A"}</button>
+                <button type="button" onClick={() => setSnapshot({ stats: selection.stats!, shape: selection.shape })} title="Salva la selezione attuale come riferimento A (tratteggiato nella vista)">{snapshot ? "Aggiorna A" : "Fissa come A"}</button>
                 {snapshot && <button type="button" onClick={() => setSnapshot(null)}>Togli A</button>}
               </div>
-              <p className="muted">{snapshot ? "Nella vista: A tratteggiato, B pieno, freccia da A a B." : "Fissa la selezione come A, poi attiva o disattiva documenti per confrontare."} Gli assi restano quelli di tutto l'archivio, quindi i punti non si spostano.</p>
-            </> : <p className="muted">Seleziona almeno un documento.</p>}
-          </section>}
-          {data.query && <><h4>Vicini reali della domanda</h4>
-            {data.query.group && <p className="espace-hint">{data.groups?.kind === "classifier" ? "Capitolo previsto" : data.groups?.strength ? "Temi della domanda" : "Gruppo della domanda"}: <b>{data.query.group}</b></p>}
-            <ol>{data.query.nearest.map(item => <li key={item.index} onPointerEnter={() => setHover(item.index)}>{percent(item.similarity)} · {data.points[item.index].path.split("/").at(-1)}:{data.points[item.index].lines}</li>)}</ol></>}
-          {data.groups && <>
-            <h4>{data.groups.title}</h4>
-            {data.groups.note && <p className="espace-hint">{data.groups.note}</p>}
-            <dl className="espace-metrics">{data.groups.metrics.map(metric => <div key={metric.label} title={metric.hint}><dt>{metric.label}</dt><dd>{metric.value}</dd><small>{metric.hint}</small></div>)}</dl>
-            <ul>{legend.slice(0, 14).map(item => <li key={item.label}><i style={{ background: groupColor(item.label) }} />{item.name} <span className="muted">{item.count}</span></li>)}</ul>
-            {legend.length > 14 && <p className="muted">…e altri {legend.length - 14} gruppi</p>}
-          </>}
+            </>}
+          </details>}
         </>}
       </aside>
     </div>

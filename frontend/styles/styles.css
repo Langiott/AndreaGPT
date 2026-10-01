@@ -2038,7 +2038,27 @@ button { color: inherit; }
 .espace-side li i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; }
 .espace-method { padding: 7px 8px; color: inherit; font: inherit; font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 .espace-hint { margin: 0 0 10px; }
-.espace-spread { margin: 0 0 14px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; }
+.espace-panel { margin: 0 0 8px; border: 1px solid var(--line); border-radius: 10px; }
+.espace-panel > summary { display: flex; align-items: center; gap: 6px; padding: 8px 11px; font-weight: 700; cursor: pointer; list-style: none; user-select: none; }
+.espace-panel > summary::-webkit-details-marker, .espace-subpanel > summary::-webkit-details-marker { display: none; }
+.espace-panel > summary::before, .espace-subpanel > summary::before { content: "B8"; color: var(--muted); transition: transform .15s ease; }
+.espace-panel[open] > summary::before, .espace-subpanel[open] > summary::before { transform: rotate(90deg); }
+.espace-panel > summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.espace-panel[open] { padding: 0 11px 10px; }
+.espace-panel[open] > summary { margin: 0 -11px 6px; }
+.espace-stats { margin: 0 0 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.espace-stats div { min-width: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; }
+.espace-stats dt { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.espace-stats dd { margin: 0; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.espace-side .espace-variance-total { margin-top: 6px !important; font-weight: 700; }
+.espace-side ul.espace-legend { max-height: 240px; overflow-y: auto; }
+.espace-side .espace-legend li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: 3px 0; }
+.espace-side .espace-legend li i { margin: 0; }
+.espace-legend li span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.espace-subpanel { margin: 0 0 8px; }
+.espace-subpanel > summary { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; list-style: none; user-select: none; }
+.espace-subpanel > summary .muted { margin-left: auto; }
+.espace-shift { margin: 0 0 8px; padding: 6px 9px; border: 1px solid var(--lime); border-radius: 8px; background: var(--lime-soft); }
 .espace-spread-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
 .espace-spread-actions button { padding: 4px 9px; border: 1px solid var(--line); border-radius: 7px; color: inherit; background: var(--lime-soft); font: inherit; font-size: 11px; cursor: pointer; }
 .espace-spread-actions button:hover { border-color: var(--lime); }
@@ -2048,14 +2068,6 @@ button { color: inherit; }
 .espace-files label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 2px; cursor: pointer; }
 .espace-files label span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .espace-change { display: inline !important; margin-left: 6px; font-size: 11px; font-weight: 600; }
-.espace-shift { display: grid; gap: 3px; margin: 0 0 10px; padding: 7px 9px; border: 1px solid var(--lime); border-radius: 8px; background: var(--lime-soft); }
-.espace-shift span { color: var(--muted); }
-.espace-summary { margin: 0 0 14px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--lime-soft); }
-.espace-summary dl { margin: 0 0 9px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.espace-summary dl div { padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
-.espace-summary dt { color: var(--muted); font-size: 11px; }
-.espace-summary dd { margin: 0; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.espace-summary p { margin: 6px 0 0; }
 .espace-side .espace-variance li { display: grid; grid-template-columns: 30px 1fr 34px; align-items: center; gap: 7px; margin: 3px 0; font-variant-numeric: tabular-nums; }
 .espace-side .espace-variance li span:last-child { text-align: right; }
 .espace-side .espace-variance i { width: auto; margin: 0; height: 6px; overflow: hidden; border-radius: 3px; background: var(--line); }
