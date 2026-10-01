@@ -1211,6 +1211,9 @@ export function createBrain(options: BrainOptions = {}) {
       const codeNoisePenalty = identityQuestion && /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|h|hpp|cs)$/iu.test(chunk.path) && !description && profileFacts < 2 ? 0.45 : 0;
       return { ...source, text: focused, lexicalScore, cosineScore, entityMatch, roleEvidence, rankLine, score: 0.45 * lexicalScore + 0.55 * Math.max(0, cosineScore) + (description ? 0.25 : 0) + (roleEvidence ? 0.65 : 0) + profileBoost + overviewBoost + formatBoost + definitionSectionBoost + window.coverage * 0.15 + feedbackBoost(learnedFeedback, query, citation) - codeNoisePenalty, citation };
     }).filter(hit => hit.entityMatch && (hit.lexicalScore > 0 || hit.cosineScore > 0.25)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    // Se nessun estratto contiene almeno una parola della domanda, la sola somiglianza vettoriale non basta: meglio dire che non c'è nulla.
+    // Le richieste di panoramica ("riassumi", "panoramica"...) restano escluse: riguardano l'archivio intero.
+    if (!overviewQuestion && !rankedBase.some(hit => hit.lexicalScore > 0)) { measure("retrievalTotalMs", began); return []; }
     // Propagazione Micelio: i candidati semanticamente vicini condividono
     // una parte del segnale. In questo modo un passaggio utile può portare
     // con sé i nodi collegati, senza affidarsi soltanto al match lessicale.

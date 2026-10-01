@@ -39,7 +39,16 @@ test("refuso tecnico non ambiguo recupera retrieval senza correggere nomi", asyn
   assert.ok(f.calls.flat().includes("search_query: parlami metodi retrieval"));
 });
 
-async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
+test("domanda senza nessuna parola presente nell'archivio non restituisce estratti", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "database.txt"), "Il database Postgres conserva i dati dei clienti.");
+  await f.brain.indexBrain();
+  // Il vettore finto è simile per tutti i testi: conta solo la presenza di parole in comune.
+  assert.deepEqual(await f.brain.searchBrain("ricetta della carbonara"), []);
+  assert.ok((await f.brain.searchBrain("ricetta dei clienti")).length > 0);
+});
+
+async function fixture(t:{ after: (fn: () => Promise<void>) => void }) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "andreagpt-brain-test-"));
   t.after(() => fs.rm(temporary, { recursive: true, force: true }));
   const root = path.join(temporary, "ANDREA-BRAIN");
