@@ -392,6 +392,14 @@ test("batch limitati e fallimento embedding preservano indice precedente", async
   assert.deepEqual((await fs.readdir(f.dataDir)).sort(), ["index.json"]);
 });
 
+test("Ollama spento: messaggio chiaro invece di fetch failed", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, "nota.txt"), "Testo da indicizzare.");
+  // Porta 1 chiusa: simula Ollama non avviato, senza chiamate reali.
+  const brain = createBrain({ root: f.root, dataDir: f.dataDir, ollamaUrl: "http://127.0.0.1:1", turbo: false });
+  await assert.rejects(brain.indexBrain(), /Ollama non raggiungibile/);
+});
+
 test("symlink esterno escluso e root symlink rifiutata", async t => {
   const f = await fixture(t);
   const outside = path.join(f.temporary, "outside");

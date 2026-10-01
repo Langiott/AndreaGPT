@@ -515,11 +515,19 @@ export function createBrain(options: BrainOptions = {}) {
       let values: number[][];
       if (options.embed) values = await options.embed(batch);
       else {
-        const response = await fetch(new URL("/api/embed", ollama), {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: MODEL, input: batch, truncate: false, keep_alive: "30m" }),
-          signal: AbortSignal.timeout(300_000), redirect: "error",
-        });
+        let response: Response;
+        try {
+          response = await fetch(new URL("/api/embed", ollama), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: MODEL, input: batch, truncate: false, keep_alive: "30m" }),
+            signal: AbortSignal.timeout(300_000), redirect: "error",
+          });
+        } catch (error) {
+          // Il timeout resta com'è; un errore di rete significa Ollama spento o irraggiungibile.
+          if ((error as Error)?.name === "TimeoutError") throw error;
+          throw new Error(`Ollama non raggiungibile su ${ollama.origin}: avvia Ollama (app Ollama oppure "ollama serve") e riprova.`);
+        }
+        if (response.status === 404) throw new Error(`Il modello di embedding ${MODEL} non è installato: esegui "ollama pull ${MODEL}".`);
         if (!response.ok) throw new Error(`Ollama embedding HTTP ${response.status}. Verificare nomic-embed-text; overflow non troncato, indice precedente conservato.`);
         values = (await response.json() as { embeddings: number[][] }).embeddings;
       }
