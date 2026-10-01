@@ -10,6 +10,9 @@ export interface ChatAttachment {
   text?: string;
 }
 
+/** Spiegazione SHAP per parola, calcolata dal backend su richiesta. */
+export interface ShapResult { query: string; words: string[]; exact: boolean; evaluations: number; overall: number[]; coveredBy: number[]; findings: string[]; sources: Array<{ source: string; similarity: number; baseline: number; shares: number[]; present: boolean[] }> }
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -23,6 +26,8 @@ export interface ChatMessage {
   brainPrivate?: boolean;
   brainSources?: BrainCitation[];
   feedback?: 1 | -1;
+  sourceFeedback?: Record<string, 1 | -1>;
+  shap?: ShapResult;
   metrics?: Record<string, number>;
   diagnostics?: DiagnosticTrace;
   diagnosticFeedback?: 1 | -1;

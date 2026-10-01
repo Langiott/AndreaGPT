@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $comfyRoot = Join-Path $projectRoot "runtime\ComfyUI"
 $python = Join-Path $comfyRoot ".venv\Scripts\python.exe"
@@ -12,6 +12,9 @@ try {
   if ($existing) { Set-Content -LiteralPath $pidFile -Value $existing.ProcessId -Encoding ASCII }
   exit 0
 } catch { }
+
+# ComfyUI è opzionale: se non è installato si esce con il codice 3, senza errore.
+if (-not (Test-Path -LiteralPath (Join-Path $comfyRoot "main.py"))) { exit 3 }
 
 $requiredFiles = @(
   $python,

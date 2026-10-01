@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Continue"
+﻿$ErrorActionPreference = "Continue"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logRoot = Join-Path $projectRoot "runtime\logs"
 $stopLog = Join-Path $logRoot "andreagpt-stop.log"

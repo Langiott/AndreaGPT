@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logRoot = Join-Path $projectRoot "runtime\logs"
 $startupLog = Join-Path $logRoot "andreagpt-startup.log"
@@ -75,7 +75,8 @@ try {
     }
   }
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $comfyStarter
-  if ($LASTEXITCODE -ne 0) { Write-Startup "ATTENZIONE: ComfyUI non è partito; la chat resta utilizzabile." }
+  if ($LASTEXITCODE -eq 3) { Write-Startup "ComfyUI non installato in runtime\ComfyUI: generazione immagini non disponibile, il resto funziona." }
+  elseif ($LASTEXITCODE -ne 0) { Write-Startup "ATTENZIONE: ComfyUI non è partito (dettagli in runtime\ComfyUI\andreagpt-comfy-error.log); la chat resta utilizzabile." }
 
   $portLine = & docker compose --project-directory $projectRoot -f $composeFile port andreagpt 3000 2>$null | Select-Object -First 1
   if ($portLine) {

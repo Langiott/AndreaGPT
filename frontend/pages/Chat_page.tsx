@@ -59,6 +59,7 @@ import { createId } from "../utils/compat";
 import { createStreamBatch } from "../utils/stream_batch";
 import { writeClipboard } from "../utils/clipboard";
 import { userErrorMessage } from "../utils/errors";
+import { ShapPanel } from "../components/ShapPanel";
 import { Mainboard } from "../components/Mainboard";
 import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, WebCitation } from "../types/types";
 
@@ -73,6 +74,7 @@ const iconByName = {
 
 const BrainPanel = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainPanel })));
 const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => ({ default: module.BrainGraph })));
+const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
 // Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
 const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.MarkdownMessage })));
@@ -253,6 +255,7 @@ export default function App() {
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
+  const [embeddingOpen, setEmbeddingOpen] = useState(false);
   const appearance = useAppearance();
   const [brainInfoOpen, setBrainInfoOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -292,7 +295,8 @@ export default function App() {
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [diagnosticReportMessageId, setDiagnosticReportMessageId] = useState("");
   const [diagnosticReportCopied, setDiagnosticReportCopied] = useState(false);
-  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image", boolean>>>>({});
+  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap", boolean>>>>({});
+  const [shapLoading, setShapLoading] = useState("");
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -497,7 +501,7 @@ export default function App() {
     };
   }, [composerToolsOpen]);
 
-  const overlayOpen = brainOpen || brainGraphOpen || brainInfoOpen || detailsOpen || instructionsOpen || settingsOpen || outputOpen || Boolean(outputDelete) || researchOpen || Boolean(renameDialog);
+  const overlayOpen = brainOpen || brainGraphOpen || embeddingOpen || brainInfoOpen || detailsOpen || instructionsOpen || settingsOpen || outputOpen || Boolean(outputDelete) || researchOpen || Boolean(renameDialog);
   useEffect(() => {
     if (overlayOpen) {
       if (sidebarBeforeOverlayRef.current === null) sidebarBeforeOverlayRef.current = sidebarOpen;
@@ -623,7 +627,7 @@ export default function App() {
     }
   }
 
-  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image") {
+  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image" | "shap") {
     setOpenMessagePanels((current) => ({
       ...current,
       [messageId]: { brain: false, web: false, metrics: false, diagnostics: false, ...current[messageId], [panel]: !current[messageId]?.[panel] },
@@ -638,20 +642,37 @@ export default function App() {
     }, 0);
   }
 
-  async function rateBrainMessage(message: ChatMessage, messageIndex: number, rating: 1 | -1) {
+  /** SHAP: calcolato solo quando lo apri, poi resta nel messaggio. */
+  async function openShap(message: ChatMessage, messageIndex: number) {
+    toggleMessagePanel(message.id, "shap");
+    if (message.shap || shapLoading || !message.brainSources?.length) return;
     const query = [...messages.slice(0, messageIndex)].reverse().find(item => item.role === "user")?.content.trim();
-    if (!query || !message.brainSources?.length) return;
+    if (!query) return;
+    setShapLoading(message.id);
     try {
-      const response = await fetch("/api/brain/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, rating, sources: message.brainSources.map(source => source.source) }) });
+      const response = await fetch("/api/brain/shap", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, sources: message.brainSources.map(source => source.source) }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "SHAP non disponibile.");
+      setMessages(current => current.map(item => item.id === message.id ? { ...item, shap: result } : item));
+    } catch (caught) { setError(userErrorMessage(caught, "SHAP non disponibile.")); }
+    finally { setShapLoading(""); }
+  }
+
+  /** Voto su una singola fonte: cambia solo il suo ranking per domande simili, non il grafo Micelio. */
+  async function rateBrainSource(message: ChatMessage, messageIndex: number, source: string, rating: 1 | -1) {
+    const query = [...messages.slice(0, messageIndex)].reverse().find(item => item.role === "user")?.content.trim();
+    if (!query) return;
+    try {
+      const response = await fetch("/api/brain/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, rating, sources: [source] }) });
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "Feedback non salvato.");
-      setMessages(current => current.map(item => item.id === message.id ? { ...item, feedback: rating } : item));
+      setMessages(current => current.map(item => item.id === message.id ? { ...item, sourceFeedback: { ...item.sourceFeedback, [source]: rating } } : item));
     } catch (caught) { setError(userErrorMessage(caught, "Feedback non salvato.")); }
   }
 
   useEffect(() => { void refreshBrainPaths(); }, []);
   useEffect(() => {
-    const openBrainArchive = () => { setBrainGraphOpen(false); setBrainOpen(true); };
+    const openBrainArchive = () => { setBrainGraphOpen(false); setEmbeddingOpen(false); setBrainOpen(true); };
     window.addEventListener("andreagpt-brain-back", openBrainArchive);
     return () => window.removeEventListener("andreagpt-brain-back", openBrainArchive);
   }, []);
@@ -1384,6 +1405,7 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
+  if (new URLSearchParams(window.location.search).get("embeddingSpace") === "1") return <Suspense fallback={<div className="thinking">Caricamento spazio 3D…</div>}><EmbeddingSpace standalone /></Suspense>;
   if (new URLSearchParams(window.location.search).get("brainGraph") === "1") return <Suspense fallback={<div className="thinking">Caricamento grafo…</div>}><BrainGraph standalone /></Suspense>;
 
   return (
@@ -1542,13 +1564,15 @@ export default function App() {
                     {message.generatedFile && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
                     {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
-                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><MicelioScore message={message} /><span className="brain-feedback" aria-label="Valuta la risposta Brain"><button className={message.feedback === 1 ? "active" : ""} type="button" onClick={() => void rateBrainMessage(message, messageIndex, 1)} title="Risposta utile: rafforza queste fonti"><ThumbsUp size={14} /></button><button className={message.feedback === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainMessage(message, messageIndex, -1)} title="Risposta errata: segnala un disallineamento semantico e penalizza queste fonti"><ThumbsDown size={14} /></button></span></> : null}</div>
+                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><MicelioScore message={message} /></> : null}</div>
                     {message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
                     {message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
                     {message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
                     {message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
-                    {message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}{source.micelioScore !== undefined && <small className="citation-micelio-score"> · Micelio {Math.round(source.micelioScore * 100)}%</small>}</strong><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
+                    {message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} SHAP</button> : null}
+                    {openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
+                    {message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}{source.micelioScore !== undefined && <small className="citation-micelio-score"> · Micelio {Math.round(source.micelioScore * 100)}%</small>}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
                     {message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
                     {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details"><p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p></div>}
                     {message.metrics && openMessagePanels[message.id]?.metrics && <div className="citation-panel metrics-citations"><p>
@@ -1636,7 +1660,7 @@ export default function App() {
         </Modal>
       )}
 
-      {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} /></Suspense></Modal>}
+      {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
       {outputOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolder === "images" ? "Immagini generate" : outputFolder === "compactChat" ? "Chat compatte" : outputFolder.toUpperCase()}</h3><div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap"><a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a><button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div></section>}</div></Modal>}
       {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); }); }}>Elimina</button></div></Modal>}
       {researchOpen && <Modal
@@ -1657,6 +1681,7 @@ export default function App() {
         {researchLoading ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchSeconds < 20 ? "Ricerca e selezione delle fonti…" : researchSeconds < 60 ? "Le fonti sono in elaborazione…" : "Il modello sta componendo l’edizione. Con Ollama locale il primo avvio può richiedere alcuni minuti."}</span><small>Puoi interrompere senza bloccare le altre funzioni.</small></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
       </Modal>}
       {renameDialog && <Modal title="Rinomina conversazione" compact onClose={() => setRenameDialog(null)}><label className="dialog-field">Nome conversazione<input autoFocus maxLength={60} value={renameDialog.title} onChange={event => setRenameDialog({ ...renameDialog, title: event.target.value })} /></label><div className="dialog-actions"><button className="secondary-action" onClick={() => setRenameDialog(null)}>Annulla</button><button className="primary-action" onClick={() => { const title = renameDialog.title.trim(); if (title) setConversations(current => current.map(item => item.id === renameDialog.id ? { ...item, title, customTitle: true } : item)); setRenameDialog(null); }}>Salva</button></div></Modal>}
+      {embeddingOpen && <Suspense fallback={<div className="thinking">Caricamento EmbeddingSpace…</div>}><EmbeddingSpace onClose={() => setEmbeddingOpen(false)} /></Suspense>}
       {brainGraphOpen && <Suspense fallback={<div className="thinking">Caricamento grafo…</div>}><BrainGraph onClose={() => setBrainGraphOpen(false)} onUse={(source) => { setBrainSource(source); setBrainEnabled(true); setBrainGraphOpen(false); }} /></Suspense>}
 
 

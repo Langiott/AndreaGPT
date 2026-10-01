@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronDown, ChevronRight, Database, FileText, Folder, GitBranch, Maximize2, Minimize2, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -35,11 +35,142 @@ function normalizeDocumentMath(markdown: string) {
   }).join("");
 }
 
+interface OutlineItem { id: string; level: number; text: string }
+
+const TOC_HEADING = /^(indice|sommario|contents|table of contents|index)$/i;
+
+function normalizeHeadingText(text: string) {
+  return text.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLocaleLowerCase("it-IT");
+}
+
+// Testo della voce di elenco senza i sotto-elenchi annidati.
+function ownListItemText(item: Element) {
+  return [...item.childNodes].filter(node => !(node instanceof Element && (node.tagName === "UL" || node.tagName === "OL"))).map(node => node.textContent ?? "").join(" ");
+}
+
 function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBack: () => void; onClose?: () => void }) {
   const [fileDocument, setFileDocument] = useState<BrainDocument | null>(null);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const [outline, setOutline] = useState<OutlineItem[]>([]);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [activeHeading, setActiveHeading] = useState("");
+  const [search, setSearch] = useState("");
+  const [matches, setMatches] = useState<Range[]>([]);
+  const [matchIndex, setMatchIndex] = useState(0);
   const readerRef = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Assegna un id ai titoli, costruisce l'indice e rende cliccabile l'indice testuale del documento.
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !fileDocument) { setOutline([]); return; }
+    const headings = [...article.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
+    const byText = new Map<string, string>();
+    const items: OutlineItem[] = [];
+    headings.forEach((heading, index) => {
+      heading.id = `brain-heading-${index}`;
+      const text = heading.textContent?.trim() ?? "";
+      const key = normalizeHeadingText(text);
+      if (key && !byText.has(key)) byText.set(key, heading.id);
+      if (TOC_HEADING.test(text) || (index === 0 && heading.tagName === "H1")) return;
+      items.push({ id: heading.id, level: Number(heading.tagName[1]), text });
+    });
+    const minLevel = Math.min(...items.map(item => item.level));
+    setOutline(items.map(item => ({ ...item, level: item.level - minLevel })));
+    for (const heading of headings.filter(item => TOC_HEADING.test(item.textContent?.trim() ?? ""))) {
+      for (let sibling = heading.nextElementSibling; sibling && !/^H[1-6]$/.test(sibling.tagName); sibling = sibling.nextElementSibling) {
+        sibling.querySelectorAll("li").forEach(item => {
+          const target = byText.get(normalizeHeadingText(ownListItemText(item)));
+          if (target) { item.setAttribute("data-toc-target", target); item.classList.add("brain-toc-link"); }
+        });
+      }
+    }
+  }, [fileDocument]);
+
+  // Evidenzia nella tendina la sezione attualmente visibile.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !outline.length) return;
+    const update = () => {
+      const top = body.getBoundingClientRect().top + 80;
+      let current = outline[0].id;
+      for (const item of outline) { const element = document.getElementById(item.id); if (element && element.getBoundingClientRect().top <= top) current = item.id; else if (element) break; }
+      setActiveHeading(current);
+    };
+    update();
+    body.addEventListener("scroll", update, { passive: true });
+    return () => body.removeEventListener("scroll", update);
+  }, [outline]);
+
+  // Ricerca nel testo: evidenziazione con CSS Custom Highlight API, senza toccare il DOM di React.
+  useEffect(() => {
+    const article = articleRef.current;
+    const term = search.trim().toLocaleLowerCase("it-IT");
+    const found: Range[] = [];
+    if (article && term.length >= 2) {
+      const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? "").toLocaleLowerCase("it-IT");
+        if (node.parentElement?.closest(".katex")) continue;
+        for (let at = text.indexOf(term); at !== -1; at = text.indexOf(term, at + term.length)) {
+          const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + term.length); found.push(range);
+        }
+      }
+    }
+    setMatches(found); setMatchIndex(0);
+  }, [search, fileDocument]);
+
+  useEffect(() => {
+    const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+    const HighlightClass = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+    if (!highlights || !HighlightClass) return;
+    if (matches.length) highlights.set("brain-search", new HighlightClass(...matches)); else highlights.delete("brain-search");
+    const current = matches[matchIndex];
+    if (current) highlights.set("brain-search-current", new HighlightClass(current)); else highlights.delete("brain-search-current");
+    if (current && bodyRef.current) {
+      const body = bodyRef.current;
+      const offset = current.getBoundingClientRect().top - body.getBoundingClientRect().top;
+      if (offset < 40 || offset > body.clientHeight - 60) body.scrollTo({ top: body.scrollTop + offset - body.clientHeight / 3, behavior: "smooth" });
+    }
+  }, [matches, matchIndex]);
+
+  useEffect(() => () => {
+    const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+    highlights?.delete("brain-search"); highlights?.delete("brain-search-current");
+  }, []);
+
+  function stepMatch(direction: 1 | -1) {
+    if (!matches.length) return;
+    setMatchIndex(index => (index + direction + matches.length) % matches.length);
+  }
+
+  function scrollToHeading(id: string) {
+    const element = document.getElementById(id);
+    const body = bodyRef.current;
+    if (!element || !body) return;
+    body.scrollTo({ top: body.scrollTop + element.getBoundingClientRect().top - body.getBoundingClientRect().top - 12, behavior: "smooth" });
+    setActiveHeading(id);
+  }
+
+  function handleArticleClick(event: ReactMouseEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    const link = target.closest("a");
+    if (link?.getAttribute("href")?.startsWith("#")) {
+      const hash = decodeURIComponent(link.getAttribute("href")!.slice(1));
+      const byId = articleRef.current?.querySelector<HTMLElement>(`[id="${CSS.escape(hash)}"]`);
+      const wanted = normalizeHeadingText(hash.replace(/-/g, " "));
+      const byText = outline.find(item => normalizeHeadingText(item.text).replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ") === wanted.replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " "));
+      const id = byId?.id || byText?.id;
+      if (id) { event.preventDefault(); scrollToHeading(id); }
+      return;
+    }
+    if (link) return;
+    const tocItem = target.closest<HTMLElement>("li[data-toc-target]");
+    if (tocItem) scrollToHeading(tocItem.dataset.tocTarget!);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -58,7 +189,11 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
   }, []);
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.fullscreenElement) onBack(); };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
+      if (event.key === "Escape" && event.target === searchRef.current) return;
+      if (event.key === "Escape" && !document.fullscreenElement) onBack();
+    };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onBack]);
@@ -75,19 +210,32 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
       <button type="button" className="brain-document-back" onClick={onBack} title="Torna all’archivio"><ArrowLeft size={16} /> <span>Torna all’archivio</span></button>
       <div className="brain-document-heading"><FileText size={16} /><strong title={fileDocument?.source ?? source}>{fileDocument?.name ?? source.split("/").at(-1)}</strong><small>{fileDocument?.extension.replace(".", "").toUpperCase() || "Documento"}</small></div>
       <div className="brain-document-actions">
+        <div className="brain-document-search" role="search">
+          <Search size={14} aria-hidden="true" />
+          <input ref={searchRef} type="search" value={search} placeholder="Cerca nel documento" aria-label="Cerca nel documento" onChange={event => setSearch(event.target.value)}
+            onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); stepMatch(event.shiftKey ? -1 : 1); } else if (event.key === "Escape") { event.preventDefault(); setSearch(""); event.currentTarget.blur(); } }} />
+          {search.trim().length >= 2 && <span className="brain-document-search-count" aria-live="polite">{matches.length ? `${matchIndex + 1}/${matches.length}` : "0"}</span>}
+          <button type="button" disabled={!matches.length} onClick={() => stepMatch(-1)} aria-label="Risultato precedente" title="Precedente (Maiusc+Invio)"><ChevronUp size={15} /></button>
+          <button type="button" disabled={!matches.length} onClick={() => stepMatch(1)} aria-label="Risultato successivo" title="Successivo (Invio)"><ChevronDown size={15} /></button>
+        </div>
+        <button type="button" className={outlineOpen ? "is-active" : undefined} disabled={!outline.length} onClick={() => setOutlineOpen(open => !open)} aria-expanded={outlineOpen} aria-label="Indice del documento" title="Indice"><ListTree size={16} /></button>
         <button type="button" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Esci da schermo intero" : "Schermo intero"} title={fullscreen ? "Esci da schermo intero" : "Schermo intero"}>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
         {onClose && <button type="button" onClick={onClose} aria-label="Chiudi documento" title="Chiudi"><X size={17} /></button>}
       </div>
     </div>
-    <div className="brain-document-body">
+    {outlineOpen && outline.length > 0 && <nav className="brain-document-outline" aria-label="Indice del documento">
+      <div className="brain-document-outline-head"><strong>Indice</strong><button type="button" onClick={() => setOutlineOpen(false)} aria-label="Chiudi indice" title="Chiudi indice"><X size={14} /></button></div>
+      <ol>{outline.map(item => <li key={item.id}><button type="button" className={item.id === activeHeading ? "is-active" : undefined} style={{ paddingLeft: 10 + item.level * 14 }} data-level={item.level} onClick={() => scrollToHeading(item.id)} title={item.text}>{item.text}</button></li>)}</ol>
+    </nav>}
+    <div className="brain-document-body" ref={bodyRef}>
       {error ? <div className="brain-document-error" role="alert"><strong>Impossibile aprire il documento</strong><span>{error}</span><button type="button" onClick={onBack}>Torna all’archivio</button></div>
         : !fileDocument ? <p className="brain-document-loading" role="status">Apro il documento…</p>
-          : <article className="brain-document-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]}>{normalizeDocumentMath(fileDocument.content)}</ReactMarkdown></article>}
+          : <article className="brain-document-content" ref={articleRef} onClick={handleArticleClick}><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]}>{normalizeDocumentMath(fileDocument.content)}</ReactMarkdown></article>}
     </div>
   </section>;
 }
 
-export function BrainPanel({ locked, source, onSource, onOpenGraph, onClose, showInfo = false }: { showInfo?: boolean; locked: boolean; source: string; onSource: (value: string) => void; onOpenGraph?: () => void; onClose?: () => void }) {
+export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedding, onClose, showInfo = false }: { showInfo?: boolean; locked: boolean; source: string; onSource: (value: string) => void; onOpenGraph?: () => void; onOpenEmbedding?: () => void; onClose?: () => void }) {
   const [status, setStatus] = useState<BrainStatus | null>(null);
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [url, setUrl] = useState(""); const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null); const [uploadMessage, setUploadMessage] = useState(""); const [uploading, setUploading] = useState(false); const [dismissedWarnings, setDismissedWarnings] = useState(false);
@@ -136,7 +284,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onClose, sho
     catch (caught) { setError(caught instanceof Error ? caught.message : "Brain non disponibile."); } finally { setBusy(false); }
   }
 
-  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button><label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></div>;
+  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button>{onOpenEmbedding && <button type="button" disabled={busy || locked} onClick={onOpenEmbedding} title="Vedi gli embedding reali in 3D">EmbeddingSpace</button>}<label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></div>;
 
   return <section className="brain-panel">
     {openDocument ? <BrainDocumentReader source={openDocument} onBack={() => setOpenDocument(null)} onClose={onClose} /> : <>

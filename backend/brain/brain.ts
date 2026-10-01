@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { localOllamaUrl } from "../utils/local";
+import { projectEmbeddings, projectPoint } from "./embedding_map";
+import { coalitionText, contentOf, QUERY_STOP_WORDS, queryIntent, semanticQueryText, shapFindings, shapleyPlan, shapleyValues, shapPlayers, toShares, type ShapResult } from "./query_shap";
+import { groupEmbeddings, type EmbeddingGroups, type GroupMethod, type GroupModel } from "./embedding_ml";
 import { brainUploadPreset } from "../../frontend/config/brain_upload_limits";
 import {
   BRAIN_BATCH_SIZE,
@@ -30,7 +33,7 @@ import {
 } from "./brain_config";
 import { JsonLineWorker } from "../utils/json_line_worker";
 import { retrievalTokens as tokens, oneEditApart } from "../retrieval/retrieval";
-import { evidenceFormatBoost, isDefinitionQuery, selectEvidence } from "../retrieval/evidence_policy";
+import { evidenceFormatBoost, selectEvidence } from "../retrieval/evidence_policy";
 import { BrainStore } from "./brain_store";
 
 // Ollama accetta più testi per richiesta. Un batch più grande riduce molto
@@ -331,6 +334,15 @@ export interface BrainGraphNode {
   preview?: string;
 }
 export interface BrainGraphEdge { source: string; target: string; similarity: number; flow: number }
+export interface BrainEmbeddingMap {
+  total: number;
+  shown: number;
+  dimension: number;
+  explained: number[];
+  points: Array<{ path: string; section: string; lines: string; preview: string; position: number[] }>;
+  query?: { text: string; position: number[]; nearest: Array<{ index: number; similarity: number }>; group?: string };
+  groups?: EmbeddingGroups;
+}
 export interface BrainGraph {
   level: "collections" | "files" | "chunks";
   scope: string;
@@ -1094,14 +1106,12 @@ export function createBrain(options: BrainOptions = {}) {
     // Anche le ricerche telegrafiche ("chi Nova?") sono domande biografiche.
     // Anche "panoramica del personaggio X" è una richiesta biografica.
     // Senza questo ramo, il recupero premia codice o scene che citano X.
-    const identityQuestion = /^\s*chi\b(?:\s+(?:e|è|sia))?[\s:,-]+\S/iu.test(query)
-      || /\b(?:personaggio|protagonista|profilo)\b.*\b\p{L}[\p{L}\p{N}_-]{2,}\b/iu.test(query);
-    const roleQuestion = /\b(?:lavoro|professione|mestiere|occupazione|ruolo|che\s+cosa\s+fa)\b/iu.test(query);
-    const stopWords = new Set(["chi", "cosa", "che", "come", "dove", "quando", "quale", "quali", "tipo", "fa", "lavoro", "professione", "mestiere", "occupazione", "ruolo", "personaggio", "protagonista", "profilo", "panoramica", "completa", "completo", "sono", "essere", "sia", "ha", "hai", "ho", "un", "una", "uno", "il", "lo", "la", "i", "gli", "le", "di", "del", "della", "dei", "delle", "nel", "nella", "nei", "nelle", "per", "progetto", "progetti", "usato", "usata", "utilizzato", "utilizzata", "esiste", "creare", "trova", "trovami", "scrivi", "scrivimi", "codice", "modello"]);
+    const intent = queryIntent(query);
+    const identityQuestion = intent.identity, roleQuestion = intent.role;
     // Keep the user's topic intact. File mentions scope search; they are not
     // repeated content keywords that should boost every chunk in that file.
-    const contentQuery = query.replace(/(?:^|\s)@(?:"[^"]+"|[^\s]+)/gu, " ").trim();
-    const terms = [...new Set(tokens(contentQuery).filter(term => !stopWords.has(term)))];
+    const contentQuery = contentOf(query);
+    const terms = [...new Set(tokens(contentQuery).filter(term => !QUERY_STOP_WORDS.has(term)))];
     // Expand only an unambiguous one-edit typo absent from the index. Names in
     // identity questions remain exact, and the original term is kept as well.
     const corrections = new Map<string, string>();
@@ -1121,14 +1131,8 @@ export function createBrain(options: BrainOptions = {}) {
     }
     const identityTerms = identityQuestion ? terms : [];
     const factualQuestion = !identityQuestion && /^\s*(?:che|quale|quali|dove|quando|quanto|quanta|quanti|quante)\b/iu.test(query);
-    const definitionQuestion = isDefinitionQuery(query);
-    // Espansione generica dell'intento: migliora l'embedding delle domande
-    // brevissime senza conoscere in anticipo nomi, ruoli o risposte.
-    const semanticQuery = identityQuestion
-      ? `Identità, descrizione, caratteristiche, storia e ruolo di ${identityTerms.join(" ")}. Domanda: ${query}`
-      : roleQuestion ? `Professione, lavoro, ruolo, incarico e organizzazione del soggetto. Domanda: ${query}`
-      : definitionQuestion ? `Definizione sintetica del metodo o approccio: scopo, componenti, fasi e risultato. Domanda: ${query}`
-      : tokens(contentQuery).map(term => corrections.get(term) ?? term).join(" ");
+    const definitionQuestion = intent.definition;
+    const semanticQuery = semanticQueryText(query, intent, identityTerms, corrections);
     const overviewQuestion = /\b(?:riassum|panoramica|in generale|parla di|contiene|quali progetti|che progetti|cosa ho fatto|come ho usato|come ho utilizzato|come ho realizzato|come ho creato|come ho costruito|nel mio progetto)\b/iu.test(query);
     measure("queryPrepareMs", lexicalStarted);
     const embeddingStarted = performance.now();
@@ -1340,7 +1344,62 @@ export function createBrain(options: BrainOptions = {}) {
     }
     return [...new Set(suggestions)];
   }
-  return { getBrainStatus, getBrainDocument, diagnose, getBrainGraph, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
+  /** Proietta gli embedding reali dei chunk in 3D (PCA) e, se richiesto, la domanda. */
+  async function getEmbeddingMap(input: { query?: string; limit?: number; method?: GroupMethod } = {}): Promise<BrainEmbeddingMap> {
+    const limit = Math.max(50, Math.min(4000, input.limit ?? 1500));
+    const index = await load();
+    const all = Object.values(index.files).flatMap(file => file.chunks).filter(chunk => chunk.embedding?.length);
+    const chunks = all.length <= limit ? all : Array.from({ length: limit }, (_, i) => all[Math.floor(i * (all.length - 1) / (limit - 1))]);
+    const projection = projectEmbeddings(chunks.map(chunk => chunk.embedding));
+    const map: BrainEmbeddingMap = {
+      total: all.length, shown: chunks.length, dimension: chunks[0].embedding.length, explained: projection.explained,
+      points: chunks.map((chunk, i) => ({ path: chunk.path, section: chunk.section ?? "", lines: `${chunk.startLine}-${chunk.endLine}`, preview: chunk.text.slice(0, 240), position: projection.points[i] })),
+    };
+    // Gruppi e classificatori sui vettori completi; restano in memoria finché l'indice non cambia.
+    const method = input.method ?? "chapter";
+    const cache = groupCache.get(index) ?? new Map<string, GroupModel>();
+    groupCache.set(index, cache);
+    const key = `${method}:${limit}`;
+    const model = cache.get(key) ?? groupEmbeddings({ vectors: chunks.map(chunk => chunk.embedding), paths: chunks.map(chunk => chunk.path), sections: chunks.map(chunk => chunk.section ?? ""), texts: chunks.map(chunk => chunk.text) }, method);
+    cache.set(key, model);
+    map.groups = model.result;
+    const query = (input.query ?? "").trim().slice(0, 600);
+    if (!query) return map;
+    const [vector] = await embed([`search_query: ${query}`]);
+    // I vicini sono calcolati nello spazio completo: in 3D si vede quanto la proiezione li avvicina davvero.
+    const nearest = chunks.map((chunk, index) => ({ index, similarity: cosine(vector, chunk.embedding) })).sort((a, b) => b.similarity - a.similarity).slice(0, 8);
+    return { ...map, query: { text: query, position: projectPoint(projection, vector), nearest, group: model.place(vector) } };
+  }
+  const groupCache = new WeakMap<BrainIndex, Map<string, GroupModel>>();
+
+  /** SHAP per parola: quanto ogni parola avvicina la domanda a ogni fonte, con lo stesso testo della ricerca vettoriale. */
+  async function explainQuery(input: { query: string; sources: string[] }): Promise<ShapResult> {
+    const query = input.query.trim().slice(0, 600);
+    const words = shapPlayers(query);
+    if (!words.length) throw new Error("La domanda non contiene parole da spiegare.");
+    const index = await load();
+    const byCitation = new Map(Object.values(index.files).flatMap(file => file.chunks).map(chunk => [`${chunk.path}:${chunk.startLine}-${chunk.endLine}` as string, chunk] as const));
+    const chunks = input.sources.slice(0, 8).flatMap(source => { const chunk = byCitation.get(source); return chunk?.embedding?.length ? [{ source, chunk }] : []; });
+    if (!chunks.length) throw new Error("Fonti non trovate nell'indice: reindicizza o rifai la domanda.");
+    // Un embedding per ogni coalizione di parole, calcolati in un solo lotto.
+    const plan = shapleyPlan(words.length);
+    const texts = plan.masks.map(mask => coalitionText(query, words, new Set(words.filter((_, i) => mask & (1 << i)))));
+    const unique = [...new Set(texts)];
+    const embedded = await embed(unique);
+    const vectorOf = new Map(plan.masks.map((mask, i) => [mask, embedded[unique.indexOf(texts[i])]]));
+    const full = (1 << words.length) - 1;
+    const sources = chunks.map(({ source, chunk }) => {
+      const cache = new Map<number, number>();
+      const value = (mask: number) => { if (!cache.has(mask)) cache.set(mask, cosine(vectorOf.get(mask)!, chunk.embedding)); return cache.get(mask)!; };
+      const phi = shapleyValues(words.length, plan, value);
+      const body = new Set(tokens(chunk.text));
+      return { source, similarity: value(full), baseline: value(0), shares: toShares(phi), present: words.map(word => body.has(word)) };
+    });
+    const overall = words.map((_, i) => sources.reduce((sum, item) => sum + item.shares[i], 0) / sources.length);
+    const coveredBy = words.map((_, i) => sources.filter(item => item.present[i]).length);
+    return { query, words, exact: plan.exact, evaluations: unique.length, sources, overall, coveredBy, findings: shapFindings(words, overall, coveredBy, sources.length) };
+  }
+  return { getBrainStatus, getBrainDocument, diagnose, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
     close: () => { turboWorker?.close(); store.close(); } };
 }
 
@@ -1361,4 +1420,4 @@ function editDistance(a: string, b: string) {
 }
 
 const brain = createBrain();
-export const { getBrainStatus, getBrainDocument, getBrainGraph, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, importBrainRepository, rebuildTurboIndex, recordBrainFeedback } = brain;
+export const { getBrainStatus, getBrainDocument, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, importBrainRepository, rebuildTurboIndex, recordBrainFeedback } = brain;

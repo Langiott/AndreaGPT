@@ -21,6 +21,7 @@ import { compactEvidence } from "./grounding/evidence";
 import { extractSearchQuery } from "./search/search_query";
 import { isSmallTalk } from "./retrieval/evidence_policy";
 import { JsonLineWorker } from "./utils/json_line_worker";
+import { GROUP_METHODS } from "./brain/embedding_ml";
 import { CodeWorkspace } from "./code/code_workspace";
 import { runCodeAgent } from "./code/code_agent";
 import { inspectGrounding } from "./grounding/grounding";
@@ -763,6 +764,18 @@ app.get("/api/brain/graph", async (request, response) => {
   if (!parsed.success) { response.status(400).json({ error: "Parametri Micelio non validi." }); return; }
   try { response.json(await (await brainModule()).getBrainGraph(parsed.data)); }
   catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Mappa Micelio non disponibile." }); }
+});
+app.get("/api/brain/embedding-map", async (request, response) => {
+  const parsed = z.object({ query: z.string().max(600).default(""), limit: z.coerce.number().int().min(50).max(4000).default(1500), method: z.enum(GROUP_METHODS).default("chapter") }).safeParse(request.query);
+  if (!parsed.success) { response.status(400).json({ error: "Parametri della mappa embedding non validi." }); return; }
+  try { response.json(await (await brainModule()).getEmbeddingMap(parsed.data)); }
+  catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Mappa embedding non disponibile." }); }
+});
+app.post("/api/brain/shap", async (request, response) => {
+  const parsed = z.object({ query: z.string().trim().min(1).max(600), sources: z.array(z.string().min(1).max(700)).min(1).max(8) }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta SHAP non valida: servono la domanda e almeno una fonte." }); return; }
+  try { response.json(await (await brainModule()).explainQuery(parsed.data)); }
+  catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Spiegazione SHAP non disponibile." }); }
 });
 app.post("/api/brain/feedback", async (request, response) => {
   const parsed = z.object({ query: z.string().trim().min(1).max(600), rating: z.union([z.literal(1), z.literal(-1)]), sources: z.array(z.string().min(1).max(700)).min(1).max(8) }).strict().safeParse(request.body);
