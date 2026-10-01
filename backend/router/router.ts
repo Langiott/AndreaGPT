@@ -51,10 +51,11 @@ export function routeLocally(question: string, options: { allowBrain: boolean } 
   const web = score(text, WEB_SIGNALS);
   const brain = options.allowBrain ? score(text, BRAIN_SIGNALS) : { value: 0, signals: [] as string[] };
   const normal = score(text, NORMAL_SIGNALS);
+  // L'ordinamento è stabile, quindi a parità vince il percorso più prudente: niente web.
   const ranked = ([
-    { route: "web" as const, ...web },
     { route: "brain" as const, ...brain },
     { route: "normal" as const, ...normal },
+    { route: "web" as const, ...web },
   ]).sort((a, b) => b.value - a.value);
   const winner = ranked[0];
   const runnerUp = ranked[1];
