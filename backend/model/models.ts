@@ -140,6 +140,14 @@ export function humanizeOllamaId(id: string) {
   return titled.replace(/\s+latest$/i, "") || titled;
 }
 
+/** Spiega in italiano un errore di Ollama; se il modello manca indica il comando per scaricarlo. */
+export function ollamaErrorMessage(status: number, detail: string, model: string): string {
+  if (status === 404 || /not found/i.test(detail)) {
+    return `Il modello "${model}" non è installato in Ollama. Per scaricarlo apri il terminale e scrivi: ollama pull ${model}`;
+  }
+  return `Ollama HTTP ${status}: ${detail || `modello non disponibile (${model})`}`;
+}
+
 /** Completa un modello con nome, descrizione e informazioni note. */
 export function enrichModel(id: string): ModelInfo {
   const known = DESCRIPTIONS[id];

@@ -13,7 +13,7 @@ import { fetch as upstreamFetch } from "undici";
 import { cloudTransport, ollamaTransport, paths, settings } from "./config/config";
 import { localOllamaUrl } from "./utils/local";
 import { localContext, type LocalMessage } from "./context/context";
-import { enrichModel, GEMMA_INFO, GLM_INFO, humanizeOllamaId, MINIMAX_INFO, OLLAMA_INFO, OLLAMA_MODEL, OLLAMA_MODELS, OLLAMA_NUM_CTX, OLLAMA_ORNITH_INFO, OLLAMA_ORNITH_MODEL, OLLAMA_QWEN3_14B, OLLAMA_QWEN3_INFO, OLLAMA_QWEN3_CODER_INFO, OLLAMA_QWEN3_CODER_MODEL } from "./model/models";
+import { enrichModel, GEMMA_INFO, GLM_INFO, humanizeOllamaId, MINIMAX_INFO, OLLAMA_INFO, OLLAMA_MODEL, OLLAMA_MODELS, OLLAMA_NUM_CTX, ollamaErrorMessage, OLLAMA_ORNITH_INFO, OLLAMA_ORNITH_MODEL, OLLAMA_QWEN3_14B, OLLAMA_QWEN3_INFO, OLLAMA_QWEN3_CODER_INFO, OLLAMA_QWEN3_CODER_MODEL } from "./model/models";
 import { routeLocally } from "./router/router";
 import { assessCitations, assessOutputLanguage, createDiagnosticTrace } from "./diagnostics/diagnostics";
 import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "../frontend/config/language";
@@ -1226,7 +1226,7 @@ app.post("/api/chat", async (request, response) => {
         }
         const diagnostic = ollamaDetail.slice(0, 800);
         response.status(upstream.status).json({
-          error: `Ollama HTTP ${upstream.status}: ${diagnostic || `modello non disponibile (${parsed.data.model})`}`,
+          error: ollamaErrorMessage(upstream.status, diagnostic, parsed.data.model),
         });
       } else {
         response.status(upstream.status).json({ error: readableApiError(upstream.status, provider, detail) });
