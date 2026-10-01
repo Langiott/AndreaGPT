@@ -405,6 +405,8 @@ export function createBrain(options: BrainOptions = {}) {
   const feedbackPath = path.join(dataDir, "feedback.json");
   const store = new BrainStore(path.join(dataDir, "retrieval"), indexPath);
   let storeVocabulary: { generation: string; words: string[] } | undefined;
+  // Chunk SQLite già letti e tokenizzati: si svuota quando cambia la generazione dell'indice.
+  let hydrated: { generation: string; entries: Map<number, { chunk: StoredChunk; turboId: number; words: string[]; body: Set<string>; counts: Map<string, number> }> } | undefined;
   const backupPaths = [path.join(dataDir, "index.backup.json"), path.join(dataDir, "index.previous.json")];
   const turboScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "utils", "turbovec_bridge.py");
   const turboEnabled = options.turbo ?? (process.env.BRAIN_TURBOVEC !== "0" && !options.embed);
@@ -1145,13 +1147,17 @@ export function createBrain(options: BrainOptions = {}) {
       if ((await store.open())?.generation !== meta.generation) throw new Error("Indice aggiornato durante la ricerca: ripetere la richiesta.");
       measure("turboVecMs", turboStarted);
       const hydrateStarted = performance.now();
-      entries = store.chunks([...lexicalHits.map(hit => hit.id), ...turboScores.keys()])
-        .filter(({chunk}) => !noiseFile(chunk.path)).map(({chunk,turboId}) => {
-          const words = tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`);
-          const counts = new Map<string,number>();
-          for (const word of words) counts.set(word,(counts.get(word) ?? 0)+1);
-          return {chunk,turboId,words,counts,body:new Set(tokens(chunk.text))};
-        });
+      if (hydrated?.generation !== meta.generation) hydrated = { generation: meta.generation, entries: new Map() };
+      const cache = hydrated.entries;
+      // Stesso ordine della query SQL (id crescente); dal database si leggono solo i chunk mai visti.
+      const ids = [...new Set([...lexicalHits.map(hit => hit.id), ...turboScores.keys()])].sort((a, b) => a - b);
+      for (const {chunk,turboId} of store.chunks(ids.filter(id => !cache.has(id)))) {
+        const words = tokens(`${chunk.path} ${chunk.section ?? ""} ${chunk.text}`);
+        const counts = new Map<string,number>();
+        for (const word of words) counts.set(word,(counts.get(word) ?? 0)+1);
+        cache.set(turboId, {chunk,turboId,words,counts,body:new Set(tokens(chunk.text))});
+      }
+      entries = ids.flatMap(id => cache.get(id) ?? []).filter(({chunk}) => !noiseFile(chunk.path));
       chunks = entries.map(entry => entry.chunk);
       measure("candidateLoadMs", hydrateStarted);
     } else turboScores = await turboSearch(index, vector, filter ? entries.map(entry => entry.turboId) : undefined);
