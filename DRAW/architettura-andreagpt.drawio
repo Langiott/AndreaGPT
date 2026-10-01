@@ -1,0 +1,423 @@
+<mxfile host="65bd71144e">
+    <diagram id="andreagpt-architecture" name="Architettura AndreaGPT">
+        <mxGraphModel dx="419" dy="698" grid="0" gridSize="10" guides="0" tooltips="1" connect="0" arrows="0" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="1000" background="light-dark(#ffffff, #292137)" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="user" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d9e8fb;strokeColor=#377dff;strokeWidth=2;fontColor=#23406b;fontSize=15;" value="Utente browser" vertex="1">
+                    <mxGeometry height="150" width="150" x="828" y="511" as="geometry"/>
+                </mxCell>
+                <mxCell id="backendBox" parent="1" style="swimlane;html=1;rounded=1;startSize=34;fillColor=#f3c978;swimlaneFillColor=#fff4d6;strokeColor=#b87912;fontColor=#5a3500;fontSize=16;fontStyle=1;" value="Orchestrazione backend" vertex="1">
+                    <mxGeometry height="327" width="350" x="1255" y="390" as="geometry"/>
+                </mxCell>
+                <mxCell id="context" parent="backendBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#f39c12;fontColor=#8a4b08;fontSize=15;" value="Costruzione contesto&lt;br&gt;[context.ts]" vertex="1">
+                    <mxGeometry height="75" width="220" x="100" y="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="api" parent="backendBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#f39c12;fontColor=#8a4b08;fontSize=15;" value="API server&lt;br&gt;[index.ts]" vertex="1">
+                    <mxGeometry height="144" width="205" x="108" y="158" as="geometry"/>
+                </mxCell>
+                <mxCell id="router" parent="backendBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#f39c12;fontColor=#8a4b08;fontSize=12;" value="Router&lt;br&gt;[router.ts]" vertex="1">
+                    <mxGeometry height="61" width="73" x="9" y="210" as="geometry"/>
+                </mxCell>
+                <mxCell id="27" edge="1" parent="backendBox" source="router" style="endArrow=classic;startArrow=classic;html=1;exitX=1.002;exitY=0.622;exitDx=0;exitDy=0;exitPerimeter=0;" value="">
+                    <mxGeometry height="50" relative="1" width="50" as="geometry">
+                        <mxPoint x="50" y="367" as="sourcePoint"/>
+                        <mxPoint x="113" y="248" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="uiBox" parent="1" style="swimlane;html=1;rounded=1;startSize=34;fillColor=#3d5799;swimlaneFillColor=#dce6ff;strokeColor=#263c78;fontColor=#ffffff;fontSize=16;fontStyle=1;" value="Interfaccia utente" vertex="1">
+                    <mxGeometry height="433" width="430" x="975" y="790" as="geometry"/>
+                </mxCell>
+                <mxCell id="chat" parent="uiBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=15;" value="Chat UI&lt;br&gt;[App.tsx]" vertex="1">
+                    <mxGeometry height="70" width="150" x="35" y="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="prefs" parent="uiBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=15;" value="Preferenze aspetto" vertex="1">
+                    <mxGeometry height="58" width="145" x="210" y="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="storage" parent="uiBox" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=14;" value="Storage browser&lt;br&gt;[App.tsx]" vertex="1">
+                    <mxGeometry height="65" width="155" x="30" y="273" as="geometry"/>
+                </mxCell>
+                <mxCell id="brainPanel" parent="uiBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=14;" value="Esplora Brain&lt;br&gt;[BrainPanel.tsx]" vertex="1">
+                    <mxGeometry height="65" width="145" x="37.5" y="349" as="geometry"/>
+                </mxCell>
+                <mxCell id="ragBox" parent="1" style="swimlane;html=1;rounded=1;startSize=34;fillColor=#34784c;swimlaneFillColor=#d9f5df;strokeColor=#205633;fontColor=#ffffff;fontSize=16;fontStyle=1;" value="Knowledge base RAG" vertex="1">
+                    <mxGeometry height="407" width="390" x="1703" y="767" as="geometry"/>
+                </mxCell>
+                <mxCell id="brain" parent="ragBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d9f5df;strokeColor=#2db45d;fontColor=#267445;fontSize=14;" value="Brain RAG&lt;br&gt;[brain.ts]" vertex="1">
+                    <mxGeometry height="65" width="180" x="105" y="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="files" parent="ragBox" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#d9f5df;strokeColor=#2db45d;fontColor=#267445;fontSize=14;" value="File Brain&lt;br&gt;[brain.ts]" vertex="1">
+                    <mxGeometry height="65" width="125" x="35" y="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="parsing" parent="ragBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d9f5df;strokeColor=#2db45d;fontColor=#267445;fontSize=14;" value="Parsing + chunking&lt;br&gt;[brain.ts]" vertex="1">
+                    <mxGeometry height="65" width="150" x="205" y="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="vectors" parent="ragBox" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#d9f5df;strokeColor=#2db45d;fontColor=#267445;fontSize=13;" value="Embeddings + indice&lt;br&gt;JSON + TurboVec&lt;br&gt;[brain.ts]" vertex="1">
+                    <mxGeometry height="74" width="169" x="171" y="298" as="geometry"/>
+                </mxCell>
+                <mxCell id="25" edge="1" parent="ragBox" source="21" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=0;endArrow=block;strokeColor=#267445;fontColor=#267445;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="vectors" value="legge vettori&amp;nbsp;">
+                    <mxGeometry relative="1" x="0.9355" y="-15" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="93" y="341"/>
+                            <mxPoint x="171" y="341"/>
+                        </Array>
+                        <mxPoint x="171" y="341" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="21" parent="ragBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#D9F5DF;strokeColor=light-dark(#55b45d, #446e2c);fontSize=11;fontStyle=1;" value="Micelio Brain&lt;br&gt;grafo + vitalità&lt;br&gt;propagazione retrieval" vertex="1">
+                    <mxGeometry height="62" width="118" x="11" y="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="26" edge="1" parent="ragBox" source="21" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;endArrow=block;strokeColor=#267445;fontColor=#267445;fontSize=11;exitX=0.113;exitY=-0.025;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitPerimeter=0;" target="brain" value="solo filtro sorgente scelto dall&#39;utente">
+                    <mxGeometry relative="1" x="0.7789" y="18" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="24" y="89"/>
+                            <mxPoint x="25" y="89"/>
+                            <mxPoint x="25" y="87"/>
+                        </Array>
+                        <mxPoint x="1729" y="1109" as="sourcePoint"/>
+                        <mxPoint x="1810" y="898" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="BOLn6NsB84AsdSs9E3wt-28" edge="1" parent="ragBox" source="brain" style="endArrow=classic;html=1;entryX=0.152;entryY=0.112;entryDx=0;entryDy=0;entryPerimeter=0;" target="vectors" value="">
+                    <mxGeometry height="50" relative="1" width="50" as="geometry">
+                        <mxPoint x="120" y="116" as="sourcePoint"/>
+                        <mxPoint x="170" y="66" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="visionBox" parent="1" style="swimlane;html=1;rounded=1;startSize=34;fillColor=#a8324d;swimlaneFillColor=#ffe1e6;strokeColor=#7f1f37;fontColor=#ffffff;fontSize=16;fontStyle=1;" value="Visione e analisi" vertex="1">
+                    <mxGeometry height="420" width="300" x="2185" y="770" as="geometry"/>
+                </mxCell>
+                <mxCell id="ocr" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Endpoint OCR&lt;br&gt;/api/ocr&lt;br&gt;[index.ts]" vertex="1">
+                    <mxGeometry height="68" width="125" x="20" y="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="yolo" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Endpoint YOLO&lt;br&gt;/api/yolo&lt;br&gt;[index.ts]" vertex="1">
+                    <mxGeometry height="68" width="125" x="155" y="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="analyze" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=11;" value="Endpoint Analyze&lt;br&gt;/api/analyze-image&lt;br&gt;[index.ts]" vertex="1">
+                    <mxGeometry height="68" width="125" x="20" y="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="qwenVision" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=11;" value="Pipeline Qwen3-VL&lt;br&gt;[qwen_vision.py]" vertex="1">
+                    <mxGeometry height="68" width="125" x="155" y="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="docTR" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Pipeline docTR&lt;br&gt;[doctr_ocr.py]" vertex="1">
+                    <mxGeometry height="68" width="125" x="20" y="235" as="geometry"/>
+                </mxCell>
+                <mxCell id="yoloPipe" parent="visionBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Pipeline YOLO&lt;br&gt;[yolo_predict.py]" vertex="1">
+                    <mxGeometry height="68" width="125" x="155" y="235" as="geometry"/>
+                </mxCell>
+                <mxCell id="ocrWork" parent="visionBox" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Output/OCR&lt;br&gt;testo .txt" vertex="1">
+                    <mxGeometry height="58" width="125" x="20" y="335" as="geometry"/>
+                </mxCell>
+                <mxCell id="yoloWork" parent="visionBox" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#ffe1e6;strokeColor=#ff3156;fontColor=#9c2740;fontSize=12;" value="Output/YOLO&lt;br&gt;risultati" vertex="1">
+                    <mxGeometry height="58" width="125" x="155" y="335" as="geometry"/>
+                </mxCell>
+                <mxCell id="modelsBox" parent="1" style="swimlane;html=1;rounded=1;startSize=34;fillColor=#3d5799;swimlaneFillColor=#e5ebff;strokeColor=#263c78;fontColor=#ffffff;fontSize=16;fontStyle=1;" value="Modelli e servizi utilizzati" vertex="1">
+                    <mxGeometry height="153" width="1250" x="1255" y="1302" as="geometry"/>
+                </mxCell>
+                <mxCell id="wiki" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=13;" value="Wikipedia opzionale" vertex="1">
+                    <mxGeometry height="55" width="135" x="15" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="searx" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=12;" value="SearXNG&lt;br&gt;ricerca Web" vertex="1">
+                    <mxGeometry height="55" width="135" x="165" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="cloud" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=12;" value="API cloud&lt;br&gt;NVIDIA / OpenRouter" vertex="1">
+                    <mxGeometry height="55" width="150" x="315" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="ollama" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" value="Ollama locale&lt;br&gt;Chat: MiniCPM5 2B · Qwen2.5-Coder 7B&lt;br&gt;Embedding: nomic-embed-text" vertex="1">
+                    <mxGeometry height="55" width="285" x="480" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="visionModels" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" value="Vision Python&lt;br&gt;Qwen3-VL-2B-Instruct · docTR · YOLO11n*.pt" vertex="1">
+                    <mxGeometry height="55" width="275" x="780" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="imageModel" parent="modelsBox" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dce6ff;strokeColor=#3977ff;fontColor=#294675;fontSize=12;" value="ComfyUI&lt;br&gt;Qwen-Image-2.1" vertex="1">
+                    <mxGeometry height="55" width="160" x="1070" y="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" edge="1" parent="1" source="user" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="chat" value="usa chat">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="921" y="880"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e2" edge="1" parent="1" source="chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="api" value="invia richieste">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1461.8" y="880"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e3" edge="1" parent="1" source="router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;exitX=-0.006;exitY=0.728;exitDx=0;exitDy=0;exitPerimeter=0;" target="chat" value="restituisce risposta">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="context" value="prepara prompt">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e5" edge="1" parent="1" source="context" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="api" value="restituisce contesto">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="brain" value="interroga Brain RAG + attiva Micelio">
+                    <mxGeometry relative="1" x="0.2419" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1976" y="625"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e7" edge="1" parent="1" source="brain" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="files" value="legge documenti">
+                    <mxGeometry relative="1" x="0.7376" y="-11" as="geometry">
+                        <mxPoint x="-1" as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1898" y="945"/>
+                            <mxPoint x="1803" y="945"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e8" edge="1" parent="1" source="brain" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="parsing" value="indicizza contenuti">
+                    <mxGeometry relative="1" x="0.3158" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e9" edge="1" parent="1" source="parsing" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="vectors" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;scrive vettori&lt;/span&gt;">
+                    <mxGeometry relative="1" x="-0.0005" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e11" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="ocr" value="seleziona OCR">
+                    <mxGeometry relative="1" x="-0.0424" as="geometry">
+                        <mxPoint x="-1" as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2268" y="597"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e12" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="yolo" value="seleziona YOLO">
+                    <mxGeometry relative="1" x="0.0243" as="geometry">
+                        <mxPoint x="-1" as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2403" y="588"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e13" edge="1" parent="1" source="ocr" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="docTR" value="esegue OCR">
+                    <mxGeometry relative="1" x="-0.8571" y="-9" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e14" edge="1" parent="1" source="yolo" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="yoloPipe" value="esegue analisi">
+                    <mxGeometry relative="1" x="-0.7857" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e15" edge="1" parent="1" source="docTR" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="ocrWork" value="legge scrive file">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e16" edge="1" parent="1" source="yoloPipe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="yoloWork" value="scrive risultati">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e17" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;dashed=1;rounded=0;html=1;endArrow=block;strokeColor=#555555;fontSize=12;" target="wiki" value="cerca fallback">
+                    <mxGeometry relative="1" x="0.0909" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1469" y="1275"/>
+                            <mxPoint x="1338" y="1275"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e18" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;dashed=1;rounded=0;html=1;endArrow=block;strokeColor=#555555;fontSize=12;" target="searx" value="cerca web">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1542" y="1297"/>
+                            <mxPoint x="1542" y="1297"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e19" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="cloud" value="invia chat">
+                    <mxGeometry relative="1" x="-0.7435" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1659" y="642"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e20" edge="1" parent="1" source="brain" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="ollama" value="genera embedding (nomic-embed-text)">
+                    <mxGeometry relative="1" x="-0.8399" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2125" y="855"/>
+                            <mxPoint x="2125" y="1282"/>
+                            <mxPoint x="1887" y="1282"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e21" edge="1" parent="1" source="chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="prefs" value="configura aspetto">
+                    <mxGeometry relative="1" x="-0.2254" y="10" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1264" y="902"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e22" edge="1" parent="1" source="prefs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="storage" value="salva preferenze">
+                    <mxGeometry relative="1" x="0.4952" y="-43" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e23" edge="1" parent="1" source="chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="storage" value="salva conversazioni">
+                    <mxGeometry relative="1" x="-0.064" y="-40" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e24" edge="1" parent="1" source="user" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=12;" target="brainPanel" value="gestisce archivio">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="903" y="1195"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e27" edge="1" parent="1" source="brain" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#267445;fontColor=#267445;fontSize=11;" target="21" value="propaga score tra nodi vicini">
+                    <mxGeometry relative="1" x="-0.5251" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1765" y="854.45"/>
+                            <mxPoint x="1765" y="1000.27"/>
+                            <mxPoint x="1730.09" y="1000.27"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e30" edge="1" parent="1" source="brain" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#267445;fontColor=#267445;fontSize=11;" target="api" value="contesto + fonti + score">
+                    <mxGeometry relative="1" x="-0.5947" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1956.2" y="629"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e31" edge="1" parent="1" source="ocrWork" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;" target="api" value="testo OCR">
+                    <mxGeometry relative="1" x="-0.1608" y="4" as="geometry">
+                        <mxPoint x="1" as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2268" y="1209"/>
+                            <mxPoint x="1532" y="1209"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e32" edge="1" parent="1" source="yoloPipe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;" target="api" value="rilevamenti + output">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="2403" y="1079"/>
+                            <mxPoint x="2151" y="1079"/>
+                            <mxPoint x="2151" y="1200"/>
+                            <mxPoint x="1532" y="1200"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e33" edge="1" parent="1" source="qwenVision" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;" target="api" value="descrizione + modello + device">
+                    <mxGeometry relative="1" x="0.1361" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2512" y="973"/>
+                            <mxPoint x="2512" y="1222"/>
+                            <mxPoint x="1532" y="1222"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e34" edge="1" parent="1" source="searx" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" target="api" value="risultati ricerca">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1548" y="1295.2"/>
+                            <mxPoint x="1628" y="1295.2"/>
+                            <mxPoint x="1628" y="670.4"/>
+                            <mxPoint x="1465.6" y="670.4"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e35" edge="1" parent="1" source="ollama" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" target="api" value="risposta locale + token">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1760.13" y="1296"/>
+                            <mxPoint x="1627" y="1296"/>
+                            <mxPoint x="1627" y="653"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e36" edge="1" parent="1" source="cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" target="api" value="risposta cloud">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1626" y="664"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e37" edge="1" parent="1" source="imageModel" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" target="api" value="immagine generata">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="2555" y="1381.5"/>
+                            <mxPoint x="2555" y="565.6"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e38" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#3977ff;fontColor=#294675;fontSize=11;" target="imageModel" value="genera immagine">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="2544" y="574.4"/>
+                            <mxPoint x="2544" y="1381"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e39" edge="1" parent="1" source="visionModels" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;" target="docTR" value="carica modello OCR/Visione">
+                    <mxGeometry relative="1" x="-0.6163" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2172" y="1079"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e40" edge="1" parent="1" source="visionModels" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;exitX=0.647;exitY=0.048;exitDx=0;exitDy=0;exitPerimeter=0;" target="yoloPipe" value="carica modello YOLO">
+                    <mxGeometry relative="1" x="-0.5138" y="-9" as="geometry">
+                        <mxPoint y="1" as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2192" y="1355"/>
+                            <mxPoint x="2192" y="1079"/>
+                            <mxPoint x="2403" y="1079"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e41" edge="1" parent="1" source="visionModels" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9c2740;fontColor=#9c2740;fontSize=11;exitX=0.865;exitY=-0.001;exitDx=0;exitDy=0;exitPerimeter=0;" target="qwenVision" value="carica Qwen3-VL">
+                    <mxGeometry relative="1" x="-0.7641" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2231" y="1354"/>
+                            <mxPoint x="2231" y="1268"/>
+                            <mxPoint x="2524" y="1268"/>
+                            <mxPoint x="2524" y="949"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e42" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=11;" target="analyze" value="seleziona Analyze">
+                    <mxGeometry relative="1" x="0.0856" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="2268" y="606"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e43" edge="1" parent="1" source="analyze" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=11;" target="qwenVision" value="esegue descrizione">
+                    <mxGeometry relative="1" x="0.7333" y="-13" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e44" edge="1" parent="1" source="api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#444444;fontSize=11;" target="ollama" value="invia chat / embedding">
+                    <mxGeometry relative="1" x="-0.7569" y="25" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="1691" y="636"/>
+                            <mxPoint x="1691" y="1283"/>
+                            <mxPoint x="1878" y="1283"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

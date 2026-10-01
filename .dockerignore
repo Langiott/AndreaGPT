@@ -7,6 +7,15 @@ dist
 ANDREA-BRAIN
 OCR
 data
+.tmp
+runtime
+Output
+DRAW
+UNIVERSE
+backend/__pycache__
+**/__pycache__
+*.pyc
+scripts
 .env.*
 *.pem
 *.key

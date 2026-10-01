@@ -5,3 +5,20 @@ git status
 git add -A
 git commit -m "Aggiornato 17/09 PM"
 git push origin main
+
+git switch -c stabile
+git status
+
+git add src server package.json package-lock.json
+git commit -m "Aggiornato 28/09  AM"
+git push -u origin stabile
+
+
+NUOVE IMPLEMENTAZIONI :
+- Agente Harness: un sistema che mi permette di usare un modello non solo per la chat ma fa azioni agentiche ( legge file, decide cosa fare, usa terminale , corregge e mostra risultati) 
+- Qlora : un modo per fare fine-tuning di un modello grande se hai poca RAM
+- Conversation Improvement Force: gestisce correzione utente e migliora prossime risposte
+		→ estrazione della regola
+		→ salvataggio persistente
+		→ ricerca nelle richieste future
+		→ inserimento nel contesto del modello

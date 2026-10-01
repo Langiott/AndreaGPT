@@ -3,14 +3,15 @@ services:
     image: docker.io/searxng/searxng:latest
     container_name: andreagpt-searxng
     restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
-      - ./certs/norton-shield-root.pem:/etc/ssl/certs/norton-shield-root.pem:ro
-    environment:
-      SSL_CERT_FILE: /etc/ssl/certs/norton-shield-root.pem
-      REQUESTS_CA_BUNDLE: /etc/ssl/certs/norton-shield-root.pem
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
       interval: 10s
@@ -24,38 +25,70 @@ services:
       dockerfile: Dockerfile
     container_name: andreagpt
     restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
-      - "127.0.0.1:${APP_PORT:-3000}:3000"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-3000}:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_DOCKER_HOST: "1"
+      LAN_ACCESS: ${LAN_ACCESS:-0}
+      COMFYUI_URL: http://host.docker.internal:8188
+      BRAIN_EMBED_BATCH: ${BRAIN_EMBED_BATCH:-32}
+      BRAIN_EMBED_CONCURRENCY: ${BRAIN_EMBED_CONCURRENCY:-3}
+      BRAIN_TURBOVEC: ${BRAIN_TURBOVEC:-1}
+      BRAIN_RETRIEVAL_BACKEND: ${BRAIN_RETRIEVAL_BACKEND:-sqlite}
+      BRAIN_PCA_DIM: ${BRAIN_PCA_DIM:-768}
+      BRAIN_VECTOR_CANDIDATES: ${BRAIN_VECTOR_CANDIDATES:-96}
+      BRAIN_PRECOMPUTED_GRAPH: ${BRAIN_PRECOMPUTED_GRAPH:-0}
+      CODE_WORKSPACE: ${CODE_WORKSPACE:-/app/backend}
+      RAG_OPTIMIZE: ${RAG_OPTIMIZE:-1}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      HF_HOME: /app/data/huggingface
       BRAIN_ROOT: /app/ANDREA-BRAIN
-      BRAIN_DATA_DIR: /app/data/brain
+      BRAIN_DATA_DIR: /app/ANDREA-BRAIN/.index
       OCR_ROOT: /app/OCR
+      OUTPUT_ROOT: /app/OUTPUT
+      DIAGNOSTICS_DIR: /app/OUTPUT/Log
+      IMAGE_DEVICE: ${IMAGE_DEVICE:-auto}
+      VISION_PYTHON: /opt/doctr/bin/python
+      VISION_MODEL: ${VISION_MODEL:-Qwen/Qwen3-VL-2B-Instruct}
+      VISION_DEVICE: ${VISION_DEVICE:-auto}
+      VISION_MAX_PIXELS: ${VISION_MAX_PIXELS:-262144}
+      VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-256}
       TESSERACT_LANG: ita+eng
       OCR_ENGINE: doctr
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_API_BASE: ${NVIDIA_API_BASE:-https://integrate.api.nvidia.com/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      LOCAL_ROUTER_ENABLED: ${LOCAL_ROUTER_ENABLED:-1}
+      LOCAL_ROUTER_THRESHOLD: ${LOCAL_ROUTER_THRESHOLD:-0.75}
       SEARXNG_URL: http://searxng:8080
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./ANDREA-BRAIN:/app/ANDREA-BRAIN:ro
-      - ./certs/norton-shield-root.pem:/app/certs/norton-shield-root.pem:ro
-      - brain-index:/app/data/brain
+      - ./ANDREA-BRAIN:/app/ANDREA-BRAIN
+      - tools-data:/app/data/tools
+      - model-cache:/app/data/huggingface
       - ./OCR:/app/OCR
+      - ./OUTPUT:/app/OUTPUT
     depends_on:
       searxng:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 15s
 
 volumes:
-  brain-index:
+  tools-data:
+  model-cache:

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="245" viewBox="0 0 1000 245" role="img" aria-labelledby="title desc">
+  <title id="title">Architettura RAG di AndreaGPT</title><desc id="desc">I documenti vengono indicizzati. Durante la chat, la domanda avvia il recupero del contenuto dall'indice e produce una risposta con fonti.</desc>
+  <defs><marker id="arrow2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#736850"/></marker></defs>
+  <rect width="1000" height="245" rx="18" fill="#fffaf0" stroke="#d7ccb8"/>
+  <g font-family="Arial, sans-serif" text-anchor="middle" fill="#201c16">
+    <text x="500" y="29" font-size="17" font-weight="700">Preparazione del Brain</text>
+    <g fill="none" stroke="#736850" stroke-width="3" marker-end="url(#arrow2)"><path d="M205 91H255"/><path d="M445 91H495"/><path d="M685 91H735"/></g>
+    <g stroke-width="2"><rect x="25" y="51" width="180" height="80" rx="13" fill="#e1f2d4" stroke="#78945f"/><rect x="255" y="51" width="190" height="80" rx="13" fill="#f5e7c9" stroke="#a88448"/><rect x="495" y="51" width="190" height="80" rx="13" fill="#e5e8f6" stroke="#747da7"/><rect x="735" y="51" width="240" height="80" rx="13" fill="#efe1d7" stroke="#a27259"/></g>
+    <g font-size="19" font-weight="700"><text x="115" y="86">File</text><text x="350" y="86">Testo e chunk</text><text x="590" y="86">Embedding</text><text x="855" y="86">Indice Brain</text></g>
+    <g font-size="13"><text x="115" y="110">PDF · Word · codice</text><text x="350" y="110">estrazione ordinata</text><text x="590" y="110">nomic-embed-text</text><text x="855" y="110">TurboVec + fallback JSON</text></g>
+    <text x="92" y="177" text-anchor="start" font-size="14" font-weight="700">Durante la chat</text>
+    <g stroke-width="1.5"><rect x="215" y="153" width="145" height="42" rx="10" fill="#e1f2d4" stroke="#78945f"/><rect x="425" y="153" width="190" height="42" rx="10" fill="#f5e7c9" stroke="#a88448"/><rect x="680" y="153" width="175" height="42" rx="10" fill="#efe1d7" stroke="#a27259"/></g>
+    <g font-size="14" font-weight="700"><text x="287" y="179">Domanda</text><text x="520" y="179">Recupero del contenuto</text><text x="767" y="179">Risposta con fonti</text></g>
+    <g fill="none" stroke="#736850" stroke-width="2.5" marker-end="url(#arrow2)"><path d="M360 174H425"/><path d="M615 174H680"/><path d="M855 131V140H520V153"/></g>
+  </g>
+</svg>
