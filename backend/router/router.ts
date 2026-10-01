@@ -12,9 +12,9 @@ export interface LocalRouteDecision {
 }
 
 const WEB_SIGNALS: Array<[RegExp, number, string]> = [
-  [/\b(cerca|ricerca|controlla|verifica)\s+(?:su\s+)?(?:internet|web|online)\b/i, 5, "ricerca web esplicita"],
+  [/\b(cerca|cercami|ricerca|trova|trovami|controlla|verifica)\s+(?:su\s+|in\s+)?(?:internet|web|online|google|rete)\b/i, 5, "ricerca web esplicita"],
   [/\b(oggi|ieri|domani|adesso|ora|attuale|attualmente|in tempo reale|ultim[eoia]|recent[ei])\b/i, 3, "informazione temporale"],
-  [/\b(notizi[ae]|meteo|previsioni|quotazione|prezzo|borsa|cambio|risultato|classifica|calendario)\b/i, 3, "dato aggiornabile"],
+  [/\b(notizi[ae]|meteo|che tempo fa|previsioni|quotazione|prezzo|borsa|cambio|risultato|classifica|calendario)\b/i, 3, "dato aggiornabile"],
   [/\b(link|sito ufficiale|pagina ufficiale|fonti online|url)\b/i, 2, "fonte online"],
   [/\b(chi è (?:il |la )?(?:presidente|ceo)|legge vigente|normativa vigente|versione più recente)\b/i, 3, "fatto soggetto a cambiamento"],
 ];
