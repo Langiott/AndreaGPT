@@ -10,13 +10,14 @@ richiesta al modello configurato.
 
 ## Architettura aggiornata
 
-![Crop dell'architettura AndreaGPT](DRAW/architettura-andreagpt.png)
+![Crop dell'architettura AndreaGPT](DRAW/architettura.png)
 
-[DRAW/architettura-andreagpt.drawio](DRAW/architettura-andreagpt.drawio)
 
-Il file Draw.io è la versione modificabile e aggiornata. L'immagine sopra è
-l'anteprima visiva dell'architettura: mostra il percorso Utente → interfaccia →
-API/backend → Brain/RAG e Micelio → modello o strumento locale.
+### Schema del router locale
+
+![Schema visuale del router locale](DRAW/router.png)
+
+[Schema modificabile del router locale](DRAW/router.drawio)
 
 ## Brain: come funziona
 
@@ -36,16 +37,9 @@ Quando un documento entra nel Brain, il sistema:
 - seleziona pochi estratti pertinenti e li inserisce nel prompt;
 - restituisce risposta, fonti, punteggi e diagnostica.
 
-```text
-documenti
-   |
-   +--> estrazione --> chunk con provenienza --> embedding
-                                             |
-                                             +--> SQLite/FTS5 + vettori + TurboVec
+![Schema visuale del flusso Brain/RAG](DRAW/rag.png)
 
-domanda --> candidati lessicali e vettoriali --> ranking + Micelio
-         --> fonti selezionate --> prompt controllato --> risposta citata
-```
+[Schema modificabile Brain/RAG](DRAW/rag.drawio)
 
 La configurazione predefinita usa chunk di circa 1200 caratteri con sovrapposizione
 di 180 caratteri. Il Brain può cercare in tutto l'archivio oppure limitarsi a una
@@ -89,10 +83,9 @@ forti e calcola grado, centralità, betweenness, closeness e vitalità. Poi prop
 una parte dello score dai candidati verso i vicini e usa il risultato per
 riordinare le fonti senza perdere la loro provenienza.
 
-```text
-query -> chunk simili -> vicini semantici -> propagazione controllata
-      -> centralità/vitalità/feedback -> ranking Brain -> fonti
-```
+![Schema visuale Micelio e TurboVec](DRAW/micelio-turbovec.png)
+
+[Schema modificabile Brain, TurboVec e Micelio](DRAW/micelio-turbovec.drawio)
 
 La dashboard mostra raccolte, file ed estratti, legami, nodi attivi/passivi,
 centralità e vitalità. Il valore Affinità o micelioSupportScore indica coerenza
@@ -104,9 +97,10 @@ TurboVec è l'acceleratore della ricerca vettoriale. Riceve gli embedding prodot
 dal Brain e individua rapidamente i candidati più vicini, evitando di confrontare
 ogni documento completo a ogni domanda.
 
-```text
-testo -> embedding -> indice TurboVec -> candidati -> retrieval -> Micelio
-```
+Il flusso visuale completo, dall'embedding fino al ranking Micelio, è disponibile
+qui:
+
+![Flusso TurboVec e retrieval](DRAW/micelio-turbovec.png)
 
 Il ponte è backend/utils/turbovec_bridge.py e la ricostruzione può essere avviata
 da POST /api/brain/turbovec. TurboVec non genera testo, non sceglie il modello e

@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 INPUT = Path(sys.argv[1] if len(sys.argv) > 1 else "DRAW/architettura-andreagpt.drawio")
 OUTPUT = Path(sys.argv[2] if len(sys.argv) > 2 else INPUT.with_suffix(".png"))
+IS_MAIN_ARCHITECTURE = INPUT.name.lower() == "architettura-andreagpt.drawio"
 
 tree = ET.parse(INPUT)
 cells = {cell.attrib["id"]: cell for cell in tree.getroot().iter("mxCell") if "id" in cell.attrib}
@@ -67,8 +68,8 @@ for cell in cells.values():
         vertices.append((cell, geometry(cell.attrib["id"]), style(cell)))
 
 by_id = {cell.attrib["id"]: (cell, geo, st) for cell, geo, st in vertices}
-width = max(1800, *(geo["x"] + geo["width"] for _, geo, _ in vertices)) + 90
-height = max(1100, *(geo["y"] + geo["height"] for _, geo, _ in vertices)) + 90
+width = max(1800 if IS_MAIN_ARCHITECTURE else 1400, *(geo["x"] + geo["width"] for _, geo, _ in vertices)) + 90
+height = max(1100 if IS_MAIN_ARCHITECTURE else 760, *(geo["y"] + geo["height"] for _, geo, _ in vertices)) + 90
 image = Image.new("RGB", (int(width), int(height)), "#f8fafc")
 draw = ImageDraw.Draw(image)
 
@@ -158,8 +159,9 @@ for cell, geo, st in regular:
         draw.rounded_rectangle((geo["x"], geo["y"], geo["x"] + geo["width"], geo["y"] + geo["height"]), radius=10, fill=fill, outline=stroke, width=3)
     centered_text(geo, label(cell), int(number(st.get("fontSize"), 16)), color(st.get("fontColor"), "#1f2937"), st.get("fontStyle") == "1")
 
-draw.text((40, 24), "Architettura AndreaGPT", font=font(30, True), fill="#0f172a")
-draw.text((40, 58), "Flusso reale: UI → API/router → Brain/RAG + Micelio → modello o strumento locale", font=font(16), fill="#475569")
+if IS_MAIN_ARCHITECTURE:
+    draw.text((40, 24), "Architettura AndreaGPT", font=font(30, True), fill="#0f172a")
+    draw.text((40, 58), "Flusso reale: UI → API/router → Brain/RAG + Micelio → modello o strumento locale", font=font(16), fill="#475569")
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 image.save(OUTPUT, "PNG", optimize=True)
 print(f"Creato {OUTPUT}")

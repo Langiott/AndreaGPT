@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 
 const input = path.resolve(process.argv[2] ?? "DRAW/architettura-andreagpt.drawio");
 const output = path.resolve(process.argv[3] ?? input.replace(/\.drawio$/iu, ".svg"));
+const isMainArchitecture = /architettura-andreagpt\.drawio$/iu.test(input);
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "", parseTagValue: false, processEntities: true });
 const document = parser.parse(fs.readFileSync(input, "utf8"));
 const rawCells = document.mxfile?.diagram?.mxGraphModel?.root?.mxCell ?? [];
@@ -26,8 +27,8 @@ const absoluteGeometry = (id, stack = new Set()) => {
 };
 
 const vertices = cells.filter(cell => cell.vertex === "1" && cell.id !== "0" && cell.id !== "1").map(cell => ({ cell, geometry: absoluteGeometry(cell.id), style: styleOf(cell) }));
-const width = Math.max(1800, ...vertices.map(item => item.geometry.x + item.geometry.width)) + 90;
-const height = Math.max(1100, ...vertices.map(item => item.geometry.y + item.geometry.height)) + 90;
+const width = Math.max(isMainArchitecture ? 1800 : 1400, ...vertices.map(item => item.geometry.x + item.geometry.width)) + 90;
+const height = Math.max(isMainArchitecture ? 1100 : 760, ...vertices.map(item => item.geometry.y + item.geometry.height)) + 90;
 const vertexById = new Map(vertices.map(item => [item.cell.id, item]));
 
 function labelLines(cell) {
@@ -80,8 +81,7 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M 0 0 L 10 4 L 0 8 z" fill="#64748b"/></marker></defs>
   <rect width="100%" height="100%" fill="#f8fafc"/>
-  <text x="40" y="42" fill="#0f172a" font-family="Arial, sans-serif" font-size="26" font-weight="700">Architettura AndreaGPT</text>
-  <text x="40" y="70" fill="#475569" font-family="Arial, sans-serif" font-size="14">Flusso reale: UI → API/router → Brain/RAG + Micelio → modello o strumento locale</text>
+  ${isMainArchitecture ? '<text x="40" y="42" fill="#0f172a" font-family="Arial, sans-serif" font-size="26" font-weight="700">Architettura AndreaGPT</text><text x="40" y="70" fill="#475569" font-family="Arial, sans-serif" font-size="14">Flusso reale: UI → API/router → Brain/RAG + Micelio → modello o strumento locale</text>' : ''}
   ${swimlanes.map(renderVertex).join("\n  ")}
   ${edges.map(renderEdge).join("\n  ")}
   ${regularVertices.map(renderVertex).join("\n  ")}
