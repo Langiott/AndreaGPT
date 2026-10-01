@@ -1390,7 +1390,7 @@ export default function App() {
     <div ref={appShellRef} className="app-shell" data-theme={theme}>
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand-row">
-          <div className="brand-mark"><img src="/andreagpt-logo-Photoroom.png" alt="" /></div>
+          <div className="brand-mark"><img src="/andreagpt-logo-128.png" alt="" /></div>
           <div><strong>AndreaGPT</strong></div>
           <button className="icon-button close-mobile" onClick={() => setSidebarOpen(false)} aria-label="Chiudi menu"><X size={19} /></button>
         </div>
@@ -1534,7 +1534,7 @@ export default function App() {
             <div className="message-list">
               {messages.map((message, messageIndex) => (
                 <article key={message.id} className={`message ${message.role}`}>
-                  <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo-Photoroom.png" alt="AndreaGPT" />}</div>
+                  <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo-128.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
                     <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
