@@ -58,6 +58,7 @@ import { AppearanceSettings, fonts, SettingsInfo, useAppearance } from "../compo
 import { createId } from "../utils/compat";
 import { createStreamBatch } from "../utils/stream_batch";
 import { writeClipboard } from "../utils/clipboard";
+import { userErrorMessage } from "../utils/errors";
 import { Mainboard } from "../components/Mainboard";
 import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, WebCitation } from "../types/types";
 
@@ -439,7 +440,7 @@ export default function App() {
       }
       setMessages((current) => current.map((message) => message.id === audioMessageId ? { ...message, content: transcript, audio: { status: "complete", fileName: file.name } } : message));
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "Trascrizione fallita.";
+      const message = userErrorMessage(caught, "Trascrizione fallita.");
       setMessages((current) => current.map((item) => item.id === audioMessageId ? { ...item, content: message, audio: { status: "error", fileName: file.name } } : item));
       setError(message);
     }
@@ -645,7 +646,7 @@ export default function App() {
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "Feedback non salvato.");
       setMessages(current => current.map(item => item.id === message.id ? { ...item, feedback: rating } : item));
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Feedback non salvato."); }
+    } catch (caught) { setError(userErrorMessage(caught, "Feedback non salvato.")); }
   }
 
   useEffect(() => { void refreshBrainPaths(); }, []);
@@ -1104,7 +1105,7 @@ export default function App() {
         setMessages((current) => current.filter((message) => message.id !== assistantId || message.content));
       } else {
         setMessages((current) => current.filter((message) => message.id !== assistantId || message.content));
-        setError(caught instanceof Error ? caught.message : "Si è verificato un errore.");
+        setError(userErrorMessage(caught, "Si è verificato un errore."));
       }
     } finally {
       streamBatch.flush();
@@ -1124,7 +1125,7 @@ export default function App() {
       const result = await response.json() as { error?: string; name?: string };
       if (!response.ok || !result.name) throw new Error(result.error || "Compattazione non riuscita.");
       setError(`Chat compatta salvata in OUTPUT/Compatta_chat/${result.name ?? ""}`);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Compattazione non riuscita."); }
+    } catch (caught) { setError(userErrorMessage(caught, "Compattazione non riuscita.")); }
     finally { setCompactingChat(false); }
   }
 
@@ -1197,7 +1198,7 @@ export default function App() {
       setAttachments((current) => [...current, ...loaded]);
       setError(selectedFiles.length > availableSlots ? `Sono stati aggiunti solo i primi ${availableSlots} file.` : "");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Impossibile leggere uno degli allegati.");
+      setError(userErrorMessage(caught, "Impossibile leggere uno degli allegati."));
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -1248,7 +1249,7 @@ export default function App() {
         results.push(`### ${attachment.name}\n${result.text || "Nessun testo riconosciuto."}\n\n_Risultato salvato in ${result.output || "OCR/output"}._`);
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
       }
-    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(caught instanceof Error ? caught.message : "OCR non riuscito."); }
+    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "OCR non riuscito.")); }
     finally { setLoading(false); }
   }
 
@@ -1267,7 +1268,7 @@ export default function App() {
         results.push(`### ${attachment.name}\n${result.text || "Nessun elemento rilevato."}`);
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
       }
-    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(caught instanceof Error ? caught.message : "Analisi YOLO non riuscita."); }
+    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "Analisi YOLO non riuscita.")); }
     finally { setLoading(false); }
   }
 
@@ -1334,7 +1335,7 @@ export default function App() {
     } catch (caught) {
       const aborted = caught instanceof Error && caught.name === "AbortError";
       updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: aborted ? "Analyze annullato dall’utente." : `Analyze non riuscito: ${caught instanceof Error ? caught.message : "errore sconosciuto"}` } : message));
-      if (!aborted && activeConversationIdRef.current === conversationId) setError(caught instanceof Error ? caught.message : "Analisi immagine non riuscita.");
+      if (!aborted && activeConversationIdRef.current === conversationId) setError(userErrorMessage(caught, "Analisi immagine non riuscita."));
     } finally {
       if (analyzeAbortRef.current === controller) {
         analyzeAbortRef.current = null;
