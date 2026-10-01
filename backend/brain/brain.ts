@@ -14,7 +14,8 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { localOllamaUrl } from "../utils/local";
 import { projectEmbeddings, projectPoint } from "./embedding_map";
 import { coalitionText, contentOf, QUERY_STOP_WORDS, queryIntent, semanticQueryText, shapFindings, shapleyPlan, shapleyValues, shapPlayers, toShares, type ShapResult } from "./query_shap";
-import { groupEmbeddings, type EmbeddingGroups, type GroupMethod, type GroupModel } from "./embedding_ml";
+import { fuzzyAuto, groupEmbeddings, memberships, themeCount, unit, type EmbeddingGroups, type GroupMethod, type GroupModel } from "./embedding_ml";
+import { fuseFuzzyChannel } from "../retrieval/fuzzy_rerank";
 import { brainUploadPreset } from "../../frontend/config/brain_upload_limits";
 import {
   BRAIN_BATCH_SIZE,
@@ -108,11 +109,19 @@ export interface BrainOptions {
   embed?: (texts: string[]) => Promise<number[][]>;
   backend?: "legacy" | "sqlite";
   turbo?: boolean;
+  /** Spinta Micelio nel ranking (vicini nel grafo). Spenta di default: non migliora le metriche (BRAIN_MICELIO=1 la accende). */
+  micelio?: boolean;
+  /** Riordino fuzzy per temi della domanda. BRAIN_FUZZY=1 lo accende. */
+  fuzzy?: boolean;
 }
 
 export interface BrainSearchContext {
   metrics: Record<string, number>;
   queryVector?: number[];
+  /** Per singola richiesta: spinta Micelio nel ranking (predefinito: opzione del Brain). */
+  micelio?: boolean;
+  /** Per singola richiesta: riordino fuzzy per temi della domanda (predefinito: opzione del Brain). */
+  fuzzy?: boolean;
 }
 
 /** Controlla che un percorso resti dentro la cartella indicata. */
@@ -342,6 +351,8 @@ export interface BrainEmbeddingMap {
   points: Array<{ path: string; section: string; lines: string; preview: string; position: number[] }>;
   query?: { text: string; position: number[]; nearest: Array<{ index: number; similarity: number }>; group?: string };
   groups?: EmbeddingGroups;
+  /** Per file: chunk e somma dei vettori normalizzati, per centro e varianza di ogni selezione. */
+  files?: Array<{ path: string; count: number; sum: number[] }>;
 }
 export interface BrainGraph {
   level: "collections" | "files" | "chunks";
@@ -422,6 +433,22 @@ export function createBrain(options: BrainOptions = {}) {
   const backupPaths = [path.join(dataDir, "index.backup.json"), path.join(dataDir, "index.previous.json")];
   const turboScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "utils", "turbovec_bridge.py");
   const turboEnabled = options.turbo ?? (process.env.BRAIN_TURBOVEC !== "0" && !options.embed);
+  const micelioBoost = options.micelio ?? process.env.BRAIN_MICELIO === "1";
+  const fuzzyDefault = options.fuzzy ?? process.env.BRAIN_FUZZY === "1";
+  // Spazio fuzzy dell'archivio: temi e profilo di ogni estratto, calcolati una volta per indice.
+  // Numero di temi: automatico (come in EmbeddingSpace) oppure BRAIN_FUZZY_THEMES per provarne di più.
+  const fuzzyCache = new WeakMap<BrainIndex, { centers: number[][]; m: number; profiles: Map<string, number[]> }>();
+  const fuzzyModel = (index: BrainIndex) => {
+    if (!fuzzyCache.has(index)) {
+      const chunks = Object.values(index.files).flatMap(file => file.chunks).filter(chunk => chunk.embedding?.length);
+      if (chunks.length < 12) return undefined;
+      const rows = chunks.map(chunk => unit(chunk.embedding));
+      const themes = Math.max(2, Math.min(rows.length - 1, Number(process.env.BRAIN_FUZZY_THEMES) || themeCount(rows.length)));
+      const { u, centers, m } = fuzzyAuto(rows, themes);
+      fuzzyCache.set(index, { centers, m, profiles: new Map(chunks.map((chunk, i) => [chunk.id, u[i]])) });
+    }
+    return fuzzyCache.get(index);
+  };
   const useStore = turboEnabled && (options.backend ?? process.env.BRAIN_RETRIEVAL_BACKEND) === "sqlite";
   const turboWorker = turboEnabled ? new JsonLineWorker(process.env.TURBOVEC_PYTHON || process.env.DOCTR_PYTHON || "python", [turboScript, "serve"], 30_000) : undefined;
   const ollama = new URL(localOllamaUrl(options.ollamaUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"));
@@ -1266,11 +1293,27 @@ export function createBrain(options: BrainOptions = {}) {
       const links = graphNeighbors.get(hit.id) ?? [];
       const propagated = links.reduce((sum, link) => sum + (rankedBase.find(candidate => candidate.id === link.id)?.score ?? 0) * link.similarity, 0) / (links.reduce((sum, link) => sum + link.similarity, 0) || 1);
       const graphScore = Math.max(0, Math.min(1, 0.72 * Math.max(0, hit.score) / maxBaseScore + 0.20 * propagated / maxBaseScore + 0.08 * links.length / maxDegree));
-      return { ...hit, score: hit.score + 0.20 * propagated + 0.04 * links.length / maxDegree, micelioScore: graphScore };
+      const boost = (context.micelio ?? micelioBoost) ? 0.20 * propagated + 0.04 * links.length / maxDegree : 0;
+      return { ...hit, score: hit.score + boost, micelioScore: graphScore };
     }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
     measure("graphMs", graphStarted);
+    // Canale fuzzy (proposta A): ordina i candidati per temi in comune con la domanda
+    // e fonde questa classifica, alla pari, con quella di embedding + lessicale (RRF).
+    let finalRanked = ranked;
+    if (context.fuzzy ?? fuzzyDefault) {
+      const fuzzyStarted = performance.now();
+      const model = fuzzyModel(index);
+      if (model) {
+        const queryProfile = memberships(unit(vector), model.centers, model.m);
+        const result = fuseFuzzyChannel(ranked, queryProfile, hit => model.profiles.get(hit.id));
+        finalRanked = result.ranked;
+        context.metrics.fuzzyThemes = model.centers.length;
+        context.metrics.fuzzyMovedTop5 = result.ranked.slice(0, 5).filter(hit => !ranked.slice(0, 5).some(other => other.id === hit.id)).length;
+      }
+      measure("fuzzyMs", fuzzyStarted);
+    }
     const selectionStarted = performance.now();
-    const selected = selectEvidence(ranked, contentQuery, Boolean(filter));
+    const selected = selectEvidence(finalRanked, contentQuery, Boolean(filter));
     measure("selectionMs", selectionStarted);
     measure("retrievalTotalMs", began);
     return selected.map(({ entityMatch: _entityMatch, roleEvidence: _roleEvidence, rankLine: _rankLine, ...hit }) => hit);
@@ -1354,6 +1397,7 @@ export function createBrain(options: BrainOptions = {}) {
     const map: BrainEmbeddingMap = {
       total: all.length, shown: chunks.length, dimension: chunks[0].embedding.length, explained: projection.explained,
       points: chunks.map((chunk, i) => ({ path: chunk.path, section: chunk.section ?? "", lines: `${chunk.startLine}-${chunk.endLine}`, preview: chunk.text.slice(0, 240), position: projection.points[i] })),
+      files: fileEmbeddingSums(all),
     };
     // Gruppi e classificatori sui vettori completi; restano in memoria finché l'indice non cambia.
     const method = input.method ?? "chapter";
@@ -1371,6 +1415,18 @@ export function createBrain(options: BrainOptions = {}) {
     return { ...map, query: { text: query, position: projectPoint(projection, vector), nearest, group: model.place(vector) } };
   }
   const groupCache = new WeakMap<BrainIndex, Map<string, GroupModel>>();
+  /** Somme per file su tutti i chunk (non solo quelli disegnati): le statistiche della selezione restano esatte. */
+  function fileEmbeddingSums(chunks: Array<{ path: string; embedding: number[] }>) {
+    const byFile = new Map<string, { count: number; sum: number[] }>();
+    for (const chunk of chunks) {
+      const norm = Math.sqrt(chunk.embedding.reduce((sum, value) => sum + value * value, 0)) || 1;
+      const entry = byFile.get(chunk.path) ?? { count: 0, sum: new Array(chunk.embedding.length).fill(0) as number[] };
+      entry.count++;
+      for (let j = 0; j < entry.sum.length; j++) entry.sum[j] += chunk.embedding[j] / norm;
+      byFile.set(chunk.path, entry);
+    }
+    return [...byFile.entries()].map(([path, entry]) => ({ path, count: entry.count, sum: entry.sum.map(value => Math.round(value * 1e5) / 1e5) }));
+  }
 
   /** SHAP per parola: quanto ogni parola avvicina la domanda a ogni fonte, con lo stesso testo della ricerca vettoriale. */
   async function explainQuery(input: { query: string; sources: string[] }): Promise<ShapResult> {

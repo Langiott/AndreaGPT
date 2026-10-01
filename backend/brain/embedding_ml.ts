@@ -27,7 +27,9 @@ export interface GroupInput { vectors: number[][]; paths: string[]; sections: st
 
 type Vec = number[];
 const dot = (a: Vec, b: Vec) => { let sum = 0; for (let i = 0; i < a.length; i++) sum += a[i] * b[i]; return sum; };
-const unit = (v: Vec) => { const norm = Math.sqrt(dot(v, v)) || 1; return v.map(x => x / norm); };
+export const unit = (v: Vec) => { const norm = Math.sqrt(dot(v, v)) || 1; return v.map(x => x / norm); };
+/** Numero di temi fuzzy: cresce con la radice del numero di estratti, da 3 a 12. */
+export const themeCount = (n: number) => Math.max(3, Math.min(12, Math.round(Math.sqrt(n / 8))));
 const distance = (a: Vec, b: Vec) => 1 - dot(a, b); // distanza coseno su vettori normalizzati
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const fileName = (path: string) => path.split("/").at(-1) ?? path;
@@ -232,7 +234,7 @@ export const partitionCoefficient = (u: number[][]) => u.reduce((sum, row) => su
  * Sceglie m: il valore più morbido tra 1,30 e 1,05 che tiene i temi distinti (nettezza ≥ 0,5).
  * Misurato sul Brain reale: da m = 1,2 in su, in 768 dimensioni, i gradi diventano tutti uguali.
  */
-function fuzzyAuto(rows: Vec[], c: number) {
+export function fuzzyAuto(rows: Vec[], c: number) {
   for (const m of [1.3, 1.2, 1.15, 1.1]) { const run = fuzzyCMeans(rows, c, m); if (partitionCoefficient(run.u) >= 0.5) return { ...run, m }; }
   return { ...fuzzyCMeans(rows, c, 1.05), m: 1.05 };
 }
@@ -380,11 +382,11 @@ export function groupEmbeddings(input: GroupInput, method: GroupMethod): GroupMo
   if (method === "micelio") {
     const labels = micelio(rows);
     const groups = new Set(labels.filter(l => l >= 0)).size;
-    return clusterModel({ method, kind: "cluster", title: "Micelio (comunità del grafo)", names: Array.from({ length: groups }, (_, i) => `Comunità ${i + 1}`), labels, metrics: clusterMetrics(labels), note: "Collega ogni estratto ai suoi 8 vicini più forti (coseno ≥ 0,60) e raggruppa le comunità del grafo." });
+    return clusterModel({ method, kind: "cluster", title: "Micelio (similarità coseno)", names: Array.from({ length: groups }, (_, i) => `Comunità ${i + 1}`), labels, metrics: clusterMetrics(labels), note: "Collega ogni estratto ai suoi 8 vicini più forti (coseno ≥ 0,60) e raggruppa le comunità del grafo." });
   }
 
   if (method === "fuzzy") {
-    const c = Math.max(3, Math.min(12, Math.round(Math.sqrt(rows.length / 8))));
+    const c = themeCount(rows.length);
     const { u, centers, m } = fuzzyAuto(rows, c);
     const names = topicNames(input.texts, u, c);
     const ranked = u.map(row => row.map((value, k) => ({ k, value })).sort((a, b) => b.value - a.value));

@@ -14,7 +14,8 @@
     "brain": "tsx backend/brain/brain_cli.ts",
     "smoke:local": "tsx scripts/test/smoke_locale.ts",
     "benchmark:router": "tsx scripts/benchmark/benchmark_router.ts",
-    "benchmark:retrieval": "tsx scripts/benchmark/benchmark_retrieval.ts"
+    "benchmark:retrieval": "tsx scripts/benchmark/benchmark_retrieval.ts",
+    "valuta:brain": "tsx scripts/benchmark/valuta_retrieval.ts"
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.2.4",

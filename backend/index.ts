@@ -948,6 +948,9 @@ const chatSchema = z.object({
   temperature: z.number().min(0).max(2).default(0.6),
   maxTokens: z.number().int().min(1).max(8192).default(2048),
   webSearch: z.boolean().default(false),
+  // Ricerca Brain: spinta Micelio e completamento fuzzy per temi (impostazioni della chat).
+  micelio: z.boolean().optional(),
+  fuzzy: z.boolean().optional(),
 });
 
 app.post("/api/chat", async (request, response) => {
@@ -1042,7 +1045,7 @@ app.post("/api/chat", async (request, response) => {
     let retrievedBrainSources: typeof brainSources = [];
     let brainSupportSources: Array<{ citation: string; text: string; retrievalScore?: number }> = [];
     let requestBrain: Awaited<ReturnType<typeof brainModule>> | undefined;
-    const retrievalContext: import("./brain/brain").BrainSearchContext = { metrics: {} };
+    const retrievalContext: import("./brain/brain").BrainSearchContext = { metrics: {}, micelio: parsed.data.micelio, fuzzy: parsed.data.fuzzy };
     const searchQuery = extractSearchQuery(parsed.data.messages);
     // Un saluto non cerca nel Brain: il modello risponde in modo naturale, senza fonti a caso.
     if (effectiveBrain && isSmallTalk(searchQuery)) { effectiveBrain = false; trace.add({ stage: "rag", status: "info", message: "Saluto o messaggio di cortesia: nessuna ricerca nel Brain." }); }
@@ -1074,7 +1077,7 @@ app.post("/api/chat", async (request, response) => {
         if (process.env.RAG_OPTIMIZE !== "0") brainSources = compactEvidence(brainSources);
         metrics.evidenceCharsAfter = brainSources.reduce((n, source) => n + source.text.length, 0);
         const top = result[0];
-        trace.add({ stage: "rag", status: brainSources.length && top && (top.lexicalScore >= 0.08 || top.cosineScore >= 0.45) ? "ok" : brainSources.length ? "warning" : "error", message: brainSources.length ? "Retrieval RAG completato." : "RAG non ha trovato fonti pertinenti.", durationMs: metrics.retrievalMs, details: { candidates: retrievalContext.metrics.retrievalCandidates ?? result.length, returned: result.length, selected: brainSources.length, topScore: top?.score ?? null, topCosine: top?.cosineScore ?? null, topLexical: top?.lexicalScore ?? null, sourceFilter: parsed.data.brainSource ?? null } });
+        trace.add({ stage: "rag", status: brainSources.length && top && (top.lexicalScore >= 0.08 || top.cosineScore >= 0.45) ? "ok" : brainSources.length ? "warning" : "error", message: brainSources.length ? "Retrieval RAG completato." : "RAG non ha trovato fonti pertinenti.", durationMs: metrics.retrievalMs, details: { candidates: retrievalContext.metrics.retrievalCandidates ?? result.length, returned: result.length, selected: brainSources.length, topScore: top?.score ?? null, topCosine: top?.cosineScore ?? null, topLexical: top?.lexicalScore ?? null, sourceFilter: parsed.data.brainSource ?? null, micelio: parsed.data.micelio ?? null, fuzzy: parsed.data.fuzzy ?? null, fuzzyThemes: retrievalContext.metrics.fuzzyThemes ?? null, fuzzyMovedTop5: retrievalContext.metrics.fuzzyMovedTop5 ?? null } });
       } catch (error) { trace.add({ stage: "rag", status: "error", message: error instanceof Error ? error.message : "Retrieval Brain fallito." }); response.status(503).json({ error: error instanceof Error ? error.message : "Retrieval Brain fallito: verificare indice ed embedding.", diagnostics: { requestId: trace.requestId, events: trace.events } }); return; }
     }
     if (effectiveBrain && brainSources.length === 0) {

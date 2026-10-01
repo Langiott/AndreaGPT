@@ -241,6 +241,10 @@ export default function App() {
   const [imageModel, setImageModel] = useState<"qwen" | "viggle">(() => localStorage.getItem("andreagpt-image-model") === "viggle" ? "viggle" : "qwen");
   const [yoloTask, setYoloTask] = useState<YoloTask>("detect");
   const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
+  // Ricerca nel Brain: spenti di default, è la configurazione migliore misurata con "npm run valuta:brain -- --confronta".
+  const [brainRanking, setBrainRanking] = useState<{ micelio: boolean; fuzzy: boolean }>(() => {
+    try { return { micelio: false, fuzzy: false, ...JSON.parse(localStorage.getItem("andreagpt-brain-ranking") || "{}") }; } catch { return { micelio: false, fuzzy: false }; }
+  });
   const [brainEnabled, setBrainEnabled] = useState(() => {
     if (localStorage.getItem("andreagpt-brain-default-v2") !== "1") {
       localStorage.setItem("andreagpt-brain-default-v2", "1");
@@ -785,6 +789,10 @@ export default function App() {
   }, [webSearchEnabled]);
 
   useEffect(() => {
+    try { localStorage.setItem("andreagpt-brain-ranking", JSON.stringify(brainRanking)); } catch { /* sessione privata */ }
+  }, [brainRanking]);
+
+  useEffect(() => {
     localStorage.setItem("andreagpt-brain-enabled", String(brainEnabled));
   }, [brainEnabled]);
 
@@ -1075,6 +1083,8 @@ export default function App() {
           maxTokens: isOllama ? selectedOllamaProfile.maxTokens : settings.maxTokens,
           numCtx: isOllama ? selectedOllamaProfile.numCtx : 4096,
           webSearch: webSearchEnabled,
+          micelio: brainRanking.micelio,
+          fuzzy: brainRanking.fuzzy,
         }),
         signal: controller.signal,
       });
@@ -1740,6 +1750,14 @@ export default function App() {
             <input className="range" type="range" min="10" max="50" step="5" value={imageSettings.steps} onChange={event => setImageSettings(current => ({ ...current, steps: Number(event.target.value) }))} />
             <label className="setting-field token-field"><span><strong>Seed</strong></span><input type="number" min="0" max="2147483647" value={imageSettings.seed} onChange={event => setImageSettings(current => ({ ...current, seed: Math.max(0, Math.min(2147483647, Number(event.target.value))) }))} /></label>
             <p className="cookbook-note">Il backend seleziona automaticamente CUDA, Intel XPU oppure CPU. Per Intel Arc serve una build PyTorch con supporto XPU; i file sono salvati in <code>OUTPUT/Image</code>.</p>
+          </div>
+          <div className="settings-section brain-ranking-settings">
+            <div className="settings-heading"><strong>Ricerca nel Brain</strong><SettingsInfo text="Come vengono scelte le fonti dai tuoi documenti. Misura l'effetto con: npm run valuta:brain -- --confronta" /></div>
+            <div className="convert-options" role="group" aria-label="Opzioni di ricerca nel Brain">
+              <label><input type="checkbox" checked={brainRanking.micelio} onChange={event => setBrainRanking(current => ({ ...current, micelio: event.target.checked }))} /> <span><strong>Micelio</strong><small>gli estratti collegati a molte fonti forti salgono di posizione</small></span></label>
+              <label><input type="checkbox" checked={brainRanking.fuzzy} onChange={event => setBrainRanking(current => ({ ...current, fuzzy: event.target.checked }))} /> <span><strong>Fuzzy (temi)</strong><small>terzo canale: propone le fonti con gli stessi temi della domanda e le fonde con embedding e lessicale</small></span></label>
+            </div>
+            <p className="cookbook-note">Ultima misura su 47 domande: spenti Recall@5 85%, Micelio 85%. Il canale fuzzy è nuovo: da misurare con npm run valuta:brain -- --confronta.</p>
           </div>
           <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />
           <div className="settings-section generation-settings">

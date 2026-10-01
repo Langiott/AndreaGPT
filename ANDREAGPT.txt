@@ -33,3 +33,28 @@ chat ma fa azioni agentiche ( legge file, decide cosa fare, usa terminale , corr
 		→ inserimento nel contesto del modello
 
 --------------------------------------------------------------------------------
+
+FUZZY NELLA RICERCA BRAIN
+
+Proposta A (IMPLEMENTATA, da testare): il fuzzy è un terzo canale.
+	→ ogni estratto e la domanda diventano un profilo di temi (gradi fuzzy)
+	→ il canale ordina i candidati per temi in comune (Σ min dei gradi)
+	→ la sua classifica si fonde alla pari con embedding + lessicale (RRF, k = 60)
+	→ si accende da Impostazioni → Ricerca nel Brain → Fuzzy (temi)
+	→ codice: backend/retrieval/fuzzy_rerank.ts, chiamato in searchBrain (brain.ts)
+
+Proposta B (DA FARE se A non convince o costa troppa latenza): il fuzzy come filtro.
+	→ prima della ricerca il fuzzy decide i temi della domanda
+	→ si cerca SOLO tra gli estratti di quei temi (embedding + lessicale)
+	→ pro: esclude le fonti fuori tema (es. "NameNode" → esercitazioni Spark)
+	→ rischio: se il tema della domanda è sbagliato, esclude anche la fonte giusta
+	→ i temi della domanda vanno presi dai primi 10 candidati, non dal vettore della
+	  domanda (misurato: il vettore della domanda dà profili poco affidabili)
+
+TEST DA FARE (domani):
+	npm run valuta:brain -- --confronta                       → 4 combinazioni, 7 temi
+	set BRAIN_FUZZY_THEMES=30 && npm run valuta:brain -- --confronta   → temi più fini
+	→ guardare Recall@5, MRR, Copertura e il tempo (fuzzyMs nel Log della chat)
+	→ riferimento attuale (Micelio e Fuzzy spenti): Recall@5 85%, MRR 0,77, Copertura 79%
+
+--------------------------------------------------------------------------------
