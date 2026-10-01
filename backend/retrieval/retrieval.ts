@@ -32,11 +32,17 @@ interface RankedPassage {
 /** Seleziona i passaggi migliori evitando duplicati della stessa fonte. */
 export function selectPassages<T extends RankedPassage>(ranked: T[], limit = 5): T[] {
   const selected: T[] = [];
-  const words = new Map(ranked.map(hit => [hit.id, new Set(retrievalTokens(hit.text))]));
+  // Parole di ogni passaggio, calcolate solo al primo uso.
+  const words = new Map<string, Set<string>>();
+  const wordsOf = (hit: T) => {
+    let set = words.get(hit.id);
+    if (!set) words.set(hit.id, set = new Set(retrievalTokens(hit.text)));
+    return set;
+  };
   const canonical = new Map(ranked.map(hit => [hit.id, hit.text.replace(/\s+/gu, " ").trim()]));
   const remaining = [...ranked];
   const overlap = (a: T, b: T) => {
-    const left = words.get(a.id)!, right = words.get(b.id)!;
+    const left = wordsOf(a), right = wordsOf(b);
     const shared = [...left].filter(term => right.has(term)).length;
     return shared / Math.max(1, left.size + right.size - shared);
   };
@@ -44,6 +50,8 @@ export function selectPassages<T extends RankedPassage>(ranked: T[], limit = 5):
     let best = -1, bestScore = -Infinity;
     for (let i = 0; i < remaining.length; i++) {
       const hit = remaining[i];
+      // La penalità può solo abbassare il punteggio: questo candidato non può vincere.
+      if (hit.score <= bestScore) continue;
       // Similarity is only a ranking penalty. Near-duplicates can differ in a
       // number, negation or code operator, so only exact copies are discarded.
       if (selected.some(previous => previous.id === hit.id || canonical.get(hit.id) === canonical.get(previous.id))) continue;
