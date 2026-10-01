@@ -26,7 +26,6 @@
     "fast-xml-parser": "^5.11.1",
     "katex": "^0.18.7",
     "lucide-react": "latest",
-    "pdf-parse": "2.4.5",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "latest",

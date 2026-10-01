@@ -250,7 +250,7 @@ AndreaGPT/
 | Lucide React | Icone dell'interfaccia |
 | fast-xml-parser | Parsing XML e documenti Office |
 | adm-zip | Lettura archivi Office |
-| pdf-parse | Estrazione del testo dai PDF |
+| @firecrawl/anydoc | Conversione di PDF e documenti Office in Markdown |
 | undici | Trasporto HTTP configurabile |
 | dotenv e CORS | Configurazione e accesso controllato |
 
