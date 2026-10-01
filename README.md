@@ -2,30 +2,27 @@
 
 AndreaGPT è un assistente locale con interfaccia web, backend Node/Express,
 modelli Ollama, archivio documentale Brain/RAG, ricerca Web opzionale e pipeline
-per OCR, YOLO, analisi immagini, trascrizione, conversione e generazione immagini.
+per OCR, YOLO, analisi immagini, generazione immagini e molto altro. Il progetto
+non è un singolo modello addestrato: è un'orchestrazione di servizi e algoritmi
+che scelgono il percorso, recuperano il contesto utile e inviano una richiesta al
+modello configurato.
 
-Il progetto non è un singolo modello addestrato: è un'orchestrazione di servizi e
-algoritmi che scelgono il percorso, recuperano il contesto utile e inviano una
-richiesta al modello configurato.
-
-## Architettura aggiornata
-
-![Crop dell'architettura AndreaGPT](DRAW/architettura.png)
+Esistono tre modalità di utilizzo della chat: quella che parla direttamente con
+il modello, quella che conversa con il modello e può accedere a fonti web, e
+quella che utilizza il Brain, cioè i nostri documenti. Usando il Brain non si
+possono fare ricerche online. Lo scopo è avere un'applicazione locale e non
+orientata alle ricerche web.
 
 
-### Schema del router locale
+![DRAW/architettura-andreagpt1.drawio](DRAW/architettura.png)
 
-![Schema visuale del router locale](DRAW/router.png)
 
-[Schema modificabile del router locale](DRAW/router.drawio)
 
 ## Brain: come funziona
 
 Brain è l'archivio documentale interrogabile da AndreaGPT. Non è un modello
 addestrato e non modifica i pesi di Ollama: prepara il contesto che il modello
-userà per rispondere.
-
-Quando un documento entra nel Brain, il sistema:
+userà per rispondere. Quando un documento viene caricato nel Brain, il sistema:
 
 - controlla estensione, dimensione, codifica, percorso e sicurezza del file;
 - estrae il testo da file, PDF, Office, CSV, JSON, XML e codice;
@@ -39,12 +36,13 @@ Quando un documento entra nel Brain, il sistema:
 
 ![Schema visuale del flusso Brain/RAG](DRAW/rag.png)
 
-[Schema modificabile Brain/RAG](DRAW/rag.drawio)
 
 La configurazione predefinita usa chunk di circa 1200 caratteri con sovrapposizione
 di 180 caratteri. Il Brain può cercare in tutto l'archivio oppure limitarsi a una
 fonte selezionata dal pannello o indicata con @percorso. Dopo aver aggiunto o
-modificato documenti bisogna reindicizzare.
+modificato documenti bisogna reindicizzare. È possibile anche caricare nel Brain
+i tuoi progetti pubblici inserendo il link del progetto, ad esempio:
+https://github.com/Langiott/Pianeti_Stelle
 
 ## Modelli e motori utilizzati
 
@@ -77,15 +75,13 @@ rappresentare raccolte, file o chunk; gli archi collegano contenuti con embeddin
 simili. Non è una rete neurale, non fa fine-tuning e non decide da solo se una
 risposta è vera.
 
-Per ogni richiesta Brain Micelio prende i candidati migliori, confronta i vettori
+Per ogni richiesta Brain, Micelio prende i candidati migliori, confronta i vettori
 con la similarità coseno, collega i nodi sopra una soglia, conserva i vicini più
 forti e calcola grado, centralità, betweenness, closeness e vitalità. Poi propaga
 una parte dello score dai candidati verso i vicini e usa il risultato per
 riordinare le fonti senza perdere la loro provenienza.
 
 ![Schema visuale Micelio e TurboVec](DRAW/micelio-turbovec.png)
-
-[Schema modificabile Brain, TurboVec e Micelio](DRAW/micelio-turbovec.drawio)
 
 La dashboard mostra raccolte, file ed estratti, legami, nodi attivi/passivi,
 centralità e vitalità. Il valore Affinità o micelioSupportScore indica coerenza
@@ -95,10 +91,8 @@ semantica tra domanda, risposta, fonti e grafo: non è una probabilità di verit
 
 TurboVec è l'acceleratore della ricerca vettoriale. Riceve gli embedding prodotti
 dal Brain e individua rapidamente i candidati più vicini, evitando di confrontare
-ogni documento completo a ogni domanda.
-
-Il flusso visuale completo, dall'embedding fino al ranking Micelio, è disponibile
-qui:
+ogni documento completo a ogni domanda. Il flusso visuale completo, dall'embedding
+fino al ranking Micelio, è disponibile qui:
 
 ![Flusso TurboVec e retrieval](DRAW/micelio-turbovec.png)
 
@@ -227,7 +221,7 @@ AndreaGPT/
 ├─ compose.yaml             Servizi Docker AndreaGPT e SearXNG
 ├─ Dockerfile               Build Node + ambiente Python
 ├─ vite.config.ts           Dev server, proxy API e build frontend
-└─ package.json              Script e dipendenze JavaScript/TypeScript
+└─ package.json             Script e dipendenze JavaScript/TypeScript
 ~~~
 
 

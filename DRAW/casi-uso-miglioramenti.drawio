@@ -1,0 +1,66 @@
+<mxfile host="app.diagrams.net" version="24.7.17">
+  <diagram name="Casi d'uso miglioramenti">
+    <mxGraphModel dx="1300" dy="900" grid="1" gridSize="10" page="1" pageWidth="1300" pageHeight="900" background="#ffffff">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b&gt;AndreaGPT · casi d'uso cambiati dai miglioramenti&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size: 14px&quot;&gt;Ramo miglioramenti-agenti · ogni caso d'uso indica il comportamento nuovo&lt;/font&gt;" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#1e293b;strokeColor=#1e293b;fontColor=#ffffff;fontSize=22;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1220" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="system" value="Sistema AndreaGPT" style="swimlane;html=1;rounded=1;arcSize=3;startSize=34;fillColor=#3c5a99;swimlaneFillColor=#f8fafc;strokeColor=#3c5a99;fontColor=#ffffff;fontSize=16;fontStyle=1;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="260" y="130" width="780" height="740" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc1" value="&lt;b&gt;Salutare con Brain attivo&lt;/b&gt;&lt;br&gt;nessuna ricerca nei documenti,&lt;br&gt;risposta naturale (12,4 s → 1,2 s)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5f0dc;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="30" y="60" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc2" value="&lt;b&gt;Domanda sui documenti&lt;/b&gt;&lt;br&gt;ricerca più veloce (cache SQLite,&lt;br&gt;selezione pigra, TurboVec preriscaldato)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5f0dc;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="30" y="190" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc3" value="&lt;b&gt;Domanda fuori tema&lt;/b&gt;&lt;br&gt;nessuna parola nell'archivio:&lt;br&gt;nessun estratto inventato" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6a02a;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="420" y="190" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc4" value="&lt;b&gt;Scelta automatica del percorso&lt;/b&gt;&lt;br&gt;router: &quot;che tempo fa&quot;, &quot;cerca su Google&quot; → web;&lt;br&gt;a parità preferisce la chat normale" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5f5;strokeColor=#6b4fa3;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="30" y="320" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc5" value="&lt;b&gt;Leggere il report diagnostico&lt;/b&gt;&lt;br&gt;riepilogo in italiano semplice in alto,&lt;br&gt;dettagli tecnici completi in fondo" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#3c5a99;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="420" y="60" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc6" value="&lt;b&gt;Aprire l'app&lt;/b&gt;&lt;br&gt;pagina iniziale più leggera (-49%),&lt;br&gt;Markdown/KaTeX caricati quando servono" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#3c5a99;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="420" y="320" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc7" value="&lt;b&gt;Usare un modello non installato&lt;/b&gt;&lt;br&gt;messaggio con il comando&lt;br&gt;&quot;ollama pull …&quot;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fde2e6;strokeColor=#a8324a;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="30" y="450" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc8" value="&lt;b&gt;Ollama spento&lt;/b&gt;&lt;br&gt;&quot;Ollama non raggiungibile: avvialo&quot;&lt;br&gt;invece di &quot;fetch failed&quot;" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fde2e6;strokeColor=#a8324a;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="420" y="450" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc9" value="&lt;b&gt;Server non raggiungibile&lt;/b&gt;&lt;br&gt;messaggio chiaro in italiano&lt;br&gt;nell'interfaccia" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fde2e6;strokeColor=#a8324a;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="30" y="580" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="uc10" value="&lt;b&gt;Chiamare /api/research&lt;/b&gt;&lt;br&gt;controllo origine e limite&lt;br&gt;di richieste come le altre API" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f1f5f9;strokeColor=#475569;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="system">
+          <mxGeometry x="420" y="580" width="330" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="user" value="Utente" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;strokeColor=#1e293b;strokeWidth=2;fontSize=15;fontStyle=1;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="100" y="420" width="50" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="ollama" value="Ollama" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;strokeColor=#1e293b;strokeWidth=2;fontSize=15;fontStyle=1;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="300" width="50" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="ext" value="Sito esterno" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;strokeColor=#a8324a;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#a8324a;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="690" width="50" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="a1" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a2" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a4" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a7" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc7"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a9" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc9"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a5" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;exitX=1;exitY=0;" edge="1" parent="1" source="user" target="uc5"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="230" y="110"/><mxPoint x="390" y="110"/></Array></mxGeometry></mxCell>
+        <mxCell id="a6" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="user" target="uc6"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="390" y="440"/></Array></mxGeometry></mxCell>
+        <mxCell id="o2" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="ollama" target="uc3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="o7" style="endArrow=none;html=1;strokeColor=#64748b;strokeWidth=1.5;" edge="1" parent="1" source="ollama" target="uc8"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="x1" style="endArrow=none;html=1;strokeColor=#a8324a;strokeWidth=1.5;dashed=1;" edge="1" parent="1" source="ext" target="uc10"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="inc" value="«extend»" style="endArrow=open;endFill=0;html=1;dashed=1;strokeColor=#d6a02a;strokeWidth=1.5;fontSize=12;fontColor=#b07d10;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="uc3" target="uc2"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
