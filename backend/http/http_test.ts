@@ -51,6 +51,8 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   t.after(() => { child.kill(); });
   await Promise.race([once(child.stdout!, "data"), once(child, "exit").then(() => { throw new Error("Server terminato prima dell'avvio"); })]);
   const base = `http://127.0.0.1:${port}`;
+  assert.equal((await fetch(`${base}/api/research`, { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "application/json" }, body: JSON.stringify({ type: "x" }) })).status, 403, "News deve rifiutare origini estranee");
+  assert.equal((await fetch(`${base}/api/research`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ type: "x" }) })).status, 415, "News deve accettare solo JSON");
   const catalog = await fetch(`${base}/api/models`).then((response) => response.json()) as { models: Array<{ id: string }> };
   assert.deepEqual(catalog.models.map((model) => model.id), [
     "openbmb/minicpm5-2b:latest",

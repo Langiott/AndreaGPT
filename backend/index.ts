@@ -125,71 +125,6 @@ function micelioSupportDetails(support: { checked: boolean; score: number; label
   return details;
 }
 
-const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]) });
-app.post("/api/research", express.json({ limit: "1mb" }), async (request, response) => {
-  const parsed = researchSchema.safeParse(request.body);
-  if (!parsed.success) { response.status(400).json({ error: "Tipo di ricerca non valido." }); return; }
-  const clientAbort = new AbortController();
-  request.once("aborted", () => clientAbort.abort());
-  response.once("close", () => { if (!response.writableEnded) clientAbort.abort(); });
-  const operationSignal = (timeoutMs: number) => AbortSignal.any([clientAbort.signal, AbortSignal.timeout(timeoutMs)]);
-  const presets = {
-    ai: { label: "AI News", query: "latest technical AI research new method explainability interpretability robustness evaluation benchmark architecture optimization ablation preprint paper", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "paperswithcode.com", "nature.com", "science.org", "ieee.org", "acm.org", "research.google", "deepmind.google", "ai.meta.com", "microsoft.com/en-us/research"], sources: ["news"] },
-    papers: { label: "Paper scientifici", query: "latest technical scientific papers machine learning computer science methods experiments benchmark ablation quantitative results limitations reproducibility", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "pubmed.ncbi.nlm.nih.gov", "biorxiv.org", "medrxiv.org", "nature.com", "science.org", "pnas.org", "journals.plos.org", "ieee.org", "acm.org"], categories: ["research", "pdf"] },
-    science: { label: "Scienza e Curiosità", query: "latest verified scientific discovery experimental method measurement quantitative result peer reviewed paper physics biology medicine space climate uncertainty", domains: ["nature.com", "science.org", "nasa.gov", "esa.int", "cern.ch", "nih.gov", "who.int", "noaa.gov", "nsf.gov", "pnas.org", "phys.org", "scientificamerican.com"], sources: ["news"] },
-  }[parsed.data.type];
-  const freshnessDate = new Date(Date.now() - (parsed.data.type === "papers" ? 30 : 7) * 24 * 60 * 60_000).toISOString().slice(0, 10);
-  const freshness = `after:${freshnessDate} ${new Date().getUTCFullYear()}`;
-  const curatedQuery = `${presets.query} ${freshness} (${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
-  try {
-    if (!perplexityKey || !firecrawlKey) {
-      const rawSources = JSON.parse(await searchWeb(curatedQuery, operationSignal(45_000))) as Array<{ source: number; title: string; url: string; excerpt: string }>;
-      const cutoff = new Date(Date.now() - (parsed.data.type === "papers" ? 35 : 14) * 24 * 60 * 60_000);
-      const localSources = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, ""), source])).values()].filter(source => sourceIsFresh(source, cutoff)).slice(0, 6).map((source, index) => ({ ...source, source: index + 1 }));
-      if (!localSources.length) throw new Error("Nessuna fonte pertinente trovata. Verifica SearXNG o la connessione Web e riprova.");
-      const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}" usando solo queste fonti locali. Seleziona 4-6 notizie pertinenti. Ogni articolo deve avere titolo informativo, perché conta, problema, metodo/contributo, dati o benchmark, metriche, confronto, risultato, limiti, stato di revisione/preprint e conclusione pratica. Evita titoli vaghi e riassunti di una sola frase. Se un dato manca scrivi "non specificato"; non inventare. Cita solo con [N].\n\n${localSources.map(source => `[${source.source}] ${source.title}\n${source.url}\n${source.excerpt}`).join("\n\n")}`;
-      const normalizedSources = localSources.map(source => ({ id: source.source, title: source.title, url: source.url, description: source.excerpt }));
-      try {
-        const local = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL, stream: false, think: false, keep_alive: "15m", options: { temperature: 0.15, num_ctx: 4096, num_predict: 1200 }, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Non inventare fonti o dati." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi. Mantieni l’intera edizione sotto 1200 token.` }] }), signal: operationSignal(90_000) });
-        if (!local.ok) throw new Error(`Ollama HTTP ${local.status}`);
-        const localData = await local.json() as { message?: { content?: string } };
-        const finalized = finalizeResearchArticle(localData.message?.content || "", presets.label, normalizedSources);
-        response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
-      } catch (error) {
-        if (clientAbort.signal.aborted) throw error;
-        const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore locale non disponibile";
-        console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
-        response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
-      }
-      return;
-    }
-    const search = await upstreamFetch("https://api.firecrawl.dev/v2/search", { method: "POST", headers: { Authorization: `Bearer ${firecrawlKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: curatedQuery, limit: 12, ...(presets.sources ? { sources: presets.sources } : {}), ...(presets.categories ? { categories: presets.categories } : {}), scrapeOptions: { formats: ["markdown"] } }), signal: operationSignal(45_000) });
-    if (!search.ok) throw new Error(`Firecrawl HTTP ${search.status}`);
-    const searchData = await search.json() as { data?: { web?: Array<{ title?: string; url?: string; description?: string; markdown?: string }> } | Array<{ title?: string; url?: string; description?: string; markdown?: string }> };
-    const raw = Array.isArray(searchData.data) ? searchData.data : searchData.data?.web ?? [];
-    const sources = raw.filter(item => item.url).slice(0, 24).map((item, index) => ({ id: index + 1, title: item.title || item.url!, url: item.url!, description: item.description || "", content: item.markdown?.slice(0, 3000) || "" }));
-    if (!sources.length) throw new Error("Firecrawl non ha restituito fonti utilizzabili.");
-    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 4-6 notizie pertinenti. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
-    const normalizedSources = sources.map(({ id, title, url, description }) => ({ id, title, url, description }));
-    try {
-      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 1800, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
-      if (!completion.ok) throw new Error(`Perplexity HTTP ${completion.status}`);
-      const completionData = await completion.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const finalized = finalizeResearchArticle(completionData.choices?.[0]?.message?.content || "", presets.label, normalizedSources);
-      response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
-    } catch (error) {
-      if (clientAbort.signal.aborted) throw error;
-      const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore cloud non disponibile";
-      console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
-      response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
-    }
-  } catch (error) {
-    if (clientAbort.signal.aborted || response.headersSent) return;
-    const message = error instanceof Error ? error.message : "Ricerca non riuscita.";
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message));
-    response.status(timedOut ? 504 : 502).json({ error: timedOut ? "News ha superato il tempo massimo. Verifica Ollama e riprova con il modello già caricato." : message });
-  }
-});
 // Load the document parsers only when Brain is used.
 const brainModulePath = "./brain/brain";
 let brainInstance: ReturnType<typeof import("./brain/brain").createBrain> | undefined;
@@ -264,6 +199,73 @@ app.use((request, response, next) => {
   next();
 });
 app.use(cors({ origin: process.env.NODE_ENV === "production" ? false : /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/ }));
+// Registrata dopo il middleware: origine, host e limite richieste valgono anche per News.
+// Sta prima del parser JSON globale, così il limite di 1 MB resta valido.
+const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]) });
+app.post("/api/research", express.json({ limit: "1mb" }), async (request, response) => {
+  const parsed = researchSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Tipo di ricerca non valido." }); return; }
+  const clientAbort = new AbortController();
+  request.once("aborted", () => clientAbort.abort());
+  response.once("close", () => { if (!response.writableEnded) clientAbort.abort(); });
+  const operationSignal = (timeoutMs: number) => AbortSignal.any([clientAbort.signal, AbortSignal.timeout(timeoutMs)]);
+  const presets = {
+    ai: { label: "AI News", query: "latest technical AI research new method explainability interpretability robustness evaluation benchmark architecture optimization ablation preprint paper", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "paperswithcode.com", "nature.com", "science.org", "ieee.org", "acm.org", "research.google", "deepmind.google", "ai.meta.com", "microsoft.com/en-us/research"], sources: ["news"] },
+    papers: { label: "Paper scientifici", query: "latest technical scientific papers machine learning computer science methods experiments benchmark ablation quantitative results limitations reproducibility", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "pubmed.ncbi.nlm.nih.gov", "biorxiv.org", "medrxiv.org", "nature.com", "science.org", "pnas.org", "journals.plos.org", "ieee.org", "acm.org"], categories: ["research", "pdf"] },
+    science: { label: "Scienza e Curiosità", query: "latest verified scientific discovery experimental method measurement quantitative result peer reviewed paper physics biology medicine space climate uncertainty", domains: ["nature.com", "science.org", "nasa.gov", "esa.int", "cern.ch", "nih.gov", "who.int", "noaa.gov", "nsf.gov", "pnas.org", "phys.org", "scientificamerican.com"], sources: ["news"] },
+  }[parsed.data.type];
+  const freshnessDate = new Date(Date.now() - (parsed.data.type === "papers" ? 30 : 7) * 24 * 60 * 60_000).toISOString().slice(0, 10);
+  const freshness = `after:${freshnessDate} ${new Date().getUTCFullYear()}`;
+  const curatedQuery = `${presets.query} ${freshness} (${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
+  try {
+    if (!perplexityKey || !firecrawlKey) {
+      const rawSources = JSON.parse(await searchWeb(curatedQuery, operationSignal(45_000))) as Array<{ source: number; title: string; url: string; excerpt: string }>;
+      const cutoff = new Date(Date.now() - (parsed.data.type === "papers" ? 35 : 14) * 24 * 60 * 60_000);
+      const localSources = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, ""), source])).values()].filter(source => sourceIsFresh(source, cutoff)).slice(0, 6).map((source, index) => ({ ...source, source: index + 1 }));
+      if (!localSources.length) throw new Error("Nessuna fonte pertinente trovata. Verifica SearXNG o la connessione Web e riprova.");
+      const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}" usando solo queste fonti locali. Seleziona 4-6 notizie pertinenti. Ogni articolo deve avere titolo informativo, perché conta, problema, metodo/contributo, dati o benchmark, metriche, confronto, risultato, limiti, stato di revisione/preprint e conclusione pratica. Evita titoli vaghi e riassunti di una sola frase. Se un dato manca scrivi "non specificato"; non inventare. Cita solo con [N].\n\n${localSources.map(source => `[${source.source}] ${source.title}\n${source.url}\n${source.excerpt}`).join("\n\n")}`;
+      const normalizedSources = localSources.map(source => ({ id: source.source, title: source.title, url: source.url, description: source.excerpt }));
+      try {
+        const local = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL, stream: false, think: false, keep_alive: "15m", options: { temperature: 0.15, num_ctx: 4096, num_predict: 1200 }, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Non inventare fonti o dati." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi. Mantieni l’intera edizione sotto 1200 token.` }] }), signal: operationSignal(90_000) });
+        if (!local.ok) throw new Error(`Ollama HTTP ${local.status}`);
+        const localData = await local.json() as { message?: { content?: string } };
+        const finalized = finalizeResearchArticle(localData.message?.content || "", presets.label, normalizedSources);
+        response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
+      } catch (error) {
+        if (clientAbort.signal.aborted) throw error;
+        const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore locale non disponibile";
+        console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
+        response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
+      }
+      return;
+    }
+    const search = await upstreamFetch("https://api.firecrawl.dev/v2/search", { method: "POST", headers: { Authorization: `Bearer ${firecrawlKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: curatedQuery, limit: 12, ...(presets.sources ? { sources: presets.sources } : {}), ...(presets.categories ? { categories: presets.categories } : {}), scrapeOptions: { formats: ["markdown"] } }), signal: operationSignal(45_000) });
+    if (!search.ok) throw new Error(`Firecrawl HTTP ${search.status}`);
+    const searchData = await search.json() as { data?: { web?: Array<{ title?: string; url?: string; description?: string; markdown?: string }> } | Array<{ title?: string; url?: string; description?: string; markdown?: string }> };
+    const raw = Array.isArray(searchData.data) ? searchData.data : searchData.data?.web ?? [];
+    const sources = raw.filter(item => item.url).slice(0, 24).map((item, index) => ({ id: index + 1, title: item.title || item.url!, url: item.url!, description: item.description || "", content: item.markdown?.slice(0, 3000) || "" }));
+    if (!sources.length) throw new Error("Firecrawl non ha restituito fonti utilizzabili.");
+    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 4-6 notizie pertinenti. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
+    const normalizedSources = sources.map(({ id, title, url, description }) => ({ id, title, url, description }));
+    try {
+      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 1800, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
+      if (!completion.ok) throw new Error(`Perplexity HTTP ${completion.status}`);
+      const completionData = await completion.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const finalized = finalizeResearchArticle(completionData.choices?.[0]?.message?.content || "", presets.label, normalizedSources);
+      response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
+    } catch (error) {
+      if (clientAbort.signal.aborted) throw error;
+      const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore cloud non disponibile";
+      console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
+      response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
+    }
+  } catch (error) {
+    if (clientAbort.signal.aborted || response.headersSent) return;
+    const message = error instanceof Error ? error.message : "Ricerca non riuscita.";
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message));
+    response.status(timedOut ? 504 : 502).json({ error: timedOut ? "News ha superato il tempo massimo. Verifica Ollama e riprova con il modello già caricato." : message });
+  }
+});
 app.use("/api/brain/upload", express.json({ limit: "270mb" }));
 app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.json({ limit: "140mb" }));
 app.use(express.json({ limit: "60mb" }));
