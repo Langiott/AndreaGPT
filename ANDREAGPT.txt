@@ -16,8 +16,45 @@ git push -u origin stabile
 
 git add -A
 git status
-git commit -m "Aggiorna 01/10  PM " 
-git push private stabile:stabile
+git commit -m "Aggiorna 01/10  PM "
+git push origin stabile
+
+--------------------------------------------------------------------------------
+
+DUE PC (A e B): PRENDERE I FILE NUOVI DALL'ALTRO PC
+
+Regola: a fine lavoro su un PC → commit + push. Sull'altro PC, prima di lavorare → pull.
+
+Sul PC che ha le modifiche (es. A):
+	cd ~/Desktop/AndreaGPT2
+	git add -A
+	git commit -m "Aggiorna GG/MM"
+	git push origin stabile
+
+Sul PC che deve riceverle (es. B):
+	cd ~/Desktop/AndreaGPT2
+	git status                      → controlla di essere su "stabile" e cosa hai di modificato
+	git switch stabile              → solo se sei su un altro ramo
+	git fetch origin                → scarica le novità senza toccare i file
+	git log --oneline HEAD..origin/stabile   → mostra i commit nuovi arrivati da A
+	git pull origin stabile         → applica le novità
+
+	Se git status mostra file modificati anche su B:
+		- da tenere  → git add -A && git commit -m "Lavoro su B" e poi git pull origin stabile
+		- da mettere da parte → git stash, git pull origin stabile, git stash pop
+		- da buttare → git restore . (ATTENZIONE: perdi le modifiche di B)
+
+	Se il pull dice CONFLICT:
+		→ apri i file indicati, scegli le righe giuste tra <<<<<<< ======= >>>>>>>
+		→ git add -A && git commit
+		→ per annullare tutto e tornare a prima del pull: git merge --abort
+
+Dopo il pull:
+	npm install                     → solo se sono cambiati package.json / package-lock.json
+	riavvia AndreaGPT (ferma e avvia) → il server carica il codice nuovo
+
+Nota: i documenti caricati nel Brain e i modelli Ollama NON passano con git:
+vanno caricati/scaricati su ogni PC.
 
 --------------------------------------------------------------------------------
 
