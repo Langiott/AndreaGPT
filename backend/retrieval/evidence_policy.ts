@@ -8,6 +8,15 @@ export function evidenceIntent(query: string) {
   return { formulas, detailed };
 }
 
+// Parole di cortesia: un messaggio fatto solo di queste è un saluto, non una domanda.
+const SMALL_TALK = new Set(["ciao", "salve", "buongiorno", "buonasera", "buonanotte", "hey", "hello", "hi", "grazie", "mille", "ok", "okay", "perfetto", "va", "bene", "come", "stai", "tutto", "chi", "sei"]);
+
+/** Saluti e ringraziamenti brevi ("ciao", "grazie mille") non richiedono una ricerca nel Brain. */
+export function isSmallTalk(query: string): boolean {
+  const tokens = retrievalTokens(query);
+  return tokens.length >= 1 && tokens.length <= 4 && tokens.every(token => SMALL_TALK.has(token));
+}
+
 /** Riconosce una richiesta di definizione senza legarla a un dominio specifico. */
 export function isDefinitionQuery(query: string): boolean {
   const normalized = query.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();

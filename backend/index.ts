@@ -19,6 +19,7 @@ import { assessCitations, assessOutputLanguage, createDiagnosticTrace } from "./
 import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "../frontend/config/language";
 import { compactEvidence } from "./grounding/evidence";
 import { extractSearchQuery } from "./search/search_query";
+import { isSmallTalk } from "./retrieval/evidence_policy";
 import { JsonLineWorker } from "./utils/json_line_worker";
 import { CodeWorkspace } from "./code/code_workspace";
 import { runCodeAgent } from "./code/code_agent";
@@ -1028,6 +1029,8 @@ app.post("/api/chat", async (request, response) => {
     let requestBrain: Awaited<ReturnType<typeof brainModule>> | undefined;
     const retrievalContext: import("./brain/brain").BrainSearchContext = { metrics: {} };
     const searchQuery = extractSearchQuery(parsed.data.messages);
+    // Un saluto non cerca nel Brain: il modello risponde in modo naturale, senza fonti a caso.
+    if (effectiveBrain && isSmallTalk(searchQuery)) { effectiveBrain = false; trace.add({ stage: "rag", status: "info", message: "Saluto o messaggio di cortesia: nessuna ricerca nel Brain." }); }
     if (effectiveBrain) {
       try {
         const brain = await brainModule();

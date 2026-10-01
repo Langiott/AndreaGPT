@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evidenceFormatBoost, evidenceIntent, isDefinitionQuery, mathSpans, selectEvidence } from "./evidence_policy";
+import { evidenceFormatBoost, evidenceIntent, isDefinitionQuery, isSmallTalk, mathSpans, selectEvidence } from "./evidence_policy";
+
+test("saluti e ringraziamenti non avviano la ricerca; le domande vere sì", () => {
+  for (const q of ["CIAO", "buongiorno", "salve", "grazie mille", "ok", "perfetto grazie", "ciao come stai?"]) assert.equal(isSmallTalk(q), true, q);
+  for (const q of ["ciao, cos'è HDFS?", "Cos'è HDFS?", "come si valuta un classificatore?", "Spark e RDD", "", "?"]) assert.equal(isSmallTalk(q), false, q);
+});
 
 test("a descriptive procedure needs no equations; a math request prefers actual formulas", () => {
   assert.deepEqual(evidenceIntent("Descrivi il metodo di intervista"), { detailed: true, formulas: false });
