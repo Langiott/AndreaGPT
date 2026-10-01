@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 /**
  * Pagina principale della chat AndreaGPT.
  * Collega conversazioni, Brain, Web, file, modelli e strumenti locali.
@@ -50,11 +50,6 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import "katex/dist/katex.min.css";
 import mascotUrl from "../../img/mascotte-no-sfondo.png";
 import { TASKS } from "../utils/data";
 import { downloadConverted, type Converted } from "../utils/converted";
@@ -78,6 +73,9 @@ const iconByName = {
 const BrainPanel = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainPanel })));
 const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => ({ default: module.BrainGraph })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
+// Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
+const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.MarkdownMessage })));
+const NewspaperMarkdown = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.NewspaperMarkdown })));
 
 function YoloIcon({ size = 17 }: { size?: number }) {
   return <span className="yolo-symbol" aria-hidden="true"><Square size={size} /><X size={Math.max(10, Math.round(size * 0.62))} /></span>;
@@ -209,52 +207,12 @@ function comfyBrowserUrl() {
   return `http://${wrapped}:8188`;
 }
 
-function normalizeMathMarkdown(markdown: string) {
-  // remark-math gestisce già `$...$` e `$$...$$`. Convertiamo soltanto le
-  // delimitazioni LaTeX esplicite che Ollama usa spesso, senza trasformare
-  // intere righe di testo: una riga come "Dove: ... \\eta ..." non è una
-  // formula e non deve inglobare tutto il Markdown successivo.
-  return markdown.split(/(```[\s\S]*?```|`[^`\n]+`)/g).map((part, index) => {
-    if (index % 2) return part;
-
-    const normalized = part
-      .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => `\n$$\n${body.trim()}\n$$\n`)
-      .replace(/\\\(([\s\S]*?)\\\)/g, (_match, body: string) => `$${body}$`);
-
-    // Alcuni modelli emettono una formula display come [ ... ] senza backslash.
-    // Riconosciamo solo il blocco su righe separate, così i link Markdown
-    // [testo](url) restano intatti.
-    const lines = normalized.split("\n");
-    const output: string[] = [];
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-      if (lines[lineIndex].trim() === "[" && lineIndex + 2 < lines.length) {
-        const closingIndex = lines.findIndex((candidate, index) => index > lineIndex && candidate.trim() === "]");
-        if (closingIndex > lineIndex + 1) {
-          const body = lines.slice(lineIndex + 1, closingIndex).join("\n").trim();
-          if (/\\[A-Za-z]+|[=^_{}]/.test(body)) {
-            output.push("$$", body, "$$");
-            lineIndex = closingIndex;
-            continue;
-          }
-        }
-      }
-      output.push(lines[lineIndex]);
-    }
-    return output.join("\n");
-  }).join("");
-}
-
 function isChatListModel(model: ModelInfo) {
   const id = model.id.toLowerCase();
   if (id.startsWith("nomic-embed-text")) return false;
   if (id.includes("qwen3-coder") && id.includes("30b")) return false;
   return true;
 }
-
-const MarkdownMessage = memo(function MarkdownMessage({ content, privateMode }: { content: string; privateMode: boolean }) {
-  const components = privateMode ? { img: ({ alt }: { alt?: string }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined;
-  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]} components={components}>{normalizeMathMarkdown(content)}</ReactMarkdown>;
-});
 
 const DEFAULT_INSTRUCTIONS: CustomInstruction[] = [
   { id: "generali", title: "Generali", enabled: true, text: "Rispondi in italiano.\nSii chiaro, concreto e accurato.\nNiente parolacce o frasi volgari non richieste." },
@@ -1582,7 +1540,7 @@ export default function App() {
                     {message.generatedImage && <a className="generated-image" href={message.generatedImage.url} download={message.generatedImage.name} title="Scarica immagine"><img src={message.generatedImage.url} alt={message.content || "Immagine generata"} /></a>}
                     {message.generatedFile && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
-                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
                     {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><MicelioScore message={message} /><span className="brain-feedback" aria-label="Valuta la risposta Brain"><button className={message.feedback === 1 ? "active" : ""} type="button" onClick={() => void rateBrainMessage(message, messageIndex, 1)} title="Risposta utile: rafforza queste fonti"><ThumbsUp size={14} /></button><button className={message.feedback === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainMessage(message, messageIndex, -1)} title="Risposta errata: segnala un disallineamento semantico e penalizza queste fonti"><ThumbsDown size={14} /></button></span></> : null}</div>
                     {message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
                     {message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
@@ -1695,7 +1653,7 @@ export default function App() {
           {researchResult && <button className="download-research" onClick={downloadResearchEdition}><Download size={14} /> Scarica giornale</button>}
           <button className="fullscreen-research" onClick={() => void toggleResearchFullscreen()}>{researchFullscreen ? <Minimize size={14} /> : <Maximize size={14} />} {researchFullscreen ? "Finestra" : "Schermo intero"}</button>
         </div>
-        {researchLoading ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchSeconds < 20 ? "Ricerca e selezione delle fonti…" : researchSeconds < 60 ? "Le fonti sono in elaborazione…" : "Il modello sta componendo l’edizione. Con Ollama locale il primo avvio può richiedere alcuni minuti."}</span><small>Puoi interrompere senza bloccare le altre funzioni.</small></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><ReactMarkdown remarkPlugins={[remarkGfm]}>{pages[page]}</ReactMarkdown>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
+        {researchLoading ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchSeconds < 20 ? "Ricerca e selezione delle fonti…" : researchSeconds < 60 ? "Le fonti sono in elaborazione…" : "Il modello sta componendo l’edizione. Con Ollama locale il primo avvio può richiedere alcuni minuti."}</span><small>Puoi interrompere senza bloccare le altre funzioni.</small></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
       </Modal>}
       {renameDialog && <Modal title="Rinomina conversazione" compact onClose={() => setRenameDialog(null)}><label className="dialog-field">Nome conversazione<input autoFocus maxLength={60} value={renameDialog.title} onChange={event => setRenameDialog({ ...renameDialog, title: event.target.value })} /></label><div className="dialog-actions"><button className="secondary-action" onClick={() => setRenameDialog(null)}>Annulla</button><button className="primary-action" onClick={() => { const title = renameDialog.title.trim(); if (title) setConversations(current => current.map(item => item.id === renameDialog.id ? { ...item, title, customTitle: true } : item)); setRenameDialog(null); }}>Salva</button></div></Modal>}
       {brainGraphOpen && <Suspense fallback={<div className="thinking">Caricamento grafo…</div>}><BrainGraph onClose={() => setBrainGraphOpen(false)} onUse={(source) => { setBrainSource(source); setBrainEnabled(true); setBrainGraphOpen(false); }} /></Suspense>}
