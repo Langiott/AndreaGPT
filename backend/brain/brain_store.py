@@ -20,7 +20,7 @@ def unit(v):
     return np.ascontiguousarray(v / norms)
 
 
-def build(source, output, dimensions=(384, 256), graph=True):
+def build(source, output, dimensions=(384, 256)):
     from turbovec import IdMapIndex
     began = time.perf_counter()
     source = Path(source)
@@ -37,7 +37,6 @@ def build(source, output, dimensions=(384, 256), graph=True):
       CREATE TABLE chunks (id INTEGER PRIMARY KEY, path TEXT NOT NULL, data TEXT NOT NULL, vector BLOB NOT NULL);
       CREATE INDEX chunk_paths ON chunks(path);
       CREATE VIRTUAL TABLE passages USING fts5(path, section, text, tokenize='unicode61 remove_diacritics 2');
-      CREATE TABLE edges (source INTEGER, target INTEGER, similarity REAL, PRIMARY KEY(source,target));
       CREATE TABLE files (path TEXT PRIMARY KEY, count INTEGER);
       CREATE VIRTUAL TABLE vocabulary USING fts5vocab(passages, 'row');
     """)
@@ -68,14 +67,6 @@ def build(source, output, dimensions=(384, 256), graph=True):
             np.savez(generation / f"pca-{dimension}.npz", mean=mean, components=components[:, :dimension])
         variants[str(dimension)] = {"bytes": (generation / f"vectors-{dimension}.tvim").stat().st_size,
             "variance": 1.0 if dimension == vectors.shape[1] else float(eigenvalues[-dimension:].sum()/eigenvalues.sum())}
-        if graph and dimension == vectors.shape[1]:
-            for offset in range(0, len(vectors), 128):
-                _, ids = index.search(vectors[offset:offset+128], k=min(9,len(vectors)))
-                for row, neighbors in enumerate(ids):
-                    i = offset + row
-                    scored = sorted(((int(j), float(vectors[i] @ vectors[int(j)])) for j in neighbors if int(j) != i and int(j) >= 0), key=lambda v: -v[1])[:4]
-                    db.executemany("INSERT OR IGNORE INTO edges VALUES(?,?,?)", [(i,j,s) for j,s in scored if s >= .58])
-            db.commit()
     db.close()
     after = source.stat()
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
@@ -83,7 +74,7 @@ def build(source, output, dimensions=(384, 256), graph=True):
     manifest = {"schema": 1, "generation": generation.name, "updatedAt": brain["updatedAt"], "model": brain["model"],
         "sourceSize": after.st_size, "sourceMtimeMs": after.st_mtime_ns / 1e6,
         "dimension": int(vectors.shape[1]), "count": len(chunks), "files": len(brain["files"]), "errors": brain["errors"],
-        "variants": variants, "graph": graph, "buildMs": round((time.perf_counter()-began)*1000)}
+        "variants": variants, "buildMs": round((time.perf_counter()-began)*1000)}
     temporary = root / (uuid.uuid4().hex + ".json")
     temporary.write_text(json.dumps(manifest), encoding="utf-8")
     os.replace(temporary, root / "active.json")
@@ -94,6 +85,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--no-graph", action="store_true")
     args = parser.parse_args()
-    build(args.source, args.output, graph=not args.no_graph)
+    build(args.source, args.output)

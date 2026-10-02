@@ -98,19 +98,23 @@ export function AppearanceSettings({ appearance }: { appearance: ReturnType<type
   const { preferences, pictures, update, add, remove, error, busy } = appearance;
   const [pinMode, setPinMode] = useState(false);
   return <>
-    <details className="settings-section appearance-settings settings-collapse">
-      <summary className="settings-collapse-title"><span><strong>Testo della chat</strong><SettingsInfo text="Anteprima immediata nei messaggi e nella barra di scrittura." /></span><ChevronDown size={15} /></summary>
-      <label>Carattere<select value={preferences.font} onChange={e => update({ ...preferences, font: e.target.value as keyof typeof fonts })}><option value="mono">Geist Mono · originale</option><option value="system">Arial · semplice</option><option value="serif">Georgia · classico</option></select></label>
-      <label>Dimensione: {preferences.size} px<input type="range" min="12" max="24" step="1" value={preferences.size} onChange={e => update({ ...preferences, size: Number(e.target.value) })} /></label>
-      <p style={{ fontFamily: fonts[preferences.font], fontSize: preferences.size }}>Il tuo prossimo viaggio inizia con una domanda.</p>
+    <details className="settings-row">
+      <summary><span>Testo della chat</span><ChevronDown size={15} /></summary>
+      <div className="settings-body">
+        <label className="settings-line"><span>Carattere</span><select value={preferences.font} onChange={e => update({ ...preferences, font: e.target.value as keyof typeof fonts })}><option value="mono">Geist Mono</option><option value="system">Arial</option><option value="serif">Georgia</option></select></label>
+        <label className="settings-line"><span>Dimensione</span><span className="settings-range"><input type="range" min="12" max="24" step="1" value={preferences.size} onChange={e => update({ ...preferences, size: Number(e.target.value) })} /><output>{preferences.size}px</output></span></label>
+        <p className="settings-preview" style={{ fontFamily: fonts[preferences.font], fontSize: preferences.size }}>Il tuo prossimo viaggio inizia con una domanda.</p>
+      </div>
     </details>
-    <details className="settings-section appearance-settings settings-collapse">
-      <summary className="settings-collapse-title"><span><strong>Sfondi della chat</strong><SettingsInfo text="Le immagini cambiano ogni 5 minuti. Con Fissa puoi scegliere uno sfondo permanente." /></span><span className="background-actions"><label className="background-action"><span>Carica</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={busy} onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ""; void add(files); }} /></label><button type="button" className={pinMode ? "active" : ""} onClick={e => { e.preventDefault(); setPinMode(value => !value); }}><Pin size={13} /> Fissa</button><ChevronDown size={15} /></span></summary>
-      {busy && <p role="status">Salvataggio immagini…</p>}
-      {error && <p role="alert">{error}</p>}
-      <div className={`background-gallery ${pinMode ? "pin-mode" : ""}`}>{pictures.map(picture => <div key={picture.id} className={preferences.pinned === picture.id ? "pinned" : ""}><button type="button" className="background-preview" disabled={busy} onClick={() => pinMode && update({ ...preferences, pinned: preferences.pinned === picture.id ? undefined : picture.id })}><img src={picture.url} alt={picture.name} loading="lazy" />{preferences.pinned === picture.id && <span className="background-pin-badge" title="Sfondo fissato"><Pin size={12} fill="currentColor" /></span>}</button><div className="background-card-actions"><span>{picture.name}</span><button type="button" disabled={busy} aria-label={`Elimina sfondo ${picture.name}`} onClick={() => void remove(picture)}>Elimina</button></div></div>)}</div>
-      {!pictures.length && <p>Nessuno sfondo: la chat usa il colore del tema.</p>}
-      {!!preferences.hidden.length && <button type="button" onClick={() => update({ ...preferences, hidden: [] })}>Ripristina sfondi originali</button>}
+    <details className="settings-row">
+      <summary><span>Sfondi della chat</span><span className="settings-pair"><label className="settings-small-button" onClick={e => e.stopPropagation()}>Carica<input type="file" hidden accept="image/jpeg,image/png,image/webp,image/gif,image/avif" multiple disabled={busy} onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ""; void add(files); }} /></label><button type="button" className={`settings-small-button${pinMode ? " active" : ""}`} onClick={e => { e.preventDefault(); setPinMode(value => !value); }}><Pin size={12} /> Fissa</button><ChevronDown size={15} /></span></summary>
+      <div className="settings-body">
+        {busy && <p className="settings-empty" role="status">Salvataggio immagini…</p>}
+        {error && <p className="settings-empty" role="alert">{error}</p>}
+        <div className={`background-gallery ${pinMode ? "pin-mode" : ""}`}>{pictures.map(picture => <div key={picture.id} className={preferences.pinned === picture.id ? "pinned" : ""}><button type="button" className="background-preview" disabled={busy} onClick={() => pinMode && update({ ...preferences, pinned: preferences.pinned === picture.id ? undefined : picture.id })}><img src={picture.url} alt={picture.name} loading="lazy" />{preferences.pinned === picture.id && <span className="background-pin-badge" title="Sfondo fissato"><Pin size={12} fill="currentColor" /></span>}</button><div className="background-card-actions"><span>{picture.name}</span><button type="button" className="settings-small-button" disabled={busy} aria-label={`Elimina sfondo ${picture.name}`} onClick={() => void remove(picture)}>Elimina</button></div></div>)}</div>
+        {!pictures.length && <p className="settings-empty">Nessuno sfondo: colore del tema.</p>}
+        {!!preferences.hidden.length && <button type="button" className="settings-small-button" onClick={() => update({ ...preferences, hidden: [] })}>Ripristina originali</button>}
+      </div>
     </details>
   </>;
 }

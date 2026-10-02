@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -23,15 +23,21 @@ interface BrainDocument {
   content: string;
 }
 
+/** Formula breve senza relazioni o frazioni: un simbolo o il nome di un parametro. */
+const isShortFormula = (body: string) => body.trim().length <= 16 && !/[=<>\n]|\\(?:frac|sum|int|prod|begin)/.test(body.trim());
+
 function normalizeDocumentMath(markdown: string) {
   // I documenti estratti da PDF/Word usano spesso delimitatori LaTeX
   // espliciti, che remark-math non interpreta direttamente.
   return markdown.split(/(```[\s\S]*?```|`[^`\n]+`)/g).map((part, index) => {
     if (index % 2) return part;
     return part
-      .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => `\n$$\n${body.trim()}\n$$\n`)
+      // Un simbolo isolato (es. \[\epsilon\]) resta in riga: un blocco centrato spreca spazio.
+      .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => isShortFormula(body) ? `$${body.trim()}$` : `\n$$\n${body.trim()}\n$$\n`)
       .replace(/\\\(([\s\S]*?)\\\)/g, (_match, body: string) => `$${body}$`)
-      .replace(/\\begin\{(equation\*?|align\*?|gather\*?)\}([\s\S]*?)\\end\{\1\}/g, (_match, _environment: string, body: string) => `\n$$\n${body.trim()}\n$$\n`);
+      .replace(/\\begin\{(equation\*?|align\*?|gather\*?)\}([\s\S]*?)\\end\{\1\}/g, (_match, _environment: string, body: string) => `\n$$\n${body.trim()}\n$$\n`)
+      // Simbolo in riga rimasto da solo: si unisce alla frase che lo descrive ("ε che rappresenta…").
+      .replace(/(^|\n)[ \t]*(\$[^$\n]+\$)[ \t]*\n[ \t]*\n(?=[^\s#>|`$*+\-\d])/g, (_match, start: string, formula: string) => `${start}${formula} `);
   }).join("");
 }
 
@@ -48,9 +54,12 @@ function ownListItemText(item: Element) {
   return [...item.childNodes].filter(node => !(node instanceof Element && (node.tagName === "UL" || node.tagName === "OL"))).map(node => node.textContent ?? "").join(" ");
 }
 
-function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBack: () => void; onClose?: () => void }) {
+/** Lettore Markdown dell'archivio. Con `url` legge altrove (es. OUTPUT); `onSave` e `onDelete` abilitano modifica ed eliminazione. */
+export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = "Torna all’archivio", onSave, onDelete }: { source: string; onBack: () => void; onClose?: () => void; url?: string; backLabel?: string; onSave?: (content: string) => Promise<void>; onDelete?: () => void }) {
   const [fileDocument, setFileDocument] = useState<BrainDocument | null>(null);
   const [error, setError] = useState("");
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [outline, setOutline] = useState<OutlineItem[]>([]);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -174,13 +183,21 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
 
   useEffect(() => {
     const controller = new AbortController();
-    setFileDocument(null); setError("");
-    void fetch(`/api/brain/document?source=${encodeURIComponent(source)}`, { signal: controller.signal })
+    setFileDocument(null); setError(""); setDraft(null);
+    void fetch(url ?? `/api/brain/document?source=${encodeURIComponent(source)}`, { signal: controller.signal })
       .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error || "Documento non disponibile."); return data as BrainDocument; })
       .then(setFileDocument)
       .catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Documento non disponibile."); });
     return () => controller.abort();
-  }, [source]);
+  }, [source, url]);
+
+  async function save() {
+    if (draft === null || !fileDocument || !onSave) return;
+    setSaving(true); setError("");
+    try { await onSave(draft); setFileDocument({ ...fileDocument, content: draft }); setDraft(null); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Salvataggio non riuscito."); }
+    finally { setSaving(false); }
+  }
 
   useEffect(() => {
     const update = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -192,11 +209,12 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
       if (event.key === "Escape" && event.target === searchRef.current) return;
+      if (event.key === "Escape" && draft !== null) return;
       if (event.key === "Escape" && !document.fullscreenElement) onBack();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onBack]);
+  }, [onBack, draft]);
 
   async function toggleFullscreen() {
     try {
@@ -207,7 +225,7 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
 
   return <section className="brain-document-reader" ref={readerRef}>
     <div className="brain-document-toolbar">
-      <button type="button" className="brain-document-back" onClick={onBack} title="Torna all’archivio"><ArrowLeft size={16} /> <span>Torna all’archivio</span></button>
+      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel}><ArrowLeft size={16} /> <span>{backLabel}</span></button>
       <div className="brain-document-heading"><FileText size={16} /><strong title={fileDocument?.source ?? source}>{fileDocument?.name ?? source.split("/").at(-1)}</strong><small>{fileDocument?.extension.replace(".", "").toUpperCase() || "Documento"}</small></div>
       <div className="brain-document-actions">
         <div className="brain-document-search" role="search">
@@ -219,6 +237,10 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
           <button type="button" disabled={!matches.length} onClick={() => stepMatch(1)} aria-label="Risultato successivo" title="Successivo (Invio)"><ChevronDown size={15} /></button>
         </div>
         <button type="button" className={outlineOpen ? "is-active" : undefined} disabled={!outline.length} onClick={() => setOutlineOpen(open => !open)} aria-expanded={outlineOpen} aria-label="Indice del documento" title="Indice"><ListTree size={16} /></button>
+        {onSave && fileDocument && (draft === null
+          ? <button type="button" onClick={() => setDraft(fileDocument.content)} aria-label="Modifica" title="Modifica"><Pencil size={15} /></button>
+          : <><button type="button" className="is-active" disabled={saving} onClick={() => void save()} aria-label="Salva" title="Salva"><Save size={15} /></button><button type="button" disabled={saving} onClick={() => setDraft(null)} aria-label="Annulla modifiche" title="Annulla modifiche"><Undo2 size={15} /></button></>)}
+        {onDelete && <button type="button" className="brain-document-delete" onClick={onDelete} aria-label="Elimina definitivamente" title="Elimina definitivamente"><Trash2 size={15} /></button>}
         <button type="button" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Esci da schermo intero" : "Schermo intero"} title={fullscreen ? "Esci da schermo intero" : "Schermo intero"}>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
         {onClose && <button type="button" onClick={onClose} aria-label="Chiudi documento" title="Chiudi"><X size={17} /></button>}
       </div>
@@ -228,7 +250,8 @@ function BrainDocumentReader({ source, onBack, onClose }: { source: string; onBa
       <ol>{outline.map(item => <li key={item.id}><button type="button" className={item.id === activeHeading ? "is-active" : undefined} style={{ paddingLeft: 10 + item.level * 14 }} data-level={item.level} onClick={() => scrollToHeading(item.id)} title={item.text}>{item.text}</button></li>)}</ol>
     </nav>}
     <div className="brain-document-body" ref={bodyRef}>
-      {error ? <div className="brain-document-error" role="alert"><strong>Impossibile aprire il documento</strong><span>{error}</span><button type="button" onClick={onBack}>Torna all’archivio</button></div>
+      {error && draft === null ? <div className="brain-document-error" role="alert"><strong>Impossibile aprire il documento</strong><span>{error}</span><button type="button" onClick={onBack}>{backLabel}</button></div>
+        : draft !== null ? <>{error && <p className="error-banner" role="alert">{error}</p>}<textarea className="brain-document-editor" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} autoFocus aria-label="Testo Markdown" /></>
         : !fileDocument ? <p className="brain-document-loading" role="status">Apro il documento…</p>
           : <article className="brain-document-content" ref={articleRef} onClick={handleArticleClick}><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]}>{normalizeDocumentMath(fileDocument.content)}</ReactMarkdown></article>}
     </div>
@@ -258,7 +281,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
       }
       const response = await fetch("/api/brain/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: payload, preset: presetId }) }); const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Caricamento fallito.");
-      setStatus(data); onSource(""); setUploadMessage(`${files.length} file caricati. Indicizzazione completata.${data.errors?.length ? " Alcuni documenti presentano errori: consulta l'elenco sotto." : ""}`);
+      setStatus(data); onSource(""); setUploadMessage("");
     } catch (caught) { setUploadMessage(""); setError(caught instanceof Error ? caught.message : "Caricamento fallito."); } finally { setBusy(false); setUploading(false); }
   }
 
@@ -291,10 +314,12 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
     <div id="brain-info" className="brain-info" hidden={!showInfo}><div className="brain-overview"><div><strong>{status?.files ?? 0}</strong><span>Fonti indicizzate</span></div><div><strong>{status?.chunks ?? 0}</strong><span>Estratti disponibili</span></div><div><strong>{groups.length}</strong><span>Raccolte</span></div></div><dl><dt>Ultimo aggiornamento</dt><dd>{status?.indexedAt ? new Date(status.indexedAt).toLocaleString("it-IT") : "Indice non ancora creato"}</dd><dt>Fonti locali</dt><dd>{status?.root ?? "Caricamento…"}</dd><dt>Embedding</dt><dd>{status?.model ?? "Caricamento…"}</dd><dt>TurboVec</dt><dd>{status?.turboVec?.ready ? `Attivo · ${status.turboVec.count?.toLocaleString("it-IT")} vettori` : status?.turboVec?.building ? "Elaborazione in corso…" : "Fallback JSON attivo"}</dd></dl><p><strong>Carica</strong> aggiunge documenti e li indicizza. <strong>Ripristina indice</strong> ricostruisce l'indice Brain già esistente.</p></div>
     {headerToolbarTarget ? createPortal(toolbar, headerToolbarTarget) : toolbar}
     <details className="brain-summary" open><summary><span><Database size={15} />Riepilogo</span><ChevronDown size={15} /></summary><div className="brain-summary-grid"><div><strong>{status?.files ?? 0}</strong><span>File</span></div><div><strong>{(status?.chunks ?? 0).toLocaleString("it-IT")}</strong><span>Embedding</span></div><div><strong>{status?.turboVec?.count != null ? status.turboVec.count.toLocaleString("it-IT") : "—"}</strong><span>Vettori indice</span></div><div><strong>{groups.length}</strong><span>Raccolte</span></div></div></details>
-    <div className="brain-secondary-grid"><details className="brain-import"><summary><span><GitBranch size={15} />Carica repository</span><ChevronDown size={15} /></summary><form className="brain-github" onSubmit={event => { event.preventDefault(); void run("import"); }}><GitBranch size={17} aria-hidden="true" /><input aria-label="Repository o profilo GitHub pubblico" type="url" required maxLength={500} value={url} onChange={event => setUrl(event.target.value)} placeholder="Repository o profilo GitHub pubblico" /><button className="primary-action" disabled={busy || locked || !url.trim()}>Importa</button></form></details>
-    {uploadMessage && <p className="brain-note" role="status">{uploadMessage}</p>}{(busy || status?.indexing) && <p role="status" className="brain-status">{`Operazione in corso: ${status?.progress?.phase ?? "avvio"}${status?.progress?.total ? ` ${status.progress.completed}/${status.progress.total}` : ""}`}</p>}{(busy || status?.indexing) && status?.progress && <div><progress max={Math.max(1, status.progress.total)} value={status.progress.completed} /><p className="brain-note">{status.progress.current ?? "Preparazione indice…"}</p></div>}{(error || status?.error) && <p className="error-banner" role="alert">{error || status?.error}</p>}
+    {(busy || status?.indexing) && <section className="brain-progress-card" role="status">{uploading && uploadMessage && <p className="brain-note">{uploadMessage}</p>}<p className="brain-status">{`Operazione in corso: ${status?.progress?.phase ?? "avvio"}${status?.progress?.total ? ` ${status.progress.completed}/${status.progress.total}` : ""}`}</p>{status?.progress && <><progress max={Math.max(1, status.progress.total)} value={status.progress.completed} /><p className="brain-note">{status.progress.current ?? "Preparazione indice…"}</p></>}</section>}
+    {(error || status?.error) && <p className="error-banner" role="alert">{error || status?.error}</p>}
     {deleteTarget && <section className="brain-delete-warning" role="alert"><div><strong>Eliminazione solo dal Brain</strong><span><code>{deleteTarget}</code> verrà tolto dall’indice, ma resterà nella cartella di archivio. Se reindicizzi il Brain, potrà ricomparire.</span></div><button type="button" aria-label="Annulla eliminazione" onClick={() => setDeleteTarget(null)}><X size={16} /></button><div className="brain-delete-actions"><button type="button" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Annulla</button><button type="button" onClick={() => void deleteSource()} disabled={deleteBusy}>{deleteBusy ? "Elimino…" : "Conferma elimina"}</button></div></section>}
-    {source && <div className="brain-filter-row"><span>Filtro attivo: <strong>{source}</strong></span><button aria-label="Rimuovi filtro" onClick={() => onSource("")} disabled={locked}>×</button></div>}    {!!status?.errors?.length && !dismissedWarnings && <details className="brain-warning"><summary><span><strong>{status.errors.length} warning archivio</strong><small>Puoi chiuderli: i file validi restano indicizzati.</small></span><ChevronDown size={15} /></summary><ul className="brain-source-list">{status.errors.map((item, index) => <li key={`${item.path}-${index}`}><strong>{item.path}</strong>: {item.error}</li>)}</ul><button type="button" className="brain-warning-dismiss" onClick={() => setDismissedWarnings(true)}>Nascondi warning</button></details>}
+    {source && <div className="brain-filter-row"><span>Filtro attivo: <strong>{source}</strong></span><button aria-label="Rimuovi filtro" onClick={() => onSource("")} disabled={locked}>×</button></div>}
+    <div className="brain-secondary-grid"><details className="brain-import"><summary><span><GitBranch size={15} />Carica repository</span><ChevronDown size={15} /></summary><form className="brain-github" onSubmit={event => { event.preventDefault(); void run("import"); }}><GitBranch size={17} aria-hidden="true" /><input aria-label="Repository o profilo GitHub pubblico" type="url" required maxLength={500} value={url} onChange={event => setUrl(event.target.value)} placeholder="Repository o profilo GitHub pubblico" /><button className="primary-action" disabled={busy || locked || !url.trim()}>Importa</button></form></details>
+    {!!status?.errors?.length && !dismissedWarnings && <details className="brain-warning"><summary><span><strong>{status.errors.length} warning archivio</strong><small>Puoi chiuderli: i file validi restano indicizzati.</small></span><ChevronDown size={15} /></summary><ul className="brain-source-list">{status.errors.map((item, index) => <li key={`${item.path}-${index}`}><strong>{item.path}</strong>: {item.error}</li>)}</ul><button type="button" className="brain-warning-dismiss" onClick={() => setDismissedWarnings(true)}>Nascondi warning</button></details>}
     </div>
     <details className="brain-browser" open><summary><span><Folder size={17} />File e ricerca</span><small>{status?.files ?? 0} file</small></summary><div className="brain-browser-body"><label className="brain-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Cerca file o progetto…" /></label><div className="brain-explorer">{groups.map(([group, items]) => <details className="brain-group" key={group} open={Boolean(query) || source.includes(group)}><summary><ChevronRight size={15} /><Folder size={18} /><span><strong>{group}</strong><small>{items.length} file · {items.reduce((sum, item) => sum + (item.chunks ?? 0), 0)} estratti</small></span></summary><div className="brain-files">{items.map(item => <div className="brain-file-row" key={item.id}><button type="button" className="brain-file-label" onClick={() => setOpenDocument(item.id)} title={`Apri ${item.id}`}><FileText size={15} /><span>{item.id.split("/").slice(-1)[0]}</span><small>{item.chunks ?? 0}</small></button><div className="brain-file-actions"><button type="button" className="delete" onClick={() => setDeleteTarget(item.id)} title="Rimuovi dall’indice Brain" aria-label={`Elimina ${item.id}`}><Trash2 size={13} /></button></div></div>)}</div></details>)}{status && !groups.length && <p className="empty-search">Nessun file trovato.</p>}</div></div></details>
     {status?.turboVec?.error && <p className="brain-note">TurboVec non disponibile: {status.turboVec.error}. La ricerca JSON continua a funzionare.</p>}

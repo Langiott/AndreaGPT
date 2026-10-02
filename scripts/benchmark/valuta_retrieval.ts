@@ -1,7 +1,6 @@
 /**
  * Valuta il retrieval Brain sulle domande di prova (scripts/benchmark/domande_brain.json).
- *   npm run valuta:brain                 → misura la configurazione attuale
- *   npm run valuta:brain -- --confronta  → confronta con e senza la spinta Micelio
+ *   npm run valuta:brain  → misura la configurazione attuale
  * Non usa il modello di chat: misura solo quali fonti arrivano tra le prime 5.
  */
 import fs from "node:fs/promises";
@@ -36,15 +35,12 @@ async function sectionAt(citation: string) {
   return heading ? heading.replace(/^#+\s*/, "").slice(0, 45) : citation;
 }
 
-// --confronta prova tutte le combinazioni; la prima è la configurazione di riferimento (Micelio acceso, fuzzy spento).
-const variants = args.includes("--confronta")
-  ? [{ name: "Micelio", micelio: true, fuzzy: false }, { name: "nessuno", micelio: false, fuzzy: false }, { name: "Fuzzy", micelio: false, fuzzy: true }, { name: "Micelio + Fuzzy", micelio: true, fuzzy: true }]
-  : [{ name: "attuale", micelio: process.env.BRAIN_MICELIO === "1", fuzzy: process.env.BRAIN_FUZZY === "1" }];
+const variants = [{ name: "attuale" }];
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const report: Array<{ variant: string; summary: ReturnType<typeof summarize>; results: QuestionResult[] }> = [];
 
 for (const variant of variants) {
-  const brain = createBrain({ micelio: variant.micelio, fuzzy: variant.fuzzy });
+  const brain = createBrain();
   const results: QuestionResult[] = [];
   try {
     for (const item of set.domande) {
@@ -77,23 +73,6 @@ if (partial.length) {
   console.log(`\nDomande a due temi coperte solo in parte (${partial.length}):`);
   for (const r of partial) console.log(`  ◐ ${r.question}  → ${percent(r.coverage)} delle parti (attese: ${r.expected.map(e => e.label).join(" | ")})`);
 }
-if (report.length > 1) {
-  // Ogni variante confrontata con la prima, domanda per domanda.
-  const [base, ...others] = report;
-  for (const other of others) {
-    const changed = base.results.map((r, i) => ({ q: r.question, base: r, other: other.results[i] }))
-      .filter(x => x.base.firstRank !== x.other.firstRank || x.base.coverage !== x.other.coverage);
-    console.log(`\n${other.variant} rispetto a ${base.variant}: ${changed.length} domande cambiano`);
-    for (const x of changed) {
-      const better = (x.other.firstRank && (!x.base.firstRank || x.other.firstRank < x.base.firstRank)) || x.other.coverage > x.base.coverage;
-      console.log(`  ${better ? "▲ meglio " : "▼ peggio "} ${x.q}  (prima giusta ${x.base.firstRank || "—"} → ${x.other.firstRank || "—"}, copertura ${percent(x.base.coverage)} → ${percent(x.other.coverage)})`);
-    }
-  }
-  // La migliore: prima conta trovare la fonte (recall), poi coprire i due temi, poi la posizione (MRR).
-  const best = [...report].sort((a, b) => b.summary.recallAt5 - a.summary.recallAt5 || (b.summary.coverage ?? 0) - (a.summary.coverage ?? 0) || b.summary.mrr - a.summary.mrr)[0];
-  console.log(`\nCONFIGURAZIONE MIGLIORE: ${best.variant} (Recall@5 ${percent(best.summary.recallAt5)}, copertura ${best.summary.coverage === null ? "—" : percent(best.summary.coverage)}, MRR ${best.summary.mrr.toFixed(2)})`);
-}
-
 const output = path.resolve("runtime/benchmarks/valutazione-retrieval.json");
 await fs.mkdir(path.dirname(output), { recursive: true });
 await fs.writeFile(output, JSON.stringify({ domande: path.relative(process.cwd(), setPath), varianti: report }, null, 2));

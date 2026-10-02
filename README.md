@@ -30,7 +30,8 @@ userà per rispondere. Quando un documento viene caricato nel Brain, il sistema:
 - crea un embedding per ogni chunk con nomic-embed-text tramite Ollama;
 - salva testo, metadati, vettori e citazioni nell'indice;
 - costruisce lo snapshot SQLite/FTS5 e, se abilitato, l'indice TurboVec;
-- combina ricerca lessicale, vettoriale, refusi, feedback e collegamenti Micelio;
+- combina ricerca lessicale, vettoriale, refusi e feedback;
+- riordina i primi 20 candidati con un cross-encoder multilingue (reranker);
 - seleziona pochi estratti pertinenti e li inserisce nel prompt;
 - restituisce risposta, fonti, punteggi e diagnostica.
 
@@ -68,31 +69,37 @@ La lista Ollama viene aggiornata interrogando il catalogo locale: ogni modello
 installato con ollama pull può comparire nell'interfaccia. I modelli cloud
 richiedono le rispettive chiavi API.
 
-## Micelio: come funziona
+## Micelio: solo visualizzazione
 
-Micelio è il grafo semantico costruito sopra il retrieval Brain. I nodi possono
-rappresentare raccolte, file o chunk; gli archi collegano contenuti con embedding
-simili. Non è una rete neurale, non fa fine-tuning e non decide da solo se una
-risposta è vera.
+Micelio è la mappa grafica dell'archivio: raccolte, file ed estratti collegati
+per similarità coseno, con grado, centralità, betweenness, closeness e vitalità.
+Nell'EmbeddingSpace sono disponibili anche i raggruppamenti Micelio (comunità del
+grafo) e Fuzzy (temi sfumati). Servono a esplorare l'archivio, **non** influenzano
+il ranking delle fonti.
 
-Per ogni richiesta Brain, Micelio prende i candidati migliori, confronta i vettori
-con la similarità coseno, collega i nodi sopra una soglia, conserva i vicini più
-forti e calcola grado, centralità, betweenness, closeness e vitalità. Poi propaga
-una parte dello score dai candidati verso i vicini e usa il risultato per
-riordinare le fonti senza perdere la loro provenienza.
+La spinta Micelio e il riordino fuzzy nel retrieval sono stati rimossi dopo la
+misura su 51 domande della tesi (`docs/report-micelio-fuzzy-tesi.md`):
 
-![Schema visuale Micelio e TurboVec](DRAW/micelio-turbovec.png)
+| Configurazione | Hit@1 | MRR | nDCG@5 |
+|---|---|---|---|
+| Base | 0.588 | 0.705 | 0.622 |
+| Micelio | 0.608 | 0.716 | 0.622 |
+| Fuzzy | 0.118 | 0.221 | 0.191 |
+| Base, solo tesi | 0.686 | 0.783 | 0.685 |
 
-La dashboard mostra raccolte, file ed estratti, legami, nodi attivi/passivi,
-centralità e vitalità. Il valore Affinità o micelioSupportScore indica coerenza
-semantica tra domanda, risposta, fonti e grafo: non è una probabilità di verità.
+Micelio è neutro (p = 1.0), il fuzzy è dannoso (p < 0.001). I guadagni veri
+vengono da informazione che l'embedding non ha: la fonte indicata e il reranker,
+che legge domanda e brano insieme.
+
+Il valore Affinità (semanticSupportScore) indica coerenza semantica tra domanda,
+risposta e fonti: non è una probabilità di verità.
 
 ## TurboVec: come funziona
 
 TurboVec è l'acceleratore della ricerca vettoriale. Riceve gli embedding prodotti
 dal Brain e individua rapidamente i candidati più vicini, evitando di confrontare
 ogni documento completo a ogni domanda. Il flusso visuale completo, dall'embedding
-fino al ranking Micelio, è disponibile qui:
+fino al ranking, è disponibile qui:
 
 ![Flusso TurboVec e retrieval](DRAW/micelio-turbovec.png)
 
@@ -103,81 +110,24 @@ percorso legacy, con possibile aumento della latenza.
 
 ## Funzionalità disponibili
 
-### Chat
+I menu **File** e **Audio** raggruppano rispettivamente OCR/Converti e Trascrivi/Registra.
 
-La chat normale invia la conversazione al modello scelto, in locale con Ollama o
-verso un provider cloud configurato. Supporta streaming, Markdown, formule,
-allegati testuali, scelta del modello, temperatura, copia, modifica e nuovo
-invio. Mostra modello, token, velocità e tempi della richiesta.
-
-### Brain
-
-La modalità Brain cerca nell'archivio locale prima di generare la risposta.
-Permette upload, import GitHub, reindicizzazione, filtro per fonte, lettura del
-documento, citazioni, feedback positivo/negativo e ricostruzione TurboVec.
-
-### Micelio
-
-È la vista grafica della rete Brain. Serve per esplorare i collegamenti tra
-raccolte, file ed estratti, capire quali nodi sono centrali e usare un nodo come
-fonte della chat.
-
-### Web
-
-Attiva la ricerca esterna tramite SearXNG e, se configurati, Firecrawl o
-Perplexity. È utile per notizie, prezzi, normativa, meteo, versioni recenti e
-informazioni che cambiano. Mostra titoli, URL ed estratti delle fonti.
-
-### OCR
-
-Legge testo da immagini e PDF con docTR e Tesseract come fallback. Il testo
-riconosciuto può essere modificato nell'interfaccia e salvato in OUTPUT/OCR.
-
-### YOLO
-
-Esegue detection, segmentazione, classificazione, pose e object detection
-orientata. I risultati e le immagini annotate vengono salvati in OUTPUT/YOLO.
-
-### Analyze
-
-Invia immagini a Qwen3-VL per ottenere descrizione e analisi visuale. È diverso
-da YOLO: Analyze interpreta l'immagine, YOLO restituisce oggetti, classi,
-coordinate, pose o maschere.
-
-### Image
-
-Genera immagini con Qwen Image 2.1 tramite ComfyUI. Si possono scegliere
-risoluzione, step, seed e flusso Qwen o Viggle Turbo. Il backend crea un job
-asincrono, restituisce un jobId e salva il risultato in OUTPUT/Image.
-
-### Converti
-
-Converte PDF, DOCX, Markdown e TXT, anche in modalità multipla con ZIP. Può
-correggere tabelle e tradurre Markdown tramite Ollama. I risultati sono
-scaricabili dal pannello Output.
-
-### Trascrivi
-
-Trasforma un file audio in testo usando faster-whisper. Il risultato può essere
-inserito in una nuova conversazione o salvato negli output.
-
-### Registra
-
-Usa MediaRecorder del browser per registrare dal microfono. Al termine invia
-l'audio al percorso di trascrizione e riporta il testo nella conversazione.
-
-### Compatta chat
-
-Esporta la conversazione completa in Markdown mantenendo l'ordine originale.
-È un'esportazione locale, non un riassunto generato dal modello, e salva il file
-in OUTPUT/Compatta_chat.
-
-### News
-
-Costruisce edizioni su AI, paper scientifici oppure scienza e curiosità. Cerca
-fonti aggiornate, applica filtri di data e categoria e produce un articolo con
-citazioni. Se il redattore non è disponibile usa un fallback basato sugli
-estratti trovati.
+| Funzionalità | Pulsante | Descrizione |
+|---|---|---|
+| **Chat** | <img src="img/README/Screenshot%202026-10-02%20081754.png" alt="Nuova conversazione" height="32"> | Invia la conversazione al modello scelto, in locale con Ollama o verso un provider cloud configurato. Supporta streaming, Markdown, formule, allegati testuali, scelta del modello, temperatura, copia, modifica e nuovo invio. Mostra modello, token, velocità e tempi della richiesta. |
+| **Brain** | <img src="img/README/Screenshot%202026-10-02%20081113.png" alt="Brain" height="32"> | Cerca nell'archivio locale prima di generare la risposta. Permette upload, import GitHub, reindicizzazione, filtro per fonte, lettura del documento, citazioni, feedback positivo/negativo e ricostruzione TurboVec. |
+| **Micelio** | <img src="img/README/Screenshot%202026-10-02%20081748.png" alt="Micelio" height="32"> | Vista grafica della rete Brain. Serve per esplorare i collegamenti tra raccolte, file ed estratti, capire quali nodi sono centrali e usare un nodo come fonte della chat. |
+| **Web** | <img src="img/README/Screenshot%202026-10-02%20081109.png" alt="Web" height="32"> | Attiva la ricerca esterna tramite SearXNG e, se configurati, Firecrawl o Perplexity. Utile per notizie, prezzi, normativa, meteo, versioni recenti e informazioni che cambiano. Mostra titoli, URL ed estratti delle fonti. |
+| **Codice** | <img src="img/README/Screenshot%202026-10-02%20081118.png" alt="Codice" height="32"> | Legge il progetto configurato e propone modifiche senza applicarle. Richiede un modello locale Ollama con strumenti. |
+| **OCR** | <img src="img/README/Screenshot%202026-10-02%20081144.png" alt="OCR" height="32"> | Dal menu File. Legge testo da immagini e PDF con docTR e Tesseract come fallback. Il testo riconosciuto può essere modificato nell'interfaccia e salvato in OUTPUT/OCR. |
+| **Converti** | <img src="img/README/Screenshot%202026-10-02%20081144.png" alt="Converti" height="32"> | Dal menu File. Converte PDF, DOCX, Markdown e TXT, anche in modalità multipla con ZIP. Può correggere tabelle e tradurre Markdown tramite Ollama. I risultati sono scaricabili dal pannello Output. |
+| **YOLO** | <img src="img/README/Screenshot%202026-10-02%20081121.png" alt="YOLO" height="32"> | Esegue detection, segmentazione, classificazione, pose e object detection orientata. I risultati e le immagini annotate vengono salvati in OUTPUT/YOLO. |
+| **Analyze** | <img src="img/README/Screenshot%202026-10-02%20081130.png" alt="Analyze" height="32"> | Invia immagini a Qwen3-VL per ottenere descrizione e analisi visuale. Diverso da YOLO: Analyze interpreta l'immagine, YOLO restituisce oggetti, classi, coordinate, pose o maschere. |
+| **Image** | <img src="img/README/Screenshot%202026-10-02%20081137.png" alt="Image" height="32"> | Genera immagini con Qwen Image 2.1 tramite ComfyUI. Si possono scegliere risoluzione, step, seed e flusso Qwen o Viggle Turbo. Il backend crea un job asincrono, restituisce un jobId e salva il risultato in OUTPUT/Image. |
+| **Trascrivi** | <img src="img/README/Screenshot%202026-10-02%20081105.png" alt="Audio" height="32"><br><img src="img/README/Screenshot%202026-10-02%20081310.png" alt="Trascrivi" height="32"> | Dal menu Audio. Trasforma un file audio in testo usando faster-whisper. Il risultato può essere inserito in una nuova conversazione o salvato negli output. |
+| **Registra** | <img src="img/README/Screenshot%202026-10-02%20081315.png" alt="Registra" height="32"> | Dal menu Audio. Usa MediaRecorder del browser per registrare dal microfono. Al termine invia l'audio al percorso di trascrizione e riporta il testo nella conversazione. |
+| **Compatta chat** | <img src="img/README/Screenshot%202026-10-02%20081303.png" alt="Compatta chat" height="32"> | Esporta la conversazione completa in Markdown mantenendo l'ordine originale. È un'esportazione locale, non un riassunto generato dal modello, e salva il file in OUTPUT/Compatta_chat. |
+| **News** | <img src="img/README/Screenshot%202026-10-02%20081141.png" alt="News" height="32"> | Costruisce edizioni su AI, paper scientifici oppure scienza e curiosità. Cerca fonti aggiornate, applica filtri di data e categoria e produce un articolo con citazioni. Se il redattore non è disponibile usa un fallback basato sugli estratti trovati. |
 
 ## Struttura dei file
 
@@ -270,10 +220,13 @@ AndreaGPT/
 - **RAG locale:** il modello riceve estratti selezionati, non l'intero archivio.
 - **Chunk con provenienza:** ogni passaggio conserva file, righe, pagina e citazione.
 - **Retrieval ibrido:** FTS5, embedding/coseno e ranking combinato.
+- **Reranker:** cross-encoder `mmarco-mMiniLMv2` sui primi 20 candidati. Su 98 domande
+  Hit@1 da 0,63 a 0,85 e MRR da 0,73 a 0,91, circa 1,3 s su CPU. Si spegne da
+  Impostazioni → Ricerca nel Brain oppure con `BRAIN_RERANK=0`.
 - **Snapshot SQLite atomico:** il manifest pubblica lo store attivo senza interrompere
   le generazioni precedenti.
 - **TurboVec:** accelera la ricerca dei candidati senza generare testo.
-- **Micelio:** grafo di vicinanza che può propagare score; non è fine-tuning.
+- **Micelio:** mappa grafica dell'archivio; non entra nel ranking.
 - **Grounding:** controlla citazioni, fonti inesistenti e numeri non supportati.
 - **Router locale:** seleziona il percorso senza inviare la domanda fuori dal
   computer; Brain e Web manuali restano prioritari.
@@ -287,7 +240,7 @@ AndreaGPT/
 ## Riassunto finale
 
 AndreaGPT unisce una chat locale con un archivio Brain capace di cercare nei
-documenti, un grafo Micelio che organizza le relazioni semantiche, TurboVec che
+documenti, una mappa Micelio per esplorare le relazioni semantiche, TurboVec che
 accelera il recupero e controlli di grounding che mostrano le fonti usate. Attorno
 a questo nucleo offre ricerca Web, OCR, YOLO, analisi immagini, generazione Image,
 conversione documenti, trascrizione e registrazione audio, esportazione delle chat

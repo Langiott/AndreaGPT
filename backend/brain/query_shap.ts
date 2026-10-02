@@ -91,17 +91,13 @@ export function toShares(phi: number[]) { const total = phi.reduce((sum, value) 
 /** Verbi di richiesta: dicono cosa fare, non di cosa parlare. Non vanno segnalati come argomenti mancanti. */
 const REQUEST_WORDS = /^(?:defini\w*|spieg\w*|descriv\w*|funzion\w*|dimmi|dammi|elenc\w*|mostr\w*|calcol\w*|riassum\w*|confront\w*|analizz\w*|illustr\w*|fammi|vorrei|puoi|potresti|serve|servono|significa|cos[aeì]|perch[eé])$/u;
 
-/** Lettura pratica: chi guida la ricerca e quali parti della domanda le fonti non coprono. */
-export function shapFindings(words: string[], overall: number[], coveredBy: number[], sourceCount: number) {
+/** Solo i problemi: parti della domanda che le fonti non coprono e parole che allontanano. */
+export function shapFindings(words: string[], overall: number[], coveredBy: number[], _sourceCount: number) {
   const findings: string[] = [];
   const order = words.map((word, i) => ({ word, share: overall[i], covered: coveredBy[i], request: REQUEST_WORDS.test(word) })).sort((a, b) => b.share - a.share);
-  const top = order[0];
-  if (top && top.share >= 0.35) findings.push(`La ricerca è guidata soprattutto da "${top.word}" (${Math.round(top.share * 100)}%): le fonti sono state scelte per questa parola.`);
-  else if (top) findings.push(`Nessuna parola domina: il peso è distribuito ("${top.word}" è la prima con ${Math.round(top.share * 100)}%).`);
   const uncovered = order.filter(item => item.share < 0.10 && item.covered === 0 && !item.request).map(item => `"${item.word}"`);
   if (uncovered.length) findings.push(`${uncovered.join(", ")} ${uncovered.length > 1 ? "pesano" : "pesa"} poco e non ${uncovered.length > 1 ? "compaiono" : "compare"} in nessuna fonte: questa parte della domanda non è coperta. Prova a chiederla da sola.`);
   const pushing = order.filter(item => item.share < -0.05).map(item => `"${item.word}"`);
   if (pushing.length) findings.push(`${pushing.join(", ")} allontana${pushing.length > 1 ? "no" : ""} la domanda dalle fonti scelte.`);
-  if (!uncovered.length && !pushing.length && sourceCount) findings.push("Tutte le parole importanti sono presenti in almeno una fonte.");
   return findings;
 }

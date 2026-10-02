@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { ArrowLeft, Maximize2, Minimize2, Pause, Play, RotateCcw, Search, X } from "lucide-react";
-import { centroidShift, ellipsoid, ellipsoidRings, spreadStats, type Ellipsoid, type FileSum, type SpreadStats } from "../utils/embedding_selection";
+import { ellipsoid, ellipsoidRings, spreadStats, type FileSum } from "../utils/embedding_selection";
 
 interface MapPoint { path: string; section: string; lines: string; preview: string; position: number[] }
 interface Groups { method: string; kind: "label" | "cluster" | "classifier"; title: string; note: string; names: string[]; labels: number[]; wrong?: boolean[]; truth?: number[]; strength?: number[]; second?: number[]; secondStrength?: number[]; metrics: Array<{ label: string; value: string; hint: string }> }
@@ -21,13 +21,9 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 const decimal = (value: number) => value.toLocaleString("it-IT", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 const fileName = (path: string) => path.split("/").at(-1) ?? path;
 
-/** Selezione fissata come "A" per il confronto prima/dopo. */
-interface Snapshot { stats: SpreadStats; shape: Ellipsoid | null }
-
-/** Riga A → B di una statistica, con la variazione relativa. */
-function Compare({ label, hint, before, after, format }: { label: string; hint: string; before?: number; after: number; format: (value: number) => string }) {
-  const change = before ? (after - before) / before : 0;
-  return <div title={hint}><dt>{label}</dt><dd>{before !== undefined && <span className="muted">{format(before)} → </span>}{format(after)}{before !== undefined && Math.abs(change) >= 0.005 && <small className="espace-change">{change > 0 ? "+" : ""}{Math.round(change * 100)}%</small>}</dd></div>;
+/** Una statistica della selezione. */
+function Stat({ label, hint, value }: { label: string; hint: string; value: string }) {
+  return <div title={hint}><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
 /** Ruota un punto (yaw attorno all'asse verticale, pitch attorno all'orizzontale). */
@@ -58,10 +54,11 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
   const dragMoved = useRef(false);
   hoverRef.current = hover;
   pinnedRef.current = pinned;
-  // Documenti esclusi dalla selezione (vuoto = tutti) e selezione fissata come A.
+  // Documenti esclusi dalla selezione (vuoto = tutti).
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set());
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [showSpread, setShowSpread] = useState(true);
+  const [showSpread, setShowSpread] = useState(false);
+  // Anelli sugli estratti classificati male (errori dei classificatori, ponti del Fuzzy).
+  const [showRings, setShowRings] = useState(true);
 
   async function load(text = "", groupBy = method) {
     setLoading(true); setError("");
@@ -98,7 +95,6 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
     if (!data) return null;
     return { stats: spreadStats((data.files ?? []).filter(file => !excluded.has(file.path))), shape: ellipsoid(data.points.filter(point => !excluded.has(point.path)).map(point => point.position)) };
   }, [data, excluded]);
-  const shift = snapshot && selection?.stats ? centroidShift(snapshot.stats, selection.stats) : null;
   const files = useMemo(() => [...(data?.files ?? [])].sort((a, b) => fileName(a.path).localeCompare(fileName(b.path))), [data]);
   function toggleFile(path: string) { setExcluded(current => { const next = new Set(current); if (next.has(path)) next.delete(path); else next.add(path); return next; }); }
 
@@ -108,10 +104,9 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
     const context = canvas.getContext("2d"); if (!context) return;
     let frame = 0;
     const colors = data.points.map((_, index) => groupColor(data.groups?.labels[index] ?? -1));
-    const wrong = data.groups?.wrong, truth = data.groups?.truth, strength = data.groups?.strength, second = data.groups?.second;
+    const wrong = showRings ? data.groups?.wrong : undefined, truth = data.groups?.truth, strength = data.groups?.strength, second = showRings ? data.groups?.second : undefined;
     const outside = data.points.map(point => excluded.has(point.path));
     const current = showSpread && selection?.shape ? { shape: selection.shape, rings: ellipsoidRings(selection.shape) } : null;
-    const previous = showSpread && snapshot?.shape ? { shape: snapshot.shape, rings: ellipsoidRings(snapshot.shape) } : null;
     const draw = () => {
       const ratio = window.devicePixelRatio || 1, width = canvas.clientWidth, height = canvas.clientHeight;
       if (canvas.width !== width * ratio || canvas.height !== height * ratio) { canvas.width = width * ratio; canvas.height = height * ratio; }
@@ -144,28 +139,20 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
         context.globalAlpha = (data.query && !highlighted ? 0.35 : 0.85) * certainty;
         context.fillStyle = colors[point.index]; context.beginPath(); context.arc(point.x, point.y, size, 0, Math.PI * 2); context.fill();
         if (highlighted) { context.globalAlpha = 1; context.strokeStyle = ink; context.lineWidth = 1.5; context.stroke(); context.lineWidth = 1; }
+        // Punto selezionato: doppio anello ben visibile.
+        if (pinnedRef.current === point.index) { context.globalAlpha = 1; context.strokeStyle = ink; context.lineWidth = 2.5; context.beginPath(); context.arc(point.x, point.y, size + 6, 0, Math.PI * 2); context.stroke(); context.lineWidth = 1; }
         // Classificatori: anello sugli errori, colorato con il capitolo vero (il punto ha il colore previsto).
         if (wrong?.[point.index]) { context.globalAlpha = 1; context.strokeStyle = groupColor(truth?.[point.index] ?? -1); context.lineWidth = 2.5; context.beginPath(); context.arc(point.x, point.y, size + 3, 0, Math.PI * 2); context.stroke(); context.lineWidth = 1; }
         // Fuzzy: estratto ponte, anello tratteggiato con il colore del secondo tema.
         if ((second?.[point.index] ?? -1) >= 0) { context.globalAlpha = 0.9; context.strokeStyle = groupColor(second![point.index]); context.lineWidth = 2; context.setLineDash([2, 2]); context.beginPath(); context.arc(point.x, point.y, size + 3, 0, Math.PI * 2); context.stroke(); context.setLineDash([]); context.lineWidth = 1; }
       }
-      // Ellissoide e centro: A tratteggiato e vuoto, la selezione attuale (B) piena, freccia da A a B.
-      const drawShape = (item: { shape: Ellipsoid; rings: number[][][] }, dashed: boolean, label: string) => {
-        context.strokeStyle = ink; context.globalAlpha = dashed ? 0.4 : 0.55; context.lineWidth = 1.2; context.setLineDash(dashed ? [5, 4] : []);
-        for (const ring of item.rings) { context.beginPath(); ring.forEach((position, i) => { const at = toScreen(position); if (i) context.lineTo(at.x, at.y); else context.moveTo(at.x, at.y); }); context.stroke(); }
-        context.setLineDash([]);
-        const center = toScreen(item.shape.center);
-        context.globalAlpha = 1; context.beginPath(); context.arc(center.x, center.y, 6.5, 0, Math.PI * 2);
-        if (dashed) { context.lineWidth = 2.5; context.stroke(); } else { context.fillStyle = ink; context.fill(); }
-        context.lineWidth = 1; context.fillStyle = ink; context.font = "bold 13px system-ui, sans-serif"; context.fillText(label, center.x + 10, center.y - 8); context.font = "12px system-ui, sans-serif";
-        return center;
-      };
-      const from = previous ? drawShape(previous, true, "A") : null;
-      const to = current ? drawShape(current, false, previous ? "B" : "centro") : null;
-      if (from && to && Math.hypot(to.x - from.x, to.y - from.y) > 14) {
-        const angle = Math.atan2(to.y - from.y, to.x - from.x), endX = to.x - Math.cos(angle) * 9, endY = to.y - Math.sin(angle) * 9;
-        context.globalAlpha = 0.9; context.strokeStyle = ink; context.lineWidth = 2; context.beginPath(); context.moveTo(from.x + Math.cos(angle) * 9, from.y + Math.sin(angle) * 9); context.lineTo(endX, endY); context.stroke();
-        context.fillStyle = ink; context.beginPath(); context.moveTo(endX, endY); context.lineTo(endX - Math.cos(angle - 0.45) * 10, endY - Math.sin(angle - 0.45) * 10); context.lineTo(endX - Math.cos(angle + 0.45) * 10, endY - Math.sin(angle + 0.45) * 10); context.closePath(); context.fill(); context.lineWidth = 1;
+      // Ellissoide e centro della selezione.
+      if (current) {
+        context.strokeStyle = ink; context.globalAlpha = 0.55; context.lineWidth = 1.2;
+        for (const ring of current.rings) { context.beginPath(); ring.forEach((position, i) => { const at = toScreen(position); if (i) context.lineTo(at.x, at.y); else context.moveTo(at.x, at.y); }); context.stroke(); }
+        const center = toScreen(current.shape.center);
+        context.globalAlpha = 1; context.fillStyle = ink; context.beginPath(); context.arc(center.x, center.y, 6.5, 0, Math.PI * 2); context.fill();
+        context.lineWidth = 1; context.font = "bold 13px system-ui, sans-serif"; context.fillText("centro", center.x + 10, center.y - 8); context.font = "12px system-ui, sans-serif";
       }
       if (queryScreen) { context.globalAlpha = 1; context.fillStyle = ink; context.beginPath(); context.arc(queryScreen.x, queryScreen.y, 7, 0, Math.PI * 2); context.fill(); context.fillText("domanda", queryScreen.x + 10, queryScreen.y + 4); }
       context.globalAlpha = 1;
@@ -173,7 +160,7 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-  }, [data, nearest, spinning, excluded, selection, snapshot, showSpread]);
+  }, [data, nearest, spinning, excluded, selection, showSpread, showRings]);
 
   function pointerMove(event: PointerEvent<HTMLCanvasElement>) {
     if (drag.current) {
@@ -231,7 +218,7 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
         {data && <>
           <details className="espace-panel" open>
             <summary>Riepilogo</summary>
-            <dl className="espace-stats">
+            <dl className="espace-stats espace-stats-row">
               <div title="Lunghezza di ogni vettore di embedding"><dt>Dimensioni</dt><dd>{data.dimension}</dd></div>
               <div title={data.shown < data.total ? "Estratti mostrati sul totale indicizzato" : "Estratti (chunk) indicizzati"}><dt>Chunk</dt><dd>{data.shown < data.total ? `${data.shown} / ${data.total}` : data.total}</dd></div>
               <div title="Assi principali usati per la vista 3D"><dt>Componenti PCA</dt><dd>{data.explained.length}</dd></div>
@@ -244,11 +231,14 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
           </details>
           {data.query && <details className="espace-panel" open>
             <summary>Vicini della domanda{data.query.group && <span className="muted"> · {data.query.group}</span>}</summary>
-            <ol>{data.query.nearest.map(item => <li key={item.index} onPointerEnter={() => setHover(item.index)}>{percent(item.similarity)} · {fileName(data.points[item.index].path)}:{data.points[item.index].lines}</li>)}</ol>
+            <ul className="espace-nearest">{data.query.nearest.map(item => { const near = data.points[item.index]; return <li key={item.index}><button type="button" className={pinned === item.index ? "active" : ""} title={`${near.path}:${near.lines}${near.section ? ` · ${near.section}` : ""}`} onPointerEnter={() => setHover(item.index)} onPointerLeave={() => setHover(null)} onClick={() => setPinned(current => current === item.index ? null : item.index)}><b>{percent(item.similarity)}</b><span>{fileName(near.path)}</span><span className="muted">{near.lines}</span></button></li>; })}</ul>
           </details>}
           {data.groups && <details className="espace-panel">
             <summary title={data.groups.note || undefined}>{data.groups.title}</summary>
             {data.groups.metrics.length > 0 && <dl className="espace-stats">{data.groups.metrics.map(metric => <div key={metric.label} title={metric.hint}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl>}
+            {(data.groups.wrong?.some(Boolean) || data.groups.second?.some(label => label >= 0)) && <div className="espace-spread-actions">
+              <label title="Anelli sugli estratti classificati male"><input type="checkbox" checked={showRings} onChange={event => setShowRings(event.target.checked)} /> Bad classification</label>
+            </div>}
             <ul className="espace-legend">{legend.map(item => <li key={item.label} title={item.name}><i style={{ background: groupColor(item.label) }} /><span>{item.name}</span><span className="muted">{item.count}</span></li>)}</ul>
           </details>}
           {files.length > 0 && <details className="espace-panel">
@@ -264,18 +254,13 @@ export function EmbeddingSpace({ standalone = false, onClose }: { standalone?: b
             </details>
             {selection?.stats && <>
               <dl className="espace-stats">
-                <Compare label="Chunk" hint={`${selection.stats.files} documenti su ${files.length}`} before={snapshot?.stats.count} after={selection.stats.count} format={value => String(value)} />
-                <Compare label="Varianza" hint={`Distanza quadratica media dei chunk dal centro, su ${data.dimension} dimensioni (0 = tutti uguali)`} before={snapshot?.stats.total} after={selection.stats.total} format={decimal} />
-                {(selection.stats.files > 1 || (snapshot?.stats.files ?? 0) > 1) && <>
-                  <Compare label="Dentro i doc." hint="Quota della varianza dovuta ai chunk di uno stesso documento" before={snapshot ? snapshot.stats.within / (snapshot.stats.total || 1) : undefined} after={selection.stats.within / (selection.stats.total || 1)} format={percent} />
-                  <Compare label="Tra i doc." hint="Quota della varianza dovuta alla distanza tra i centri dei documenti" before={snapshot ? snapshot.stats.between / (snapshot.stats.total || 1) : undefined} after={selection.stats.between / (selection.stats.total || 1)} format={percent} />
+                <Stat label="Chunk" hint={`${selection.stats.files} documenti su ${files.length}`} value={String(selection.stats.count)} />
+                <Stat label="Varianza" hint={`Distanza quadratica media dei chunk dal centro, su ${data.dimension} dimensioni (0 = tutti uguali)`} value={decimal(selection.stats.total)} />
+                {selection.stats.files > 1 && <>
+                  <Stat label="Dentro i doc." hint="Quota della varianza dovuta ai chunk di uno stesso documento" value={percent(selection.stats.within / (selection.stats.total || 1))} />
+                  <Stat label="Tra i doc." hint="Quota della varianza dovuta alla distanza tra i centri dei documenti" value={percent(selection.stats.between / (selection.stats.total || 1))} />
                 </>}
               </dl>
-              {shift && <p className="espace-shift" title={`${decimal(shift.distance)} nelle ${data.dimension} dimensioni; distanza tipica di un chunk dal centro di A: ${decimal(shift.typical)}`}>Centro A → B: <b>{shift.verdict}</b> · {shift.relative.toLocaleString("it-IT", { maximumFractionDigits: 2 })}×</p>}
-              <div className="espace-spread-actions">
-                <button type="button" onClick={() => setSnapshot({ stats: selection.stats!, shape: selection.shape })} title="Salva la selezione attuale come riferimento A (tratteggiato nella vista)">{snapshot ? "Aggiorna A" : "Fissa come A"}</button>
-                {snapshot && <button type="button" onClick={() => setSnapshot(null)}>Togli A</button>}
-              </div>
             </>}
           </details>}
         </>}

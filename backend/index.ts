@@ -24,29 +24,59 @@ import { JsonLineWorker } from "./utils/json_line_worker";
 import { GROUP_METHODS } from "./brain/embedding_ml";
 import { CodeWorkspace } from "./code/code_workspace";
 import { runCodeAgent } from "./code/code_agent";
-import { inspectGrounding } from "./grounding/grounding";
+import { groundingWarning as hasGroundingWarning, inspectGrounding } from "./grounding/grounding";
 import { auditEvidenceDelivery, DOCUMENT_SCOPE_INSTRUCTION } from "./grounding/evidence_audit";
 import { activateMainboardMonitoring, beginMainboardActivity, clearMainboardHistory, deactivateMainboardMonitoring, finishMainboardActivity, getMainboardSnapshot, isMainboardMonitoringActive } from "./diagnostics/mainboard";
 import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
+import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
+import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
 
 const app = express();
 const execFileAsync = promisify(execFile);
-const { outputRoot, ocrInputRoot, ocrOutputRoot, yoloOutputRoot, imageOutputRoot, doctrScript, yoloScript, qwenImageScript, qwenVisionScript, audioScript, toolsRoot } = paths;
+// Lavori pesanti (Whisper, docTR/Tesseract, YOLO): uno alla volta, gli altri in coda.
+// Due copie dei modelli caricate insieme possono esaurire la RAM. HEAVY_MAX_CONCURRENT per alzare il limite.
+const heavyLimit = Math.max(1, Number(process.env.HEAVY_MAX_CONCURRENT) || 1);
+let heavyRunning = 0;
+const heavyQueue: Array<() => void> = [];
+async function withHeavySlot<T>(task: () => Promise<T>): Promise<T> {
+  // Chi esce passa il posto direttamente al primo in coda: il limite non viene mai superato.
+  if (heavyRunning < heavyLimit) heavyRunning++;
+  else await new Promise<void>(resolve => heavyQueue.push(resolve));
+  try { return await task(); } finally { const next = heavyQueue.shift(); if (next) next(); else heavyRunning--; }
+}
+const { outputRoot, ocrInputRoot, ocrOutputRoot, yoloOutputRoot, imageOutputRoot, doctrScript, yoloScript, qwenVisionScript, audioScript, toolsRoot } = paths;
 const { port, apiBase, apiKey, openRouterKey, perplexityKey, firecrawlKey, openRouterBase, localRouterThreshold, localRouterEnabled, lanAccessEnabled, searxngBaseUrl, ollamaBase } = settings;
 // Il router automatico è opt-in: Web OFF e Brain OFF devono restare OFF.
 const supportedChatModels = [
   "minimaxai/minimax-m3",
 ];
 const unavailableModels = new Set<string>();
-type ImageJob = { status: "running" | "ready" | "error"; result?: Record<string, unknown>; error?: string; startedAt: number };
+type ImageJob = { status: "running" | "ready" | "error"; result?: Record<string, unknown>; error?: string; startedAt: number; progress?: ImageProgress; controller?: AbortController };
+/** Limite unico per un job immagine: oltre, il prompt viene annullato anche dentro ComfyUI. */
+const IMAGE_TIMEOUT_MS = Number(process.env.IMAGE_TIMEOUT_MS) || 60 * 60_000;
 const imageJobs = new Map<string, ImageJob>();
 const privateConversations = new Map<string, number>();
 const requestWindows = new Map<string, { startedAt: number; count: number }>();
+// Worker Python persistenti per Whisper, docTR e YOLO: il modello resta caricato tra una richiesta e l'altra.
+// Dopo 10 minuti senza richieste il processo si chiude e libera la RAM (TOOL_WORKER_IDLE_MS).
+const toolWorkers = new Map<string, JsonLineWorker>();
+function toolWorker(python: string, script: string, timeoutMs: number) {
+  const key = `${python}\u0000${script}`;
+  let worker = toolWorkers.get(key);
+  if (!worker) {
+    worker = new JsonLineWorker(python, [script, "--serve"], timeoutMs, Number(process.env.TOOL_WORKER_IDLE_MS) || 10 * 60_000);
+    toolWorkers.set(key, worker);
+  }
+  return worker;
+}
+
+/** Chat in corso: vengono annullate alla chiusura del server. */
+const activeChats = new Set<AbortController>();
 const visionWorker = new JsonLineWorker(process.env.VISION_PYTHON || process.env.DOCTR_PYTHON || "python", [qwenVisionScript, "--serve", "--model", process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", "--device", process.env.VISION_DEVICE || "auto"], 12 * 60_000);
 const cleanupTimer = setInterval(() => {
   const now = Date.now();
-  for (const [id, job] of imageJobs) if (now - job.startedAt > (job.status === "running" ? 65 * 60_000 : 60 * 60_000)) imageJobs.delete(id);
+  for (const [id, job] of imageJobs) if (now - job.startedAt > IMAGE_TIMEOUT_MS + 5 * 60_000) imageJobs.delete(id);
   for (const [id, expiresAt] of privateConversations) if (expiresAt <= now) privateConversations.delete(id);
   for (const [ip, window] of requestWindows) if (now - window.startedAt > 120_000) requestWindows.delete(ip);
 }, 60_000);
@@ -114,15 +144,15 @@ function finalizeResearchArticle(article: string, label: string, sources: Resear
   return { article: sanitized, fallback: false };
 }
 
-function micelioSupportDetails(support: { checked: boolean; score: number; label: string; answerAlignment: number; queryAlignment: number; graphCohesion: number } | null) {
+function semanticSupportDetails(support: { checked: boolean; score: number; label: string; answerAlignment: number; queryAlignment: number; graphCohesion: number } | null) {
   const details: Record<string, string | number | boolean | null> = { semanticSupportChecked: false };
   if (!support?.checked) return details;
   details.semanticSupportChecked = true;
-  details.micelioSupportScore = Number(support.score.toFixed(3));
-  details.micelioSupportLabel = support.label;
-  details.micelioAnswerAlignment = Number(support.answerAlignment.toFixed(3));
-  details.micelioQueryAlignment = Number(support.queryAlignment.toFixed(3));
-  details.micelioGraphCohesion = Number(support.graphCohesion.toFixed(3));
+  details.semanticSupportScore = Number(support.score.toFixed(3));
+  details.semanticSupportLabel = support.label;
+  details.semanticAnswerAlignment = Number(support.answerAlignment.toFixed(3));
+  details.semanticQueryAlignment = Number(support.queryAlignment.toFixed(3));
+  details.semanticSourceCohesion = Number(support.graphCohesion.toFixed(3));
   return details;
 }
 
@@ -139,14 +169,39 @@ async function brainModule() {
   return brainInstance;
 }
 
+// Candidature: il CV è il file in ANDREA-BRAIN/CV (testo dall'indice Brain, PDF letto così com'è per l'allegato).
+const brainRoot = path.resolve(process.env.BRAIN_ROOT || path.join(process.cwd(), "ANDREA-BRAIN"));
+const candidature = createCandidature({
+  dataDir: path.join(toolsRoot, "candidature"),
+  ollamaUrl: ollamaBase,
+  async readCv() {
+    const brain = await brainModule();
+    const sources = (await brain.getBrainStatus()).sources.map(source => source.id).filter(id => /^CV\//i.test(id));
+    const source = sources.find(id => id.toLowerCase().endsWith(".pdf")) ?? sources[0];
+    if (!source) throw new Error("CV non trovato: mettilo in ANDREA-BRAIN/CV e reindicizza il Brain.");
+    const { content } = await brain.getBrainDocument(source);
+    const pdfSource = sources.find(id => id.toLowerCase().endsWith(".pdf"));
+    const pdf = pdfSource ? { name: path.basename(pdfSource), data: await fs.readFile(path.join(brainRoot, pdfSource)) } : undefined;
+    return { text: content, pdf };
+  },
+});
+
 app.disable("x-powered-by");
 app.use((request, response, next) => {
   if (!request.path.startsWith("/api/")) return next();
+  // n8n chiama da un altro container: host diverso, autorizzato solo dal token condiviso.
+  if (request.path === "/api/candidature/import" && request.method === "POST" && request.headers["x-candidature-token"]) {
+    void candidature.segreti().then(({ token }) => {
+      if (tokenValido(token, request.headers["x-candidature-token"])) next();
+      else response.status(403).json({ error: "Token candidature non valido." });
+    }, next);
+    return;
+  }
   response.setHeader("Cache-Control", "no-store");
   const now = Date.now();
   // La generazione immagini risponde 202 prima che il processo Python finisca.
   // Viene quindi tracciata esplicitamente dal ciclo di vita del job, sotto.
-  const expensive = request.path === "/api/chat" || request.path === "/api/analyze-image";
+  const expensive = ["/api/chat", "/api/analyze-image", "/api/ocr", "/api/yolo", "/api/audio/transcribe", "/api/convert", "/api/convert/zip", "/api/research", "/api/brain/upload", "/api/brain/import", "/api/image/generate"].includes(request.path);
   const activityLabels: Record<string, string> = {
     "/api/chat": "Generazione chat",
     "/api/research": "Ricerca web",
@@ -271,7 +326,9 @@ app.use("/api/brain/upload", express.json({ limit: "270mb" }));
 app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.json({ limit: "140mb" }));
 app.use(express.json({ limit: "60mb" }));
 app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false, index: false, maxAge: 0 }));
-app.use("/outputs", express.static(outputRoot, { fallthrough: true, index: false, maxAge: 0 }));
+// Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
+for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
+app.use("/outputs", (_request, response) => { response.status(404).end(); });
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
     const root = path.join(outputRoot, folder);
@@ -323,6 +380,24 @@ app.delete("/api/output/:folder/:name", async (request, response) => {
   const root = path.resolve(outputRoot, request.params.folder);
   if (!target.startsWith(`${root}${path.sep}`)) { response.status(400).json({ error: "File non valido." }); return; }
   try { await fs.rm(target); response.json({ ok: true }); } catch { response.status(404).json({ error: "File non trovato." }); }
+});
+/** Chat compatte: lettura e modifica del Markdown salvato in OUTPUT/Compatta_chat. */
+function compactChatPath(name: string) {
+  const root = path.resolve(outputRoot, "Compatta_chat"), target = path.resolve(root, name);
+  return target.startsWith(`${root}${path.sep}`) && /\.md$/i.test(target) ? target : null;
+}
+app.get("/api/output/Compatta_chat/:name/content", async (request, response) => {
+  const target = compactChatPath(request.params.name);
+  if (!target) { response.status(400).json({ error: "File non valido." }); return; }
+  try { response.json({ source: `OUTPUT/Compatta_chat/${request.params.name}`, name: request.params.name, extension: ".md", content: await fs.readFile(target, "utf8") }); }
+  catch { response.status(404).json({ error: "File non trovato." }); }
+});
+app.put("/api/output/Compatta_chat/:name/content", async (request, response) => {
+  const target = compactChatPath(request.params.name);
+  const parsed = z.object({ content: z.string().max(5_000_000) }).safeParse(request.body);
+  if (!target || !parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
+  try { await fs.access(target); await fs.writeFile(target, parsed.data.content, "utf8"); response.json({ ok: true }); }
+  catch { response.status(404).json({ error: "File non trovato." }); }
 });
 app.get("/api/output/images", async (_request, response) => {
   try {
@@ -464,8 +539,7 @@ app.post("/api/audio/transcribe", async (request, response) => {
     if (!configuredWhisperPython) {
       try { await fs.access("/opt/doctr/bin/python"); whisperPython = "/opt/doctr/bin/python"; } catch { /* Windows/locale: usa python nel PATH. */ }
     }
-    const result = await execFileAsync(whisperPython, [audioScript, "--input", whisperInputPath, "--model", process.env.WHISPER_MODEL || "small", "--language", "it"], { windowsHide: true, timeout: 30 * 60_000, maxBuffer: 4_000_000, env: { ...process.env, PYTHONUNBUFFERED: "1" } });
-    const transcription = JSON.parse(result.stdout.trim()) as { text?: string; language?: string; duration?: number };
+    const transcription = await withHeavySlot(() => toolWorker(whisperPython, audioScript, 30 * 60_000).request<{ text?: string; language?: string; duration?: number }>({ input: whisperInputPath, model: process.env.WHISPER_MODEL || "small", language: "it" }));
     response.json({ text: transcription.text || "", language: transcription.language || "it", duration: transcription.duration || 0 });
   } catch (error) {
     const details = error as { message?: string; stderr?: string };
@@ -507,19 +581,19 @@ app.post("/api/ocr", async (request, response) => {
     let text = "";
     if (engine === "doctr") {
       try {
-        await execFileAsync(doctrPython, [doctrScript, "--input", inputPath, "--output", outputPath], { windowsHide: true, maxBuffer: 2_000_000 });
+        await withHeavySlot(() => toolWorker(doctrPython, doctrScript, 10 * 60_000).request({ input: inputPath, output: outputPath }));
         text = (await fs.readFile(outputPath, "utf8")).trim();
       } catch (doctrError) {
         throw new Error(`docTR non disponibile o fallito: ${doctrError instanceof Error ? doctrError.message.slice(0, 260) : doctrError}`);
       }
     } else {
-      text = await tesseractText(inputPath, outputPath, outputBase, pdf);
+      text = await withHeavySlot(() => tesseractText(inputPath, outputPath, outputBase, pdf));
     }
     await fs.writeFile(outputPath, text);
     response.json({ name: path.basename(outputPath), text: text || "Nessun testo riconosciuto.", input: path.relative(process.cwd(), inputPath), output: path.relative(process.cwd(), outputPath) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Errore OCR.";
-    if (/ENOENT|not found|is not recognized/i.test(message)) {
+    if (/ENOENT|not found|is not recognized|No module named/i.test(message)) {
       response.status(503).json({ error: "docTR non disponibile o non riesce a caricare i modelli. Installa python-doctr, completa il primo download dei pesi e verifica OCR_ENGINE=doctr." });
     } else {
       response.status(500).json({ error: `OCR non riuscito: ${message.slice(0, 300)}` });
@@ -534,16 +608,16 @@ async function tesseractText(inputPath: string, outputPath: string, outputBase: 
   if (pdf) {
       const pagePrefix = path.join(ocrOutputRoot, `${job}-page`);
       const pdfToPng = process.env.PDFTOPPM_PATH || "pdftoppm";
-      await execFileAsync(pdfToPng, ["-png", "-r", "200", inputPath, pagePrefix], { windowsHide: true });
+      await execFileAsync(pdfToPng, ["-png", "-r", "200", inputPath, pagePrefix], { windowsHide: true, timeout: 5 * 60_000 });
       const pages = (await fs.readdir(ocrOutputRoot)).filter((name) => name.startsWith(`${job}-page-`) && name.endsWith(".png")).sort();
       for (const page of pages) {
         const pageBase = path.join(ocrOutputRoot, page.slice(0, -4));
-        await execFileAsync(executable, [path.join(ocrOutputRoot, page), pageBase, "-l", process.env.TESSERACT_LANG || "ita+eng", "--psm", "3"], { windowsHide: true });
+        await execFileAsync(executable, [path.join(ocrOutputRoot, page), pageBase, "-l", process.env.TESSERACT_LANG || "ita+eng", "--psm", "3"], { windowsHide: true, timeout: 5 * 60_000 });
         text += `${text ? "\n\n" : ""}${(await fs.readFile(`${pageBase}.txt`, "utf8")).trim()}`;
         await Promise.all([fs.rm(path.join(ocrOutputRoot, page), { force: true }), fs.rm(`${pageBase}.txt`, { force: true })]);
       }
   } else {
-    await execFileAsync(executable, [inputPath, outputBase, "-l", process.env.TESSERACT_LANG || "ita+eng", "--psm", "3"], { windowsHide: true });
+    await execFileAsync(executable, [inputPath, outputBase, "-l", process.env.TESSERACT_LANG || "ita+eng", "--psm", "3"], { windowsHide: true, timeout: 5 * 60_000 });
     text = (await fs.readFile(outputPath, "utf8")).trim();
   }
   return text;
@@ -566,20 +640,18 @@ app.post("/api/yolo", async (request, response) => {
     const models = { detect: "yolo11n.pt", segment: "yolo11n-seg.pt", classify: "yolo11n-cls.pt", pose: "yolo11n-pose.pt", obb: "yolo11n-obb.pt" };
     const model = process.env.YOLO_MODEL || models[parsed.data.task];
     const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
-    let result;
-    try {
-      result = await execFileAsync(executable, args, { windowsHide: true, maxBuffer: 2_000_000 });
-    } catch (error) {
-      // Su Windows il comando yolo può non essere nel PATH del processo Node,
-      // anche se il modulo Python è installato.
-      if (process.env.YOLO_PATH || !(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-      result = await execFileAsync(process.env.DOCTR_PYTHON || "python", [yoloScript, "--task", parsed.data.task, "--model", model, "--source", inputPath], { windowsHide: true, maxBuffer: 2_000_000 });
+    let output: string;
+    if (process.env.YOLO_PATH) {
+      const result = await withHeavySlot(() => execFileAsync(executable, args, { windowsHide: true, timeout: 10 * 60_000, maxBuffer: 2_000_000 }));
+      output = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
+    } else {
+      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string }>({ task: parsed.data.task, model, source: inputPath }));
+      output = result.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
     }
-    const output = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
     response.json({ text: output || "YOLO non ha restituito rilevamenti.", output: path.relative(process.cwd(), inputPath) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Errore YOLO.";
-    if (/ENOENT|not found|is not recognized/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics) oppure imposta YOLO_PATH." });
+    if (/ENOENT|not found|is not recognized|No module named/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics) oppure imposta YOLO_PATH." });
     else response.status(500).json({ error: `Analisi YOLO non riuscita: ${message.slice(0, 300)}` });
   }
 });
@@ -707,9 +779,11 @@ app.get("/api/image/status", async (_request, response) => {
   try {
     const upstream = await fetch(`${comfyUrl}/system_stats`, { signal: AbortSignal.timeout(2000) });
     if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
-    response.json({ status: "ready", ready: true, model: process.env.IMAGE_MODEL || "Qwen/Qwen-Image-2.1", output: path.relative(process.cwd(), imageOutputRoot), message: "ComfyUI operativo" });
-  } catch {
-    response.json({ status: "starting", ready: false, model: process.env.IMAGE_MODEL || "Qwen/Qwen-Image-2.1", output: path.relative(process.cwd(), imageOutputRoot), message: "ComfyUI in avvio" });
+    response.json({ status: "ready", ready: true, model: process.env.IMAGE_MODEL || "Qwen/Qwen-Image-2.1", output: path.relative(process.cwd(), imageOutputRoot), message: "ComfyUI attivo" });
+  } catch (error) {
+    // Connessione rifiutata: nessuno ascolta sulla porta, quindi ComfyUI è spento.
+    const stopped = (error as { cause?: { code?: string } })?.cause?.code === "ECONNREFUSED";
+    response.json({ status: stopped ? "stopped" : "unreachable", ready: false, model: process.env.IMAGE_MODEL || "Qwen/Qwen-Image-2.1", output: path.relative(process.cwd(), imageOutputRoot), message: stopped ? "ComfyUI non attivo" : "ComfyUI non raggiungibile" });
   }
 });
 
@@ -724,34 +798,44 @@ app.post("/api/image/generate", async (request, response) => {
   const name = `${Date.now()}-${flowTag}-${parsed.data.seed}.png`;
   const outputPath = path.join(imageOutputRoot, name);
   const started = Date.now();
-  imageJobs.set(jobId, { status: "running", startedAt: started });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Timeout generazione ComfyUI (${Math.round(IMAGE_TIMEOUT_MS / 60_000)} min).`)), IMAGE_TIMEOUT_MS);
+  const job: ImageJob = { status: "running", startedAt: started, controller };
+  imageJobs.set(jobId, job);
   beginMainboardActivity(jobId, `Generazione immagine ${parsed.data.flow === "viggle" ? "Viggle" : "Qwen"}`, "/api/image/generate");
   response.status(202).json({ jobId, status: "running", message: "Generazione avviata." });
   try {
-    await fs.mkdir(imageOutputRoot, { recursive: true });
-    const executable = process.env.IMAGE_PYTHON || process.env.DOCTR_PYTHON || "python";
-    const args = [qwenImageScript, "--prompt", parsed.data.prompt, "--output", outputPath, "--width", String(parsed.data.width), "--height", String(parsed.data.height), "--steps", String(parsed.data.steps), "--seed", String(parsed.data.seed), "--model", modelLabel, "--flow", parsed.data.flow, "--lora", parsed.data.lora];
-    const result = await execFileAsync(executable, args, { windowsHide: true, timeout: 60 * 60_000, maxBuffer: 2_000_000, env: { ...process.env, PYTHONUNBUFFERED: "1" } });
-    const metadata = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1) || "{}") as { device?: string };
-    imageJobs.set(jobId, { status: "ready", startedAt: started, result: { name, url: `/outputs/images/${encodeURIComponent(name)}`, output: path.relative(process.cwd(), outputPath), device: metadata.device || "sconosciuto", model: modelLabel, generationMs: Date.now() - started, ...parsed.data } });
+    const metadata = await generateWithComfy(parsed.data, {
+      baseUrl: process.env.COMFYUI_URL || "http://127.0.0.1:8188",
+      comfyRoot: path.resolve(process.env.COMFYUI_ROOT || path.join(process.cwd(), "runtime", "ComfyUI")),
+      outputPath,
+      signal: controller.signal,
+      onProgress: progress => { job.progress = progress; },
+    });
+    const steps = parsed.data.flow === "viggle" ? VIGGLE_STEPS : parsed.data.steps;
+    imageJobs.set(jobId, { status: "ready", startedAt: started, result: { name, url: `/outputs/images/${encodeURIComponent(name)}`, output: path.relative(process.cwd(), outputPath), device: metadata.deviceName, model: modelLabel, generationMs: Date.now() - started, ...parsed.data, steps } });
     finishMainboardActivity(jobId, "ok");
   } catch (error) {
     await fs.rm(outputPath, { force: true }).catch(() => undefined);
     const message = error instanceof Error ? error.message : "Errore generazione immagini.";
-    imageJobs.set(jobId, { status: "error", startedAt: started, error: `Generazione immagine non riuscita: ${message.slice(0, 500)}` });
+    imageJobs.set(jobId, { status: "error", startedAt: started, error: controller.signal.aborted ? message : `Generazione immagine non riuscita: ${message.slice(0, 500)}` });
     finishMainboardActivity(jobId, "error");
-    if (response.headersSent) return;
-    if (/No module named|cannot import name|ModuleNotFoundError/i.test(message)) response.status(503).json({ error: "Qwen Image non è installato. Installa torch, transformers>=5.17, diffusers da GitHub, accelerate e Pillow nell'ambiente IMAGE_PYTHON." });
-    imageJobs.set(jobId, { status: "error", startedAt: started, error: `Generazione immagine non riuscita: ${message.slice(0, 500)}` });
-  }
+  } finally { clearTimeout(timer); }
 });
 app.get("/api/image/jobs/:jobId", (request, response) => {
   const job = imageJobs.get(request.params.jobId);
   if (!job) { response.status(404).json({ error: "Generazione non trovata o scaduta." }); return; }
-  if (job.status === "running") { response.json({ status: "running", message: "ComfyUI sta generando l'immagine…" }); return; }
+  if (job.status === "running") { response.json({ status: "running", progress: job.progress }); return; }
   if (job.status === "error") { response.status(500).json({ status: "error", error: job.error }); imageJobs.delete(request.params.jobId); return; }
   response.json({ status: "ready", ...job.result });
   imageJobs.delete(request.params.jobId);
+});
+app.delete("/api/image/jobs/:jobId", (request, response) => {
+  const job = imageJobs.get(request.params.jobId);
+  if (!job) { response.status(404).json({ error: "Generazione non trovata o scaduta." }); return; }
+  if (job.status === "running") job.controller?.abort(new Error("Generazione annullata."));
+  imageJobs.delete(request.params.jobId);
+  response.json({ status: "cancelled" });
 });
 app.get("/api/brain/graph", async (request, response) => {
   const parsed = z.object({
@@ -820,6 +904,47 @@ for (const action of ["index", "import"] as const) {
     } catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Errore Brain: verificare indice ed embedding Ollama." }); }
   });
 }
+
+app.post("/api/candidature/import", async (request, response) => {
+  const parsed = z.object({ offers: z.array(z.record(z.string(), z.unknown())).max(5000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Offerte non valide." }); return; }
+  try { response.json(await candidature.importa(parsed.data.offers)); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Import non riuscito." }); }
+});
+app.get("/api/candidature", async (_request, response) => {
+  try { response.json(await candidature.elenco()); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Coda non disponibile." }); }
+});
+app.get("/api/candidature/stato", async (_request, response) => {
+  response.json(await candidature.stato());
+});
+app.post("/api/candidature/workflow", async (_request, response) => {
+  const andreaUrl = process.env.ANDREAGPT_URL_N8N || (process.env.OLLAMA_DOCKER_HOST === "1" ? "http://andreagpt:3000" : `http://host.docker.internal:${port}`);
+  try { response.json(await candidature.creaWorkflow(andreaUrl)); }
+  catch (error) { response.status(502).json({ error: error instanceof Error ? error.message : "Workflow non creato." }); }
+});
+app.post("/api/candidature/raccogli", async (_request, response) => {
+  try { await candidature.raccogliOra(); response.json({ avviata: true }); }
+  catch (error) { response.status(502).json({ error: error instanceof Error ? error.message : "Raccolta non avviata." }); }
+});
+app.post("/api/candidature/:id/invia", async (request, response) => {
+  const parsed = z.object({ letter: z.string().trim().min(20).max(6000).optional(), subject: z.string().trim().min(3).max(200).optional(), to: z.string().email().optional() }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Dati invio non validi." }); return; }
+  try { response.json(await candidature.invia(request.params.id, parsed.data)); }
+  catch (error) { response.status(502).json({ error: error instanceof Error ? error.message : "Invio non riuscito." }); }
+});
+app.post("/api/candidature/:id/lettera", async (request, response) => {
+  const parsed = z.object({ tipo: z.enum(["candidatura", "followup"]).default("candidatura") }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta lettera non valida." }); return; }
+  try { response.json(await candidature.lettera(request.params.id, parsed.data.tipo)); }
+  catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Lettera non generata." }); }
+});
+app.patch("/api/candidature/:id", async (request, response) => {
+  const parsed = z.object({ status: z.enum(STATI).optional(), letter: z.string().max(6000).optional(), subject: z.string().max(200).optional() }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Aggiornamento non valido." }); return; }
+  try { response.json(await candidature.aggiorna(request.params.id, parsed.data)); }
+  catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Offerta non trovata." }); }
+});
 
 app.get("/api/health", async (_request, response) => {
   const [searxng, web] = await Promise.all([checkSearxng(), checkWebAccess()]);
@@ -938,6 +1063,10 @@ const chatSchema = z.object({
   codeAgent: z.boolean().default(false),
   brainPrivate: z.boolean().default(false),
   brainSource: z.string().min(1).max(300).optional(),
+  // Numero di fonti Brain scelto nelle impostazioni; assente = automatico (5, oppure 8 per metodi e formule).
+  brainSourceCount: z.number().int().min(1).max(12).optional(),
+  // Riordino delle fonti con cross-encoder (impostazioni); assente = predefinito del Brain.
+  brainRerank: z.boolean().optional(),
   numCtx: z.union([z.literal(4096), z.literal(8192)]).default(OLLAMA_NUM_CTX),
   model: z.string().min(1).max(200),
   messages: z.array(z.object({
@@ -948,9 +1077,8 @@ const chatSchema = z.object({
   temperature: z.number().min(0).max(2).default(0.6),
   maxTokens: z.number().int().min(1).max(8192).default(2048),
   webSearch: z.boolean().default(false),
-  // Ricerca Brain: spinta Micelio e completamento fuzzy per temi (impostazioni della chat).
-  micelio: z.boolean().optional(),
-  fuzzy: z.boolean().optional(),
+  // Diagnostica spenta: niente log, tempi, controlli post-risposta e router di suggerimento.
+  diagnostics: z.boolean().default(true),
 });
 
 app.post("/api/chat", async (request, response) => {
@@ -965,7 +1093,8 @@ app.post("/api/chat", async (request, response) => {
   const usesOpenRouter = parsed.data.provider === "openrouter";
   const provider = usesOllama ? "Ollama" : usesOpenRouter ? "OpenRouter" : "NVIDIA";
   const mainboardTracking = typeof response.locals.mainboardActivityId === "string";
-  const trace = createDiagnosticTrace(mainboardTracking ? response.locals.mainboardActivityId : randomUUID(), parsed.data.conversationId);
+  const diagnostics = parsed.data.diagnostics;
+  const trace = createDiagnosticTrace(mainboardTracking ? response.locals.mainboardActivityId : randomUUID(), parsed.data.conversationId, diagnostics);
   let traceOutcome: "ok" | "error" = "error";
   trace.add({ stage: "request", status: "info", message: "Richiesta validata.", details: { provider, model: parsed.data.model, brainRequested: parsed.data.brain, webRequested: parsed.data.webSearch } });
   const privacyCookie = `brain_${parsed.data.conversationId}=1`;
@@ -975,7 +1104,7 @@ app.post("/api/chat", async (request, response) => {
   let effectiveBrain = parsed.data.brain;
   let effectiveWebSearch = parsed.data.webSearch;
   let localDecision: ReturnType<typeof routeLocally> | undefined;
-  if (localRouterEnabled && !effectiveBrain && !effectiveWebSearch && !wasPrivate) {
+  if (diagnostics && localRouterEnabled && !effectiveBrain && !effectiveWebSearch && !wasPrivate) {
     const question = extractSearchQuery(parsed.data.messages);
     if (question) {
       localDecision = routeLocally(question, { allowBrain: usesOllama });
@@ -1011,6 +1140,7 @@ app.post("/api/chat", async (request, response) => {
     metrics.routerRoute = localDecision.route === "brain" ? 1 : localDecision.route === "web" ? 2 : 0;
   }
   const controller = new AbortController();
+  activeChats.add(controller);
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -1041,11 +1171,11 @@ app.post("/api/chat", async (request, response) => {
       response.end("data: [DONE]\n\n");traceOutcome="ok";return;
     }
     let upstreamMessages = parsed.data.messages;
-    let brainSources: Array<{ id: string; source: string; text: string; micelioScore?: number }> = [];
+    let brainSources: Array<{ id: string; source: string; text: string; retrievalScore?: number }> = [];
     let retrievedBrainSources: typeof brainSources = [];
     let brainSupportSources: Array<{ citation: string; text: string; retrievalScore?: number }> = [];
     let requestBrain: Awaited<ReturnType<typeof brainModule>> | undefined;
-    const retrievalContext: import("./brain/brain").BrainSearchContext = { metrics: {}, micelio: parsed.data.micelio, fuzzy: parsed.data.fuzzy };
+    const retrievalContext: import("./brain/brain").BrainSearchContext = { metrics: {}, sourceLimit: parsed.data.brainSourceCount, rerank: parsed.data.brainRerank };
     const searchQuery = extractSearchQuery(parsed.data.messages);
     // Un saluto non cerca nel Brain: il modello risponde in modo naturale, senza fonti a caso.
     if (effectiveBrain && isSmallTalk(searchQuery)) { effectiveBrain = false; trace.add({ stage: "rag", status: "info", message: "Saluto o messaggio di cortesia: nessuna ricerca nel Brain." }); }
@@ -1057,7 +1187,7 @@ app.post("/api/chat", async (request, response) => {
         const brainStatus = await brain.getBrainStatus();
         metrics.indexStatusMs = performance.now() - statusStarted;
         trace.add({ stage: "embedding", status: brainStatus.chunks > 0 ? "ok" : "warning", message: brainStatus.chunks > 0 ? "Indice embedding disponibile." : "Indice Brain vuoto.", details: { model: brainStatus.model, files: brainStatus.files, chunks: brainStatus.chunks, turboReady: Boolean(brainStatus.turboVec?.ready) } });
-        trace.add({ stage: "micelio", status: brainStatus.turboVec?.ready ? "ok" : "warning", message: brainStatus.turboVec?.ready ? "TurboVec/Micelio pronto." : "TurboVec non pronto: ricerca ibrida con fallback JSON.", details: { enabled: Boolean(brainStatus.turboVec?.enabled), ready: Boolean(brainStatus.turboVec?.ready) } });
+        trace.add({ stage: "semantic", status: brainStatus.turboVec?.ready ? "ok" : "warning", message: brainStatus.turboVec?.ready ? "TurboVec pronto." : "TurboVec non pronto: ricerca ibrida con fallback JSON.", details: { enabled: Boolean(brainStatus.turboVec?.enabled), ready: Boolean(brainStatus.turboVec?.ready) } });
         const retrievalStarted = performance.now();
         const result = await brain.searchBrain(searchQuery, parsed.data.brainSource, retrievalContext);
         Object.assign(metrics, retrievalContext.metrics);
@@ -1069,15 +1199,15 @@ app.post("/api/chat", async (request, response) => {
         const candidates = result;
         const filtered = candidates;
         const evidenceText = (chunk: typeof filtered[number]) => chunk.section ? `SEZIONE DEL DOCUMENTO: ${chunk.section}\n\n${chunk.text}` : chunk.text;
-        brainSources = filtered.map((chunk, index) => ({ id: `Cit. ${index + 1}`, source: chunk.citation, text: evidenceText(chunk), micelioScore: chunk.micelioScore }));
+        brainSources = filtered.map((chunk, index) => ({ id: `Cit. ${index + 1}`, source: chunk.citation, text: evidenceText(chunk), retrievalScore: Math.max(0, chunk.score) / Math.max(0.0001, filtered[0].score) }));
         retrievedBrainSources = [...brainSources];
         if (mainboardTracking) reportSources = brainSources.map(source => ({ type: "brain", label: `${source.id} - ${source.source}` }));
-        brainSupportSources = filtered.map(chunk => ({ citation: chunk.citation, text: chunk.text, retrievalScore: chunk.micelioScore ?? chunk.score }));
+        brainSupportSources = filtered.map(chunk => ({ citation: chunk.citation, text: chunk.text, retrievalScore: Math.max(0, chunk.score) / Math.max(0.0001, filtered[0].score) }));
         metrics.evidenceCharsBefore = brainSources.reduce((n, source) => n + source.text.length, 0);
         if (process.env.RAG_OPTIMIZE !== "0") brainSources = compactEvidence(brainSources);
         metrics.evidenceCharsAfter = brainSources.reduce((n, source) => n + source.text.length, 0);
         const top = result[0];
-        trace.add({ stage: "rag", status: brainSources.length && top && (top.lexicalScore >= 0.08 || top.cosineScore >= 0.45) ? "ok" : brainSources.length ? "warning" : "error", message: brainSources.length ? "Retrieval RAG completato." : "RAG non ha trovato fonti pertinenti.", durationMs: metrics.retrievalMs, details: { candidates: retrievalContext.metrics.retrievalCandidates ?? result.length, returned: result.length, selected: brainSources.length, topScore: top?.score ?? null, topCosine: top?.cosineScore ?? null, topLexical: top?.lexicalScore ?? null, sourceFilter: parsed.data.brainSource ?? null, micelio: parsed.data.micelio ?? null, fuzzy: parsed.data.fuzzy ?? null, fuzzyThemes: retrievalContext.metrics.fuzzyThemes ?? null, fuzzyMovedTop5: retrievalContext.metrics.fuzzyMovedTop5 ?? null } });
+        trace.add({ stage: "rag", status: brainSources.length && top && (top.lexicalScore >= 0.08 || top.cosineScore >= 0.45) ? "ok" : brainSources.length ? "warning" : "error", message: brainSources.length ? "Retrieval RAG completato." : "RAG non ha trovato fonti pertinenti.", durationMs: metrics.retrievalMs, details: { candidates: retrievalContext.metrics.retrievalCandidates ?? result.length, returned: result.length, selected: brainSources.length, topScore: top?.score ?? null, topCosine: top?.cosineScore ?? null, topLexical: top?.lexicalScore ?? null, sourceFilter: parsed.data.brainSource ?? null } });
       } catch (error) { trace.add({ stage: "rag", status: "error", message: error instanceof Error ? error.message : "Retrieval Brain fallito." }); response.status(503).json({ error: error instanceof Error ? error.message : "Retrieval Brain fallito: verificare indice ed embedding.", diagnostics: { requestId: trace.requestId, events: trace.events } }); return; }
     }
     if (effectiveBrain && brainSources.length === 0) {
@@ -1092,7 +1222,7 @@ app.post("/api/chat", async (request, response) => {
       response.setHeader("X-Accel-Buffering", "no");
       response.write(`data: ${JSON.stringify({ brainSources: [] })}\n\n`);
       trace.add({ stage: "response", status: "warning", message: "Risposta controllata senza generazione: nessuna evidenza RAG." });
-      response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
+      if (diagnostics) response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `Non ho trovato il nome o informazioni pertinenti nei documenti indicizzati in Brain.${hint} Controlla l'ortografia oppure aggiungi il documento corretto e reindicizza l'archivio.` } }] })}\n\n`);
       response.end("data: [DONE]\n\n");
       traceOutcome = "ok";
@@ -1102,20 +1232,20 @@ app.post("/api/chat", async (request, response) => {
     if (grounded) {
       let semanticSupport: Awaited<ReturnType<NonNullable<typeof requestBrain>["assessSemanticSupport"]>> | null = null;
       const groundingStarted = performance.now();
-      try { if (requestBrain) semanticSupport = await requestBrain.assessSemanticSupport(searchQuery, grounded, brainSupportSources, retrievalContext); } catch (error) { trace.add({ stage: "micelio", status: "warning", message: `Controllo semantico Micelio non disponibile: ${error instanceof Error ? error.message : "errore embedding"}` }); }
+      try { if (diagnostics && requestBrain) semanticSupport = await requestBrain.assessSemanticSupport(searchQuery, grounded, brainSupportSources, retrievalContext); } catch (error) { trace.add({ stage: "semantic", status: "warning", message: `Controllo semantico non disponibile: ${error instanceof Error ? error.message : "errore embedding"}` }); }
       metrics.groundingMs = performance.now() - groundingStarted;
-      const supportDetails = micelioSupportDetails(semanticSupport);
-      if (semanticSupport?.checked) metrics.micelioSupportScore = semanticSupport.score;
+      const supportDetails = semanticSupportDetails(semanticSupport);
+      if (semanticSupport?.checked) metrics.semanticSupportScore = semanticSupport.score;
       response.status(200);
       response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       response.setHeader("Cache-Control", "no-cache, no-transform");
       response.setHeader("X-Accel-Buffering", "no");
       response.write(`data: ${JSON.stringify({ brainSources })}\n\n`);
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: grounded } }] })}\n\n`);
-      response.write(`data: ${JSON.stringify({ metrics: { ...metrics, retrievalMs: metrics.retrievalMs, sources: brainSources.length, directBrainAnswer: 1, totalMs: Math.round(performance.now() - started) } })}\n\n`);
+      if (diagnostics) response.write(`data: ${JSON.stringify({ metrics: { ...metrics, retrievalMs: metrics.retrievalMs, sources: brainSources.length, directBrainAnswer: 1, totalMs: Math.round(performance.now() - started) } })}\n\n`);
       trace.add({ stage: "model", status: "info", message: "Modello non invocato: risposta deterministica dalle fonti." });
-      trace.add({ stage: "response", status: semanticSupport && semanticSupport.score < 0.45 ? "warning" : "ok", message: semanticSupport?.checked ? `Supporto semantico Micelio: ${Math.round(semanticSupport.score * 100)}% (${semanticSupport.label}).` : "Risposta RAG completata con citazione.", details: { citations: brainSources.length, ...supportDetails } });
-      response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
+      trace.add({ stage: "response", status: semanticSupport?.label === "debole" ? "warning" : "ok", message: semanticSupport?.checked ? `Supporto semantico: ${Math.round(semanticSupport.score * 100)}% (${semanticSupport.label}).` : "Risposta RAG completata con citazione.", details: { citations: brainSources.length, ...supportDetails } });
+      if (diagnostics) response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
       response.end("data: [DONE]\n\n");
       traceOutcome = "ok";
       return;
@@ -1186,7 +1316,7 @@ app.post("/api/chat", async (request, response) => {
           : [{ role: "system", content: italianGuard }, ...upstreamMessages];
       }
       try {
-        const context = localContext(upstreamMessages as LocalMessage[], emphasizeBrainSources(searchQuery, brainSources), effectiveBrain, effectiveNumCtx, parsed.data.maxTokens);
+        const context = localContext(upstreamMessages as LocalMessage[], emphasizeBrainSources(searchQuery, brainSources), effectiveBrain, effectiveNumCtx, parsed.data.maxTokens, parsed.data.brainSourceCount);
         Object.assign(metrics, context.evidenceDiagnostics);
         upstreamMessages = context.messages;
         brainSources = context.sources;
@@ -1288,7 +1418,7 @@ app.post("/api/chat", async (request, response) => {
             metrics.cpuSystemMs = Math.round(cpu.system / 1000);
             metrics.rssMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
             metrics.totalMs = Math.round(performance.now() - started);
-            response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
+            if (diagnostics) response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
           }
           response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: event.message?.content || "" } }] })}\n\n`);
         }
@@ -1299,26 +1429,30 @@ app.post("/api/chat", async (request, response) => {
     let semanticSupport: Awaited<ReturnType<NonNullable<typeof requestBrain>["assessSemanticSupport"]>> | null = null;
     const groundingStarted = performance.now();
     // Validate only evidence actually retained in the final model prompt.
-    const retainedSupport = brainSources.map(source => ({ citation: source.source, text: source.text, retrievalScore: source.micelioScore }));
-    try { if (requestBrain && brainSources.length) semanticSupport = await requestBrain.assessSemanticSupport(searchQuery, generatedText, retainedSupport, retrievalContext); } catch (error) { trace.add({ stage: "micelio", status: "warning", message: `Controllo semantico Micelio non disponibile: ${error instanceof Error ? error.message : "errore embedding"}` }); }
+    const retainedSupport = brainSources.map(source => ({ citation: source.source, text: source.text, retrievalScore: source.retrievalScore }));
+    try { if (diagnostics && requestBrain && brainSources.length) semanticSupport = await requestBrain.assessSemanticSupport(searchQuery, generatedText, retainedSupport, retrievalContext); } catch (error) { trace.add({ stage: "semantic", status: "warning", message: `Controllo semantico non disponibile: ${error instanceof Error ? error.message : "errore embedding"}` }); }
     metrics.groundingMs = performance.now() - groundingStarted;
     metrics.totalMs = performance.now() - started;
-    if (brainSources.length) {
+    let groundingFlag = false;
+    if (diagnostics && brainSources.length) {
       const checks=inspectGrounding(generatedText,brainSources);
       Object.assign(metrics,checks);
-      trace.add({stage:"response",status:checks.groundingInvalidCitations||checks.groundingNumericGaps||checks.groundingUncitedSegments||checks.groundingFormulaAbsenceWarnings?"warning":"info",
-        message:checks.groundingFormulaAbsenceWarnings ? "La risposta dichiara formule assenti, ma negli estratti inviati sono presenti espressioni matematiche: verificare la risposta." : "Controllo rapido di citazioni e numeri; non certifica la correttezza delle affermazioni.",details:checks});
+      trace.add({stage:"response",status:hasGroundingWarning(checks)?"warning":"info",
+        message:checks.groundingFormulaAbsenceWarnings ? "La risposta dichiara formule assenti, ma negli estratti inviati sono presenti espressioni matematiche: verificare la risposta." : `Groundedness ${Math.round(checks.groundedness * 100)}% · Faithfulness ${Math.round(checks.faithfulness * 100)}% · copertura citazioni ${Math.round(checks.citationCoverage * 100)}%. Controllo lessicale: non certifica la correttezza delle affermazioni.`,details:checks});
+      groundingFlag = hasGroundingWarning(checks);
     }
-    if (semanticSupport?.checked) metrics.micelioSupportScore = semanticSupport.score;
+    if (semanticSupport?.checked) metrics.semanticSupportScore = semanticSupport.score;
+    if (diagnostics) {
     const citationAssessment = assessCitations(generatedText, brainSources.length, webSourcesForResponse.length, brainSources.map(source => source.id));
     const languageAssessment = assessOutputLanguage(generatedText);
     trace.add({ stage: "response", status: languageAssessment.hasCjk ? "warning" : "ok", message: languageAssessment.hasCjk ? "La risposta contiene caratteri CJK: possibile language drift del modello." : "Lingua di output compatibile con la policy italiana.", details: { cjkCharacters: languageAssessment.cjkCharacters, cjkSample: languageAssessment.sample || null } });
-    const supportDetails = micelioSupportDetails(semanticSupport);
-    const supportWarning = semanticSupport?.checked && semanticSupport.score < 0.45;
-    const groundingWarning = Boolean(metrics.groundingFormulaAbsenceWarnings || metrics.groundingInvalidCitations || metrics.groundingNumericGaps || metrics.groundingUncitedSegments);
-    trace.add({ stage: "response", status: supportWarning || groundingWarning ? "warning" : citationAssessment.status, message: groundingWarning ? "Risposta con avvisi di grounding: consultare i controlli sugli estratti." : supportWarning && semanticSupport ? `Similarita semantica Micelio debole: ${Math.round(semanticSupport.score * 100)}% (${semanticSupport.label}).` : citationAssessment.expected === 0 ? "Generazione completata senza fonti richieste." : citationAssessment.invalid ? "La risposta cita riferimenti non disponibili." : citationAssessment.found ? (semanticSupport?.checked ? "Riferimenti validi; similarita semantica calcolata, correttezza delle affermazioni non certificata." : "Riferimenti validi; controllo semantico non eseguito.") : "La risposta non cita le fonti disponibili.", details: { availableSources: citationAssessment.expected, citationMarkers: citationAssessment.found, invalidMarkers: citationAssessment.invalid, ...supportDetails } });
-    response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
-    response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
+    const supportDetails = semanticSupportDetails(semanticSupport);
+    const supportWarning = semanticSupport?.checked && semanticSupport.label === "debole";
+    const groundingWarning = groundingFlag;
+    trace.add({ stage: "response", status: supportWarning || groundingWarning ? "warning" : citationAssessment.status, message: groundingWarning ? "Risposta con avvisi di grounding: consultare i controlli sugli estratti." : supportWarning && semanticSupport ? `Similarita semantica debole: ${Math.round(semanticSupport.score * 100)}% (${semanticSupport.label}).` : citationAssessment.expected === 0 ? "Generazione completata senza fonti richieste." : citationAssessment.invalid ? "La risposta cita riferimenti non disponibili." : citationAssessment.found ? (semanticSupport?.checked ? "Riferimenti validi; similarita semantica calcolata, correttezza delle affermazioni non certificata." : "Riferimenti validi; controllo semantico non eseguito.") : "La risposta non cita le fonti disponibili.", details: { availableSources: citationAssessment.expected, citationMarkers: citationAssessment.found, invalidMarkers: citationAssessment.invalid, ...supportDetails } });
+    }
+    if (diagnostics) response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
+    if (diagnostics) response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
     if (usesOllama) response.write("data: [DONE]\n\n");
     response.end();
     traceOutcome = "ok";
@@ -1334,10 +1468,13 @@ app.post("/api/chat", async (request, response) => {
     else response.end(`data: ${JSON.stringify({ error: "Stream interrotto: verificare runtime e memoria disponibile." })}\n\n`);
   } finally {
     clearTimeout(timeout);
-    if (mainboardTracking) {
-      const timings = Object.fromEntries(Object.entries(metrics).filter(([key, value]) => Number.isFinite(value) && (key.endsWith("Ms") || key.endsWith("_duration"))));
-      trace.setSummary({ durationMs: Math.round(performance.now() - started), timings, sources: reportSources });
-    }
+    // Dopo un errore a metà stream Ollama continuerebbe a generare (GPU occupata, chat successive in coda).
+    controller.abort();
+    activeChats.delete(controller);
+    // Tempi e metriche sempre nel log; le fonti solo con la Mainboard attiva.
+    const numeric = Object.entries(metrics).filter(([, value]) => typeof value === "number" && Number.isFinite(value));
+    const isTiming = (key: string) => key.endsWith("Ms") || key.endsWith("_duration");
+    trace.setSummary({ durationMs: Math.round(performance.now() - started), timings: Object.fromEntries(numeric.filter(([key]) => isTiming(key))), metrics: Object.fromEntries(numeric.filter(([key]) => !isTiming(key))), ...(mainboardTracking ? { sources: reportSources } : {}) });
     await trace.persist(traceOutcome);
   }
 });
@@ -1358,10 +1495,31 @@ app.use((request, response, next) => {
 });
 
 const listenHost = lanAccessEnabled || process.env.OLLAMA_DOCKER_HOST === "1" ? "0.0.0.0" : "127.0.0.1";
-app.listen(port, listenHost, () => {
+const server = app.listen(port, listenHost, () => {
   console.log(`AndreaGPT disponibile su http://${lanAccessEnabled ? "IP-del-PC" : "localhost"}:${port}`);
   if (!apiKey && !openRouterKey) console.log("Modalita locale Ollama disponibile senza chiavi cloud.");
+  // Riscaldamento: Brain, snapshot, reranker ed embedding pronti prima della prima domanda (BRAIN_WARMUP=0 lo salta).
+  if (process.env.BRAIN_WARMUP !== "0") void brainModule().then(brain => brain.warmUp()).catch(() => undefined);
 });
+
+// Chiusura ordinata: senza, su Windows i processi Python (reranker, visione, TurboVec) restano vivi dopo ogni riavvio.
+let shuttingDown = false;
+function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal}: chiusura di AndreaGPT…`);
+  server.close();
+  for (const controller of activeChats) controller.abort();
+  visionWorker.close();
+  for (const worker of toolWorkers.values()) worker.close();
+  brainInstance?.close();
+  // Le richieste in corso hanno pochi secondi per chiudersi; poi si esce comunque.
+  setTimeout(() => process.exit(), 3_000).unref();
+}
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+// Ultima difesa: un errore non gestito viene registrato invece di lasciare processi figli orfani senza traccia.
+process.on("uncaughtException", error => { console.error("Errore non gestito:", error); process.exitCode = 1; shutdown("uncaughtException"); });
 
 function readableApiError(status: number, provider: string, detail = "") {
   if (status === 401 || status === 403) return `Chiave ${provider} non valida o senza accesso al modello.`;

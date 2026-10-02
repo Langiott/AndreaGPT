@@ -51,7 +51,6 @@ export function ConvertPanel({ onResult }: { onResult?: (result: Converted) => v
   const [error, setError] = useState("");
   const [improveTables, setImproveTables] = useState(true);
   const [translate, setTranslate] = useState(false);
-  const [showPicker, setShowPicker] = useState(true);
 
   function selectFiles(next: FileList | File[] | undefined) {
     const selected = next ? Array.from(next) : [];
@@ -143,14 +142,12 @@ export function ConvertPanel({ onResult }: { onResult?: (result: Converted) => v
   const results = items.filter((item) => item.result);
 
   return <section className="convert-panel">
-    <p>Converti i documenti localmente, anche più file insieme. I file originali non vengono sovrascritti.</p>
-    <div className="convert-options" role="group" aria-label="Opzioni di conversione">
-      <label><input type="checkbox" checked={improveTables} onChange={(event) => setImproveTables(event.target.checked)} disabled={busy} /> <span><strong>Migliora tabelle</strong><small>ricostruisce le righe PDF in tabelle Markdown</small></span></label>
-      <label><input type="checkbox" checked={translate} onChange={(event) => setTranslate(event.target.checked)} disabled={busy} /> <span><strong>Traduci in italiano</strong><small>usa il modello locale e conserva numeri e termini tecnici</small></span></label>
-      <button type="button" className="convert-picker-toggle" onClick={() => setShowPicker((current) => !current)} disabled={busy}>{showPicker ? "Nascondi scegli documento" : "Mostra scegli documento"}</button>
-    </div>
     <input ref={inputRef} type="file" hidden multiple accept=".pdf,.docx,.md,.markdown,.txt" onChange={event => { selectFiles(event.target.files ?? undefined); event.target.value = ""; }} />
-    {showPicker && <button className="convert-drop" onClick={() => inputRef.current?.click()} disabled={busy}><Upload size={20} /><span><strong>{items.length ? `${items.length} documenti in coda` : "Scegli uno o più documenti"}</strong><small>PDF, Word, Markdown o testo · massimo 75 MiB per file</small></span></button>}
+    <div className="welcome-tool-actions" role="group" aria-label="Opzioni di conversione">
+      <button type="button" className={items.length ? "welcome-chip" : "special-upload-button"} onClick={() => inputRef.current?.click()} disabled={busy} title="PDF, Word, Markdown o testo · massimo 75 MiB per file"><Upload size={17} /> {items.length ? "Aggiungi documenti" : "Carica documenti"}</button>
+      <label className="welcome-chip" title="Ricostruisce le righe PDF in tabelle Markdown"><input type="checkbox" checked={improveTables} onChange={(event) => setImproveTables(event.target.checked)} disabled={busy} /> Migliora tabelle</label>
+      <label className="welcome-chip" title="Usa il modello locale e conserva numeri e termini tecnici"><input type="checkbox" checked={translate} onChange={(event) => setTranslate(event.target.checked)} disabled={busy} /> Traduci in italiano</label>
+    </div>
     {items.length > 0 && <div className="convert-queue">
       {items.map((item) => (
         <div className="convert-queue-item" key={item.id}>
@@ -170,9 +167,11 @@ export function ConvertPanel({ onResult }: { onResult?: (result: Converted) => v
         </div>
       ))}
     </div>}
-    {items.length > 0 && <button className="primary-action convert-run" onClick={() => void convertAll()} disabled={busy || !convertible}><FileOutput size={17} />{busy ? "Elaborazione…" : `Converti ${convertible} file`}</button>}
+    {items.length > 0 && <div className="welcome-tool-actions">
+      <button type="button" className="special-upload-button" onClick={() => void convertAll()} disabled={busy || !convertible}><FileOutput size={17} /> {busy ? "Elaborazione…" : `Converti ${convertible} file`}</button>
+      {results.length > 0 && <button type="button" className="welcome-chip" onClick={() => void downloadAll()} disabled={downloading}><Download size={16} /> {downloading ? "Preparazione ZIP…" : `Scarica ZIP (${results.length})`}</button>}
+    </div>}
     {results.length > 0 && <div className="convert-results">
-      <button className="secondary-action convert-run" onClick={() => void downloadAll()} disabled={downloading}><Download size={17} />{downloading ? "Preparazione ZIP…" : `Scarica tutto in ZIP (${results.length})`}</button>
       {results.map((item) => (
         <div className="convert-result" key={item.id}><strong>{item.result!.name}</strong><div><button onClick={() => downloadConverted(item.result!)}><Download size={16} /> Scarica</button><button onClick={() => void saveToBrain(item.id)} disabled={item.saving}>{item.saved ? "Salvato nel Brain" : item.saving ? "Salvataggio…" : "Salva nel Brain"}</button></div></div>
       ))}

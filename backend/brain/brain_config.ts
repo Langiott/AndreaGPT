@@ -4,9 +4,9 @@
  */
 import { BRAIN_MAX_FILE_BYTES } from "../../frontend/config/brain_upload_limits";
 
-// Modello e versione del formato dell'indice.
+// Modello e versione del formato dell'indice (3: righe iniziali corrette dopo la sovrapposizione).
 export const BRAIN_MODEL = "nomic-embed-text";
-export const BRAIN_VERSION = 2;
+export const BRAIN_VERSION = 3;
 
 // Limiti usati durante la lettura e l'indicizzazione dei file.
 export const BRAIN_MAX_FILE = BRAIN_MAX_FILE_BYTES;

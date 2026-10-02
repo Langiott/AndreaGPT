@@ -19,12 +19,36 @@ services:
       retries: 10
       start_period: 15s
 
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: andreagpt-n8n
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      GENERIC_TIMEZONE: Europe/Rome
+      TZ: Europe/Rome
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      WEBHOOK_URL: http://127.0.0.1:5678/
+    volumes:
+      - n8n-data:/home/node/.n8n
+
   andreagpt:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: andreagpt
     restart: unless-stopped
+    # init inoltra SIGTERM a Node (chiusura ordinata dei worker Python); 30 s per chiudere un'indicizzazione.
+    init: true
+    stop_grace_period: 30s
     logging:
       driver: local
       options:
@@ -45,7 +69,6 @@ services:
       BRAIN_RETRIEVAL_BACKEND: ${BRAIN_RETRIEVAL_BACKEND:-sqlite}
       BRAIN_PCA_DIM: ${BRAIN_PCA_DIM:-768}
       BRAIN_VECTOR_CANDIDATES: ${BRAIN_VECTOR_CANDIDATES:-96}
-      BRAIN_PRECOMPUTED_GRAPH: ${BRAIN_PRECOMPUTED_GRAPH:-0}
       CODE_WORKSPACE: ${CODE_WORKSPACE:-/app/backend}
       RAG_OPTIMIZE: ${RAG_OPTIMIZE:-1}
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
@@ -71,6 +94,17 @@ services:
       LOCAL_ROUTER_ENABLED: ${LOCAL_ROUTER_ENABLED:-1}
       LOCAL_ROUTER_THRESHOLD: ${LOCAL_ROUTER_THRESHOLD:-0.75}
       SEARXNG_URL: http://searxng:8080
+      N8N_URL: http://n8n:5678
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      ADZUNA_APP_ID: ${ADZUNA_APP_ID:-}
+      ADZUNA_APP_KEY: ${ADZUNA_APP_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      CANDIDATURE_MODEL: ${CANDIDATURE_MODEL:-qwen2.5-coder:7b}
+      CANDIDATURE_SOGLIA: ${CANDIDATURE_SOGLIA:-0.62}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -90,5 +124,6 @@ services:
       start_period: 15s
 
 volumes:
+  n8n-data:
   tools-data:
   model-cache:

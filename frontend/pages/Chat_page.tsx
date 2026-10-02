@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 /**
  * Pagina principale della chat AndreaGPT.
  * Collega conversazioni, Brain, Web, file, modelli e strumenti locali.
@@ -28,6 +28,7 @@ import {
   Mic,
   Minimize,
   MessageSquarePlus,
+  Briefcase,
   FileText,
   Folder,
   Globe2,
@@ -73,8 +74,10 @@ const iconByName = {
 };
 
 const BrainPanel = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainPanel })));
+const BrainDocumentReader = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainDocumentReader })));
 const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => ({ default: module.BrainGraph })));
 const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
+const CandidaturePanel = lazy(() => import("../components/CandidaturePanel").then(module => ({ default: module.CandidaturePanel })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
 // Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
 const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.MarkdownMessage })));
@@ -104,19 +107,47 @@ function removeUnwantedAudioMessages(messages: ChatMessage[]) {
   return messages.filter((message) => !(message.role === "assistant" && message.audio && unwantedAudioCaptionTest.test(message.content)));
 }
 
-function AudioWelcomeCard({ variant, recording, transcribing, fileName, idleTitle, kicker, onUpload, onRecord }: { variant: "transcribe" | "record"; recording: boolean; transcribing: boolean; fileName?: string; idleTitle?: string; kicker?: string; onUpload?: () => void; onRecord?: () => void }) {
+function AudioWelcomeCard({ variant, recording, transcribing, title, kicker, actions }: { variant: "transcribe" | "record"; recording: boolean; transcribing: boolean; title: string; kicker: string; actions: ReactNode }) {
   const isRecordingCard = variant === "record";
   const busy = isRecordingCard ? recording : transcribing;
   return <div className="audio-welcome-card">
     <div className="audio-welcome-visual"><AudioCassette playing={busy} /><span className="audio-signal audio-signal-one" /><span className="audio-signal audio-signal-two" /></div>
     <div className="audio-welcome-copy">
-      <span className="welcome-kicker">{kicker ?? (isRecordingCard ? "REGISTRA AUDIO" : "TRASCRIVI AUDIO")}</span>
-      <h2>{isRecordingCard ? recording ? "Sto registrando audio" : (idleTitle || "Registra audio") : transcribing ? "Sto trascrivendo audio" : (idleTitle || "Trascrivi audio")}</h2>
-      {fileName && <span className="audio-file-name">{fileName}</span>}
-      <div className="audio-welcome-actions">
-        {isRecordingCard ? <button type="button" className={`audio-record-button ${recording ? "active" : ""}`} onClick={onRecord} disabled={transcribing}><Mic size={16} /> {recording ? "Termina" : "Registra"}</button> : <button type="button" className="special-upload-button" onClick={onUpload} disabled={busy}><AudioLines size={16} /> Carica audio</button>}
-      </div>
+      <span className="welcome-kicker">{kicker}</span>
+      <h2>{isRecordingCard ? recording ? "Sto registrando audio" : title : transcribing ? "Sto trascrivendo audio" : title}</h2>
+      <div className="audio-welcome-actions welcome-tool-actions">{actions}</div>
     </div>
+  </div>;
+}
+
+function AudioCardEditForm({ draft, onDraft, onCancel, onSave }: Pick<CardEditProps, "draft" | "onDraft" | "onCancel" | "onSave">) {
+  return <form className="welcome-edit-form audio-edit-form" onSubmit={(event) => { event.preventDefault(); onSave(); }} onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}>
+    <label>Titolo<input autoFocus value={draft.title} maxLength={80} onChange={(event) => onDraft({ ...draft, title: event.target.value })} /></label>
+    <label>Etichetta<input value={draft.accent} maxLength={40} onChange={(event) => onDraft({ ...draft, accent: event.target.value })} /></label>
+    <div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={onCancel}>Annulla</button><button type="submit" className="primary-action">Salva</button></div>
+  </form>;
+}
+
+type WelcomeCardText = { title: string; accent: string; subtitle: string };
+type CardEditProps = { editing: boolean; draft: WelcomeCardText; onDraft: (draft: WelcomeCardText) => void; onEdit: () => void; onCancel: () => void; onSave: () => void };
+
+/** Card di benvenuto comune a tutti gli strumenti: kicker, titolo con accento, riga di pulsanti. */
+function ToolWelcomeCard({ className, kicker, text, status, actions, children, editSubtitle = true, editing, draft, onDraft, onEdit, onCancel, onSave }: CardEditProps & { className?: string; kicker: string; text: WelcomeCardText; status?: ReactNode; actions?: ReactNode; children?: ReactNode; editSubtitle?: boolean }) {
+  return <div className={`special-welcome-card${className ? ` ${className}` : ""}`}>
+    <button type="button" className="welcome-edit-button" onClick={onEdit} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>
+    <span className="welcome-kicker">{kicker}</span>
+    {status}
+    {editing ? <form className="welcome-edit-form" onSubmit={(event) => { event.preventDefault(); onSave(); }} onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}>
+      <label>Titolo<input autoFocus value={draft.title} maxLength={80} onChange={(event) => onDraft({ ...draft, title: event.target.value })} /></label>
+      <label>Accento<input value={draft.accent} maxLength={80} onChange={(event) => onDraft({ ...draft, accent: event.target.value })} /></label>
+      {editSubtitle && <label>Descrizione<input value={draft.subtitle} maxLength={160} onChange={(event) => onDraft({ ...draft, subtitle: event.target.value })} /></label>}
+      <div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={onCancel}>Annulla</button><button type="submit" className="primary-action">Salva</button></div>
+    </form> : <>
+      <h1>{text.title}<br /><em>{text.accent}</em></h1>
+      {text.subtitle && <p>{text.subtitle}</p>}
+    </>}
+    {actions && <div className="welcome-tool-actions">{actions}</div>}
+    {children}
   </div>;
 }
 
@@ -158,21 +189,22 @@ const MAX_ATTACHMENTS_SIZE = 12 * 1024 * 1024;
 const ANALYZE_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 const ANALYZE_ATTACHMENTS_SIZE = 50 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
-type Theme = "cosmic" | "normal";
+type Theme = "cosmic" | "normal" | "aurora";
 type YoloTask = "detect" | "segment" | "classify" | "pose" | "obb";
 type SpecialMode = "normal" | "ocr" | "yolo" | "analyze" | "image" | "convert";
 type AudioWelcomeMode = "none" | "transcribe" | "record";
-type ImageServiceStatus = { status: "checking" | "starting" | "ready" | "error"; ready: boolean; message: string };
+type ImageServiceStatus = { status: "checking" | "stopped" | "ready" | "error"; ready: boolean; message: string };
 type ActiveOperation = { label: string; detail: string; startedAt: number };
 interface CustomInstruction { id: string; title: string; text: string; enabled: boolean }
 
-function MicelioScore({ message }: { message: ChatMessage }) {
+function AffinityScore({ message }: { message: ChatMessage }) {
   const event = message.diagnostics?.events.find(item => item.details?.semanticSupportChecked === true);
-  const value = event?.details?.micelioSupportScore;
+  const value = event?.details?.semanticSupportScore;
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const percent = Math.round(value * 100);
-  const tone = percent >= 70 ? "strong" : percent >= 45 ? "medium" : "weak";
-  return <span className={`micelio-score ${tone}`} title="Somiglianza semantica stimata; non è una probabilità di correttezza né una verifica delle affermazioni">Affinità {percent}%</span>;
+  const label = event?.details?.semanticSupportLabel;
+  const tone = label === "forte" ? "strong" : label === "media" ? "medium" : "weak";
+  return <span className={`affinity-score ${tone}`} title="Somiglianza semantica stimata; non è una probabilità di correttezza né una verifica delle affermazioni">Affinità {percent}%</span>;
 }
 
 function LocalModelCookbook({ models, onChoose }: { models: ModelInfo[]; onChoose: (id: string) => void }) {
@@ -194,22 +226,19 @@ function LocalModelCookbook({ models, onChoose }: { models: ModelInfo[]; onChoos
   const ornith = chooseAvailable(["ornith-1.5:9b", "ornith-1.5", "ornith"]);
   const qwenExpert = chooseAvailable(["qwen3-coder:30b-a3b", "qwen3-coder"]);
   const recommended = ornith
-    ? { label: "Ornith 1.5", size: "9B", model: ornith, reason: "Buon equilibrio locale per conversazioni, revisione del codice e attività agentiche, con consumi più contenuti." }
+    ? { label: "Ornith 1.5", size: "9B", model: ornith }
     : qwenExpert
-    ? { label: "Qwen3 Coder", size: "30B-A3B", model: qwenExpert, reason: "Coder esperto per repository, Brain e attività agentiche. Richiede più memoria." }
-    : { label: "Compatto e potente", size: "2B", model: miniCpm, reason: "MiniCPM5 2B privilegia velocità, basso consumo di RAM e uso interamente locale." };
+    ? { label: "Qwen3 Coder", size: "30B-A3B", model: qwenExpert }
+    : { label: "MiniCPM5", size: "2B", model: miniCpm };
   const codeModel = ornith ?? qwenExpert ?? miniCpm;
 
-  return <details className="settings-section cookbook-settings settings-collapse">
-    <summary className="settings-collapse-title"><span><strong>Cookbook · scegli il modello giusto</strong><SettingsInfo text="Profilo calcolato dal dispositivo, senza modificare nulla automaticamente." /></span><ChevronDown size={15} /></summary>
-    <div className="cookbook-hardware"><Cpu size={16} /><span><strong>{hardware.ram} GB RAM · {hardware.cores} thread</strong><small>{hardware.gpu}</small></span></div>
-    <div className="cookbook-recommendation"><div><strong>{recommended.label} · {recommended.size}</strong><small>{recommended.reason}</small></div>{recommended.model && <button type="button" className="secondary-action" onClick={() => onChoose(recommended.model!)}>Usa questo</button>}</div>
-    <div className="cookbook-grid">
-      <div><strong>Chat quotidiana</strong><small>{recommended.model ?? "Modello Ollama compatibile"}</small></div>
-      <div><strong>Codice</strong><small>{codeModel ?? "ornith-1.5:9b"}</small></div>
-      <div><strong>Embedding Brain</strong><small>Gestito internamente</small></div>
+  return <details className="settings-row">
+    <summary><span>Cookbook</span><ChevronDown size={15} /></summary>
+    <div className="settings-body">
+      <div className="settings-line"><span>Dispositivo</span><span className="settings-value">{hardware.ram} GB · {hardware.cores} thread</span></div>
+      <div className="settings-line"><span>Consigliato</span><span className="settings-pair"><span className="settings-value">{recommended.label} {recommended.size}</span>{recommended.model && <button type="button" className="settings-small-button" onClick={() => onChoose(recommended.model!)}>Usa</button>}</span></div>
+      <div className="settings-line"><span>Codice</span><span className="settings-value">{codeModel ?? "ornith-1.5:9b"}</span></div>
     </div>
-    <p className="cookbook-note">Ornith 1.5 9B è il modello locale consigliato per velocità, codice e conversazioni. Nomic Embed Text serve solo per gli embedding, non per la chat. Installazione: <code>ollama pull nome-modello</code>.</p>
   </details>;
 }
 
@@ -248,14 +277,15 @@ export default function App() {
     try { return { width: 768, height: 768, steps: 25, seed: Math.floor(Math.random() * 2147483647), ...JSON.parse(localStorage.getItem("andreagpt-image-settings") || "{}") }; }
     catch { return { width: 768, height: 768, steps: 25, seed: Math.floor(Math.random() * 2147483647) }; }
   });
-  const [imageService, setImageService] = useState<ImageServiceStatus>({ status: "checking", ready: false, message: "Verifica ComfyUI…" });
+  const [imageService, setImageService] = useState<ImageServiceStatus>({ status: "checking", ready: false, message: "ComfyUI non attivo" });
   const [imageModel, setImageModel] = useState<"qwen" | "viggle">(() => localStorage.getItem("andreagpt-image-model") === "viggle" ? "viggle" : "qwen");
   const [yoloTask, setYoloTask] = useState<YoloTask>("detect");
   const [webSearchEnabled, setWebSearchEnabled] = useState(() => localStorage.getItem("andreagpt-web-search") === "true");
-  // Ricerca nel Brain: spenti di default, è la configurazione migliore misurata con "npm run valuta:brain -- --confronta".
-  const [brainRanking, setBrainRanking] = useState<{ micelio: boolean; fuzzy: boolean }>(() => {
-    try { return { micelio: false, fuzzy: false, ...JSON.parse(localStorage.getItem("andreagpt-brain-ranking") || "{}") }; } catch { return { micelio: false, fuzzy: false }; }
-  });
+  // Diagnostica: log, tempi, controlli delle fonti e SHAP. Spenta riduce la latenza dopo la risposta.
+  // Numero di fonti Brain: 0 = automatico (5, oppure 8 per metodi e formule).
+  const [brainSourceCount, setBrainSourceCount] = useState(() => { try { return Number(localStorage.getItem("andreagpt-brain-source-count")) || 0; } catch { return 0; } });
+  const [brainRerank, setBrainRerank] = useState(() => { try { return localStorage.getItem("andreagpt-brain-rerank") !== "false"; } catch { return true; } });
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(() => { try { return localStorage.getItem("andreagpt-diagnostics") !== "false"; } catch { return true; } });
   const [brainEnabled, setBrainEnabled] = useState(() => {
     if (localStorage.getItem("andreagpt-brain-default-v2") !== "1") {
       localStorage.setItem("andreagpt-brain-default-v2", "1");
@@ -269,6 +299,7 @@ export default function App() {
   const [brainPaths, setBrainPaths] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
+  const [candidatureOpen, setCandidatureOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
   const [embeddingOpen, setEmbeddingOpen] = useState(false);
   const appearance = useAppearance();
@@ -305,6 +336,8 @@ export default function App() {
   const [renameDialog, setRenameDialog] = useState<{ id: string; title: string } | null>(null);
   const [outputFiles, setOutputFiles] = useState<{ images: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; ocr: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; yolo: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; compactChat: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }> }>({ images: [], ocr: [], yolo: [], compactChat: [] });
   const [compactingChat, setCompactingChat] = useState(false);
+  // Chat compatta aperta nel lettore dell'archivio.
+  const [compactOpen, setCompactOpen] = useState<string | null>(null);
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [ollamaProfiles, setOllamaProfiles] = useState<Record<string, OllamaProfile>>(() => loadOllamaProfiles());
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -317,7 +350,12 @@ export default function App() {
   const [transcribing, setTranscribing] = useState(false);
   const [recordingFileName, setRecordingFileName] = useState("");
   const [audioWelcomeMode, setAudioWelcomeMode] = useState<AudioWelcomeMode>("none");
-  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem("andreagpt-theme") === "normal" ? "normal" : "cosmic");
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [audioSummary, setAudioSummary] = useState(() => { try { return localStorage.getItem("andreagpt-audio-summary") === "true"; } catch { return false; } });
+  const [ocrToBrain, setOcrToBrain] = useState(() => { try { return localStorage.getItem("andreagpt-ocr-brain") === "true"; } catch { return false; } });
+  // La registrazione termina in una callback creata all'avvio: il ref legge l'interruttore aggiornato.
+  const audioSummaryRef = useRef(audioSummary);
+  const [theme, setTheme] = useState<Theme>(() => { const saved = localStorage.getItem("andreagpt-theme"); return saved === "normal" || saved === "aurora" ? saved : "cosmic"; });
   const [historyCollapsed, setHistoryCollapsed] = useState(() => localStorage.getItem("andreagpt-history-collapsed") === "true");
   const [modelsCollapsed, setModelsCollapsed] = useState(() => localStorage.getItem("andreagpt-models-collapsed") === "true");
   const [welcomeTitle, setWelcomeTitle] = useState(() => localStorage.getItem("andreagpt-welcome-title") || "Ciao Cetriolo,");
@@ -325,11 +363,10 @@ export default function App() {
   const [welcomeSubtitle, setWelcomeSubtitle] = useState(() => localStorage.getItem("andreagpt-welcome-subtitle") || "Scrivi un messaggio oppure scegli uno strumento dalla barra in alto.");
   const [welcomeEditing, setWelcomeEditing] = useState(false);
   const [welcomeDraft, setWelcomeDraft] = useState({ title: "", accent: "", subtitle: "" });
-  type WelcomeCardText = { title: string; accent: string; subtitle: string };
   const DEFAULT_CARD_TEXTS: Record<string, WelcomeCardText> = {
     analyze: { title: "Analyze", accent: "un’immagine.", subtitle: "Il primo avvio scarica e carica il modello: lo stato e il tempo trascorso restano sempre visibili." },
     ocr: { title: "Pronto per", accent: "leggere i tuoi file.", subtitle: "Allega una o più immagini o PDF. Il testo verrà estratto localmente e salvato nella cartella OCR." },
-    yolo: { title: "Capisco gli", accent: "elementi nell’immagine.", subtitle: "Scegli il task, allega una o più immagini e avvia detection, segmentazione, classificazione, pose o OBB." },
+    yolo: { title: "Capisco gli", accent: "elementi nell’immagine.", subtitle: "Scegli il task e allega una o più immagini." },
     image: { title: "Descrivila.", accent: "Io la creo.", subtitle: "" },
     convert: { title: "Trasforma i tuoi", accent: "documenti.", subtitle: "" },
     transcribe: { title: "Trascrivi audio", accent: "TRASCRIVI AUDIO", subtitle: "" },
@@ -362,6 +399,10 @@ export default function App() {
     setCardTexts((current) => ({ ...current, [id]: { title, accent, subtitle } }));
     setEditingCard(null);
   }
+  function cardEditProps(id: string): CardEditProps {
+    return { editing: editingCard === id, draft: cardDraft, onDraft: setCardDraft, onEdit: () => startCardEdit(id), onCancel: () => setEditingCard(null), onSave: () => saveCardEdit(id) };
+  }
+  const summaryToggle = <label className="welcome-chip" title="A fine trascrizione il modello scrive riassunto e punti d'azione"><input type="checkbox" checked={audioSummary} onChange={(event) => setAudioSummary(event.target.checked)} /> Riassumi dopo</label>;
   const abortRef = useRef<AbortController | null>(null);
   const analyzeAbortRef = useRef<AbortController | null>(null);
   const analyzeConversationIdRef = useRef("");
@@ -458,12 +499,81 @@ export default function App() {
         return;
       }
       setMessages((current) => current.map((message) => message.id === audioMessageId ? { ...message, content: transcript, audio: { status: "complete", fileName: file.name } } : message));
+      if (audioSummaryRef.current) void summarizeTranscript(transcript, conversationId);
     } catch (caught) {
       const message = userErrorMessage(caught, "Trascrizione fallita.");
       setMessages((current) => current.map((item) => item.id === audioMessageId ? { ...item, content: message, audio: { status: "error", fileName: file.name } } : item));
       setError(message);
     }
     finally { setTranscribing(false); if (audioInputRef.current) audioInputRef.current.value = ""; }
+  }
+
+  /** Riassunto e punti d'azione della trascrizione, in streaming in un nuovo messaggio. */
+  async function summarizeTranscript(transcript: string, conversationId: string) {
+    if (!selectedModel) { setError("Riassunto: nessun modello selezionato."); return; }
+    const assistantId = createId();
+    setMessages((current) => [...current, { id: assistantId, role: "assistant", content: "", modelId: selectedModel.id, modelName: selectedModel.name, modelProvider: selectedModel.provider }]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoading(true);
+    const streamBatch = createStreamBatch((content) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content } : message)));
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel.id,
+          provider: selectedModel.providerId,
+          conversationId,
+          brain: false,
+          webSearch: false,
+          messages: [
+            { role: "system", content: "Rispondi in italiano. Non inventare nulla che non sia nella trascrizione." },
+            { role: "user", content: `Trascrizione audio:\n\n${transcript}\n\nScrivi:\n## Riassunto\n3-5 frasi.\n## Punti d'azione\nElenco puntato di cose da fare, con chi e quando se citati. Se non ce ne sono scrivi "Nessuno".` },
+          ],
+          ...settings,
+          temperature: 0.2,
+          maxTokens: isOllama ? selectedOllamaProfile.maxTokens : settings.maxTokens,
+          numCtx: isOllama ? selectedOllamaProfile.numCtx : 4096,
+          diagnostics: false,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || `Errore HTTP ${response.status}`);
+      if (!response.body) throw new Error("Risposta streaming non disponibile.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        if (done && buffer.trim()) lines.push(buffer);
+        for (const line of lines) {
+          const data = line.trim().replace(/^data:\s*/, "");
+          if (!data || data === "[DONE]") continue;
+          let event: { choices?: Array<{ delta?: { content?: string } }>; error?: string };
+          try { event = JSON.parse(data); } catch { continue; }
+          if (event.error) throw new Error(event.error);
+          const token = event.choices?.[0]?.delta?.content ?? "";
+          if (token) streamBatch.append(token);
+        }
+        if (done) break;
+      }
+    } catch (caught) {
+      if ((caught as Error).name !== "AbortError") setError(userErrorMessage(caught, "Riassunto non riuscito."));
+    } finally {
+      streamBatch.flush();
+      setMessages((current) => current.filter((message) => message.id !== assistantId || message.content));
+      if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
+    }
+  }
+
+  function openOutputFolder(folder: "images" | "ocr" | "yolo" | null) {
+    setOutputFolder(folder);
+    setOutputOpen(true);
+    void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles({ images: [], ocr: [], yolo: [], compactChat: [] }));
   }
 
   async function toggleRecording() {
@@ -494,6 +604,23 @@ export default function App() {
     document.addEventListener("fullscreenchange", updateFullscreen);
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
   }, []);
+
+  useEffect(() => {
+    audioSummaryRef.current = audioSummary;
+    try { localStorage.setItem("andreagpt-audio-summary", String(audioSummary)); } catch { /* preferenza solo locale */ }
+  }, [audioSummary]);
+
+  useEffect(() => {
+    try { localStorage.setItem("andreagpt-ocr-brain", String(ocrToBrain)); } catch { /* preferenza solo locale */ }
+  }, [ocrToBrain]);
+
+  useEffect(() => {
+    if (!recording) return;
+    const startedAt = Date.now();
+    setRecordingSeconds(0);
+    const timer = window.setInterval(() => setRecordingSeconds(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => window.clearInterval(timer);
+  }, [recording]);
 
   useEffect(() => () => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
@@ -557,7 +684,6 @@ export default function App() {
     const term = search.toLowerCase();
     return `${model.name} ${model.id} ${model.provider} ${model.tags.join(" ")}`.toLowerCase().includes(term);
   });
-  const estimatedTokens = Math.ceil(messages.reduce((total, message) => total + message.content.length, 0) / 4);
   function extractMentionedSource(content: string) {
     // Forma quotata per percorsi con spazi: @"cartella/mio file.md"
     const quoted = content.match(/(?:^|\s)@"([^"]+)"/u)?.[1]?.trim();
@@ -673,7 +799,7 @@ export default function App() {
     finally { setShapLoading(""); }
   }
 
-  /** Voto su una singola fonte: cambia solo il suo ranking per domande simili, non il grafo Micelio. */
+  /** Voto su una singola fonte: cambia solo il suo ranking per domande simili, non la mappa Micelio. */
   async function rateBrainSource(message: ChatMessage, messageIndex: number, source: string, rating: 1 | -1) {
     const query = [...messages.slice(0, messageIndex)].reverse().find(item => item.role === "user")?.content.trim();
     if (!query) return;
@@ -772,8 +898,20 @@ export default function App() {
   }, [activeConversationId, messages, selectedModelId, loading]);
 
   useEffect(() => {
-    persistConversations(conversations);
+    try { persistConversations(conversations); } catch { /* quota piena: resta lo stato in memoria */ }
   }, [conversations]);
+
+  // Una cancellazione fatta in un'altra scheda vale subito anche qui.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key !== DELETED_CONVERSATIONS_KEY) return;
+      const deleted = loadDeletedConversationIds();
+      setConversations((current) => current.some((conversation) => deleted.has(conversation.id)) ? current.filter((conversation) => !deleted.has(conversation.id)) : current);
+      if (deleted.has(activeConversationIdRef.current)) { setActiveConversationId(""); setMessages([]); setSpecialMode("normal"); }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     if (!brainPrivate) return;
@@ -799,9 +937,9 @@ export default function App() {
     localStorage.setItem("andreagpt-web-search", String(webSearchEnabled));
   }, [webSearchEnabled]);
 
-  useEffect(() => {
-    try { localStorage.setItem("andreagpt-brain-ranking", JSON.stringify(brainRanking)); } catch { /* sessione privata */ }
-  }, [brainRanking]);
+  useEffect(() => { try { localStorage.setItem("andreagpt-diagnostics", String(diagnosticsEnabled)); } catch { /* sessione privata */ } }, [diagnosticsEnabled]);
+  useEffect(() => { try { localStorage.setItem("andreagpt-brain-source-count", String(brainSourceCount)); } catch { /* sessione privata */ } }, [brainSourceCount]);
+  useEffect(() => { try { localStorage.setItem("andreagpt-brain-rerank", String(brainRerank)); } catch { /* sessione privata */ } }, [brainRerank]);
 
   useEffect(() => {
     try { localStorage.setItem("andreagpt-settings", JSON.stringify(settings)); } catch { /* sessione privata */ }
@@ -813,7 +951,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("andreagpt-theme", theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "cosmic" ? "#FFF8E7" : "#080A08");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "cosmic" ? "#FFF8E7" : theme === "aurora" ? "#150F26" : "#080A08");
   }, [theme]);
 
   useEffect(() => {
@@ -849,10 +987,12 @@ export default function App() {
     const refreshImageService = async () => {
       try {
         const response = await fetch("/api/image/status");
-        const data = await response.json() as { status?: "starting" | "ready"; ready?: boolean; message?: string };
-        if (active) setImageService({ status: data.ready ? "ready" : "starting", ready: Boolean(data.ready), message: data.message || (data.ready ? "ComfyUI operativo" : "ComfyUI in avvio") });
+        const data = await response.json() as { status?: "stopped" | "unreachable" | "ready"; ready?: boolean };
+        if (active) setImageService(data.ready ? { status: "ready", ready: true, message: "ComfyUI attivo" }
+          : data.status === "stopped" ? { status: "stopped", ready: false, message: "ComfyUI non attivo" }
+          : { status: "error", ready: false, message: "ComfyUI non raggiungibile" });
       } catch {
-        if (active) setImageService({ status: "error", ready: false, message: "Stato ComfyUI non disponibile" });
+        if (active) setImageService({ status: "error", ready: false, message: "ComfyUI non raggiungibile" });
       }
     };
     void refreshImageService();
@@ -974,7 +1114,8 @@ export default function App() {
     const remaining = conversations.filter((conversation) => conversation.id !== id);
     // Remove the record immediately so a refresh cannot resurrect a deleted chat
     // while React is still committing the state update.
-    try { localStorage.setItem("andreagpt-conversations", JSON.stringify(remaining)); } catch { /* state update remains authoritative */ }
+    rememberDeletedConversation(id);
+    try { persistConversations(remaining); } catch { /* il filtro sugli ID cancellati vale comunque al prossimo avvio */ }
     setConversations(remaining);
     if (id === activeConversationId) {
       const next = remaining[0];
@@ -1098,8 +1239,9 @@ export default function App() {
           maxTokens: isOllama ? selectedOllamaProfile.maxTokens : settings.maxTokens,
           numCtx: isOllama ? selectedOllamaProfile.numCtx : 4096,
           webSearch: webSearchEnabled,
-          micelio: brainRanking.micelio,
-          fuzzy: brainRanking.fuzzy,
+          brainSourceCount: brainSourceCount || undefined,
+          brainRerank,
+          diagnostics: diagnosticsEnabled,
         }),
         signal: controller.signal,
       });
@@ -1292,7 +1434,16 @@ export default function App() {
         const response = await fetch("/api/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, data: attachment.dataUrl }) });
         const result = await response.json() as { text?: string; error?: string; output?: string };
         if (!response.ok) throw new Error(result.error || `OCR non riuscito per ${attachment.name}.`);
-        results.push(`### ${attachment.name}\n${result.text || "Nessun testo riconosciuto."}\n\n_Risultato salvato in ${result.output || "OCR/output"}._`);
+        let brainNote = "";
+        if (ocrToBrain && result.text?.trim()) {
+          const bytes = new TextEncoder().encode(result.text);
+          let binary = "";
+          for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+          const brainResponse = await fetch("/api/brain/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preset: 100, files: [{ name: `${attachment.name.replace(/\.[^.]+$/, "")}-ocr.txt`, data: btoa(binary) }] }) });
+          const brainResult = await brainResponse.json().catch(() => ({})) as { error?: string };
+          brainNote = brainResponse.ok ? " Indicizzato nel Brain." : ` Brain non aggiornato: ${brainResult.error || `HTTP ${brainResponse.status}`}`;
+        }
+        results.push(`### ${attachment.name}\n${result.text || "Nessun testo riconosciuto."}\n\n_Risultato salvato in ${result.output || "OCR/output"}.${brainNote}_`);
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
       }
     } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "OCR non riuscito.")); }
@@ -1392,26 +1543,35 @@ export default function App() {
   }
   async function processImage(prompt: string) {
     if (!prompt.trim()) { setError("Descrivi l'immagine che vuoi creare."); return; }
-    if (!imageService.ready) { setError("ComfyUI è ancora in avvio. Attendi che lo stato diventi Operativo."); return; }
+    if (!imageService.ready) { setError(imageService.message); return; }
     const assistantId = createId();
     const conversationId = activeConversationId;
-    setMessages(current => [...current, { id: createId(), role: "user", content: prompt }, { id: assistantId, role: "assistant", content: "ComfyUI · generazione avviata · 0%" }]);
+    setMessages(current => [...current, { id: createId(), role: "user", content: prompt }, { id: assistantId, role: "assistant", content: "ComfyUI · avvio" }]);
     setInput(""); setError(""); setLoading(true);
     const started = performance.now();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let jobId = "";
     try {
-      const response = await fetch("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, ...imageSettings, flow: imageModel }) });
+      const response = await fetch("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, ...imageSettings, flow: imageModel }), signal: controller.signal });
       const queued = await response.json() as { error?: string; jobId?: string };
       if (!response.ok || !queued.jobId) throw new Error(queued.error || "Generazione non avviata.");
-      setMessages(current => current.map(message => message.id === assistantId ? { ...message, content: `ComfyUI · ID processo: ${queued.jobId} · generazione avviata · 0%` } : message));
+      jobId = queued.jobId;
       let result: { error?: string; name?: string; url?: string; output?: string; width?: number; height?: number; seed?: number; device?: string; model?: string; generationMs?: number } = {};
       for (;;) {
-        await new Promise(resolve => window.setTimeout(resolve, 2000));
-        const jobResponse = await fetch(`/api/image/jobs/${encodeURIComponent(queued.jobId)}`);
-        const job = await jobResponse.json() as typeof result & { status?: string };
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+        if (controller.signal.aborted) throw new DOMException("Generazione annullata.", "AbortError");
+        const jobResponse = await fetch(`/api/image/jobs/${encodeURIComponent(jobId)}`);
+        const job = await jobResponse.json() as typeof result & { status?: string; progress?: { phase: "queued" | "loading" | "sampling" | "decoding"; value: number; max: number } };
         if (job.status === "running") {
           const elapsedSeconds = Math.max(1, Math.round((performance.now() - started) / 1000));
           const elapsed = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
-          setMessages(current => current.map(message => message.id === assistantId ? { ...message, content: `ComfyUI · generazione in corso · avanzamento: ${elapsed}` } : message));
+          const progress = job.progress;
+          const phase = !progress || progress.phase === "queued" ? "in coda"
+            : progress.phase === "loading" ? "caricamento modelli"
+            : progress.phase === "decoding" ? "decodifica"
+            : `passo ${progress.value}/${progress.max} · ${Math.round(progress.value / Math.max(1, progress.max) * 100)}%`;
+          setMessages(current => current.map(message => message.id === assistantId ? { ...message, content: `ComfyUI · ${phase} · ${elapsed}` } : message));
           continue;
         }
         if (!jobResponse.ok) throw new Error(job.error || "Generazione immagine non riuscita.");
@@ -1424,17 +1584,20 @@ export default function App() {
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(complete));
       setImageSettings(current => ({ ...current, seed: Math.floor(Math.random() * 2147483647) }));
     } catch (caught) {
-      const failed = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content: `Generazione non riuscita: ${caught instanceof Error ? caught.message : "errore sconosciuto"}` } : message;
+      const cancelled = controller.signal.aborted;
+      if (cancelled && jobId) void fetch(`/api/image/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }).catch(() => undefined);
+      const content = cancelled ? "Generazione annullata." : `Generazione non riuscita: ${caught instanceof Error ? caught.message : "errore sconosciuto"}`;
+      const failed = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content } : message;
       setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(failed), updatedAt: Date.now() } : conversation));
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(failed));
-    } finally { setLoading(false); }
+    } finally { if (abortRef.current === controller) abortRef.current = null; setLoading(false); }
   }
 
   if (new URLSearchParams(window.location.search).get("embeddingSpace") === "1") return <Suspense fallback={<div className="thinking">Caricamento spazio 3D…</div>}><EmbeddingSpace standalone /></Suspense>;
   if (new URLSearchParams(window.location.search).get("brainGraph") === "1") return <Suspense fallback={<div className="thinking">Caricamento grafo…</div>}><BrainGraph standalone /></Suspense>;
 
   return (
-    <div ref={appShellRef} className="app-shell" data-theme={theme}>
+    <div ref={appShellRef} className="app-shell" data-theme={theme === "aurora" ? "normal" : theme} data-palette={theme}>
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand-row">
           <div className="brand-mark"><img src="/andreagpt-logo-128.png" alt="" /></div>
@@ -1490,7 +1653,8 @@ export default function App() {
         <div className="sidebar-footer">
           {modelsCollapsed && <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />}
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
-          <button className="sidebar-action" onClick={() => { setOutputOpen(true); void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles({ images: [], ocr: [], yolo: [], compactChat: [] })); }}><Folder size={17} /> Output</button>
+          <button className="sidebar-action" onClick={() => setCandidatureOpen(true)}><Briefcase size={17} /> Candidature</button>
+          <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
           <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
         </div>
@@ -1502,16 +1666,16 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Apri menu"><Menu size={21} /></button>
           <div className="model-title">
-            <span className="status-dot" />
+            <span className={`status-dot title-dot ${loading || researchLoading || compactingChat ? "busy" : "idle"}`} aria-label={loading || researchLoading || compactingChat ? "In lavorazione" : "Pronto"} />
             {specialMode === "ocr"
-              ? <div><strong>OCR locale</strong><small>Estrazione testo da immagini e PDF</small></div>
+              ? <div><strong>OCR locale</strong></div>
               : specialMode === "yolo"
-                ? <div><strong>Analisi immagine Yolo</strong><small>Detection, segmentazione e visione</small></div>
+                ? <div><strong>Analisi immagine Yolo</strong></div>
                 : specialMode === "analyze"
-                  ? <div><strong>Analyze</strong><small>Visione locale con Qwen3-VL</small></div>
+                  ? <div><strong>Analyze</strong></div>
                 : imageConversation
-                  ? <div><strong>Qwen Image 2.1</strong><small>Generazione immagini locale</small></div>
-                : <div><div className="model-name-line"><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong><small className="model-token">~{estimatedTokens.toLocaleString("it-IT")} token</small></div></div>}
+                  ? <div><strong>Qwen Image 2.1</strong></div>
+                : <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong></div>}
           </div>
           <div className="topbar-actions">
             <button className="topbar-tools-trigger" onClick={() => { setTopbarMenuOpen((open) => !open); setAudioMenuOpen(false); }} aria-expanded={topbarMenuOpen} aria-haspopup="menu"><Settings2 size={18} /><span>Gestione</span><ChevronDown size={15} /></button>
@@ -1570,11 +1734,23 @@ export default function App() {
           {!messages.length ? (
             <div className="welcome-stage">
             <div className={`welcome${specialMode !== "normal" || audioWelcomeMode !== "none" ? " welcome-plain" : " home-welcome"}${audioWelcomeMode !== "none" ? " audio-mode-welcome" : ""}`}>
-              {audioWelcomeMode === "transcribe" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("transcribe")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "transcribe" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Etichetta<input value={cardDraft.accent} maxLength={40} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("transcribe")}>Salva</button></div></div> : <AudioWelcomeCard variant="transcribe" recording={recording} transcribing={transcribing} idleTitle={cardTexts.transcribe.title} kicker={cardTexts.transcribe.accent} onUpload={() => audioInputRef.current?.click()} />}</div>}
-              {audioWelcomeMode === "record" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("record")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "record" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Etichetta<input value={cardDraft.accent} maxLength={40} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("record")}>Salva</button></div></div> : <AudioWelcomeCard variant="record" recording={recording} transcribing={transcribing} fileName={recordingFileName} idleTitle={cardTexts.record.title} kicker={cardTexts.record.accent} onRecord={() => void toggleRecording()} />}</div>}
-              {specialMode === "analyze" && <div className="special-welcome-card analyze-welcome"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("analyze")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button><span className="welcome-kicker">QWEN3-VL LOCALE</span>{editingCard === "analyze" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={cardDraft.accent} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={cardDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setCardDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("analyze")}>Salva</button></div></div> : <><h1>{cardTexts.analyze.title}<br /><em>{cardTexts.analyze.accent}</em></h1><p>{cardTexts.analyze.subtitle}</p></>}<button className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button></div>}
-              {specialMode === "convert" && <div className="special-welcome-card convert-welcome"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("convert")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button><span className="welcome-kicker">CONVERSIONE LOCALE</span>{editingCard === "convert" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={cardDraft.accent} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("convert")}>Salva</button></div></div> : <h1>{cardTexts.convert.title}<br /><em>{cardTexts.convert.accent}</em></h1>}<Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense></div>}{specialMode === "image" && <div className="special-welcome-card image-welcome"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("image")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button><span className="welcome-kicker">QWEN IMAGE 2.1</span><div className={`image-service-status ${imageService.status}`}><span className="status-dot" />{imageService.message}</div>{editingCard === "image" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={cardDraft.accent} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("image")}>Salva</button></div></div> : <h1>{cardTexts.image.title}<br /><em>{cardTexts.image.accent}</em></h1>}<p>{imageService.ready ? "Motore immagini pronto. I risultati vengono salvati in OUTPUT/Image." : "Puoi usare subito le altre chat: il motore immagini si sta preparando in background."}</p><div className="image-model-row" role="radiogroup" aria-label="Modello di generazione"><button type="button" role="radio" aria-checked={imageModel === "qwen"} className={imageModel === "qwen" ? "active" : ""} onClick={() => setImageModel("qwen")} title="Qwen-Image 2.1: qualità massima, ~25 passi"><strong>Qwen-Image 2.1</strong><small>Qualità · {imageSettings.steps} passi</small></button><button type="button" role="radio" aria-checked={imageModel === "viggle"} className={imageModel === "viggle" ? "active" : ""} onClick={() => setImageModel("viggle")} title="Viggle Turbo v0.2.1: distillato a 6 passi, circa 6 volte più veloce"><strong>Viggle Turbo</strong><small>Veloce · 6 passi fissi</small></button></div><div className="image-preset-row"><span>{imageSettings.width}×{imageSettings.height}</span><span>{imageSettings.steps} step</span><span>Seed {imageSettings.seed}</span></div></div>}
-              {specialMode === "convert" ? null : specialMode === "ocr" ? <div className="special-welcome-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("ocr")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button><span className="welcome-kicker">OCR LOCALE</span>{editingCard === "ocr" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={cardDraft.accent} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={cardDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setCardDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("ocr")}>Salva</button></div></div> : <><h1>{cardTexts.ocr.title}<br /><em>{cardTexts.ocr.accent}</em></h1><p>{cardTexts.ocr.subtitle}</p></>}<button className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button></div> : specialMode === "yolo" ? <div className="special-welcome-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("yolo")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button><span className="welcome-kicker">YOLO VISION</span>{editingCard === "yolo" ? <div className="welcome-edit-form"><label>Titolo<input value={cardDraft.title} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={cardDraft.accent} maxLength={80} onChange={(event) => setCardDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={cardDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setCardDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setEditingCard(null)}>Annulla</button><button type="button" className="primary-action" onClick={() => saveCardEdit("yolo")}>Salva</button></div></div> : <><h1>{cardTexts.yolo.title}<br /><em>{cardTexts.yolo.accent}</em></h1><p>{cardTexts.yolo.subtitle}</p></>}<label className="special-task-select">Task YOLO<select value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option><option value="obb">Object detection orientata</option></select></label><button className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button></div> : <><button type="button" className="welcome-edit-button" onClick={() => { setWelcomeDraft({ title: welcomeTitle, accent: welcomeAccent, subtitle: welcomeSubtitle }); setWelcomeEditing(true); }} title="Modifica testo di benvenuto" aria-label="Modifica testo di benvenuto"><Pencil size={15} /></button><span className="welcome-kicker">ANDREAGPT</span>{welcomeEditing ? <div className="welcome-edit-form"><label>Titolo<input value={welcomeDraft.title} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={welcomeDraft.accent} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={welcomeDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setWelcomeDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setWelcomeEditing(false)}>Annulla</button><button type="button" className="primary-action" onClick={() => { const title = welcomeDraft.title.trim() || welcomeTitle; const accent = welcomeDraft.accent.trim() || welcomeAccent; const subtitle = welcomeDraft.subtitle.trim() || welcomeSubtitle; setWelcomeTitle(title); setWelcomeAccent(accent); setWelcomeSubtitle(subtitle); setWelcomeEditing(false); }}>Salva</button></div></div> : <><h1>{welcomeTitle} <em>{welcomeAccent}</em></h1><img className="welcome-cetriolo" src="/mascotte-Photoroom.png" alt="Mascotte AndreaGPT" /><p>{welcomeSubtitle}</p></>}</>}
+              {audioWelcomeMode === "transcribe" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("transcribe")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "transcribe" ? <AudioCardEditForm {...cardEditProps("transcribe")} /> : <AudioWelcomeCard variant="transcribe" recording={recording} transcribing={transcribing} title={cardTexts.transcribe.title} kicker={cardTexts.transcribe.accent}
+                actions={<><button type="button" className="special-upload-button" onClick={() => audioInputRef.current?.click()} disabled={transcribing}><AudioLines size={17} /> Carica audio</button>{summaryToggle}</>} />}</div>}
+              {audioWelcomeMode === "record" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("record")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "record" ? <AudioCardEditForm {...cardEditProps("record")} /> : <AudioWelcomeCard variant="record" recording={recording} transcribing={transcribing} title={cardTexts.record.title} kicker={cardTexts.record.accent}
+                actions={<><button type="button" className={`special-upload-button${recording ? " recording" : ""}`} onClick={() => void toggleRecording()} disabled={transcribing}><Mic size={17} /> {recording ? "Termina" : "Registra"}</button>{recording && <span className="welcome-timer" role="timer" aria-label="Durata registrazione">{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</span>}{summaryToggle}</>} />}</div>}
+              {specialMode === "analyze" && <ToolWelcomeCard className="analyze-welcome" kicker="QWEN3-VL LOCALE" text={cardTexts.analyze} {...cardEditProps("analyze")}
+                actions={<button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button>} />}
+              {specialMode === "ocr" && <ToolWelcomeCard kicker="OCR LOCALE" text={cardTexts.ocr} {...cardEditProps("ocr")}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
+              {specialMode === "yolo" && <ToolWelcomeCard kicker="YOLO VISION" text={cardTexts.yolo} {...cardEditProps("yolo")}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option><option value="obb">Detection orientata</option></select><button type="button" className="welcome-chip" onClick={() => openOutputFolder("yolo")}><Folder size={16} /> Apri risultati</button></>} />}
+              {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" kicker="CONVERSIONE LOCALE" text={cardTexts.convert} {...cardEditProps("convert")}>
+                <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
+              </ToolWelcomeCard>}
+              {specialMode === "image" && <ToolWelcomeCard className="image-welcome" kicker="QWEN IMAGE 2.1" text={{ ...cardTexts.image, subtitle: "" }} editSubtitle={false} {...cardEditProps("image")}
+                status={<div className="image-status-row"><div className={`image-service-status ${imageService.status}`}><span className="status-dot" />{imageService.message}</div><div className="image-preset-row"><span>{imageSettings.width}×{imageSettings.height}</span><span>{imageModel === "viggle" ? 6 : imageSettings.steps} step</span><span>Seed {imageSettings.seed}</span></div></div>}
+                actions={<div className="image-model-row" role="radiogroup" aria-label="Modello di generazione"><button type="button" role="radio" aria-checked={imageModel === "qwen"} className={imageModel === "qwen" ? "active" : ""} onClick={() => setImageModel("qwen")} title="Qwen-Image 2.1: qualità massima, ~25 passi"><strong>Qwen-Image 2.1</strong><small>Qualità · {imageSettings.steps} passi</small></button><button type="button" role="radio" aria-checked={imageModel === "viggle"} className={imageModel === "viggle" ? "active" : ""} onClick={() => setImageModel("viggle")} title="Viggle Turbo v0.2.1: distillato a 6 passi, circa 6 volte più veloce"><strong>Viggle Turbo</strong><small>Veloce · 6 passi fissi</small></button></div>} />}
+              {specialMode === "normal" && audioWelcomeMode === "none" && <><button type="button" className="welcome-edit-button" onClick={() => { setWelcomeDraft({ title: welcomeTitle, accent: welcomeAccent, subtitle: welcomeSubtitle }); setWelcomeEditing(true); }} title="Modifica testo di benvenuto" aria-label="Modifica testo di benvenuto"><Pencil size={15} /></button><span className="welcome-kicker">ANDREAGPT</span>{welcomeEditing ? <div className="welcome-edit-form"><label>Titolo<input value={welcomeDraft.title} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={welcomeDraft.accent} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={welcomeDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setWelcomeDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setWelcomeEditing(false)}>Annulla</button><button type="button" className="primary-action" onClick={() => { const title = welcomeDraft.title.trim() || welcomeTitle; const accent = welcomeDraft.accent.trim() || welcomeAccent; const subtitle = welcomeDraft.subtitle.trim() || welcomeSubtitle; setWelcomeTitle(title); setWelcomeAccent(accent); setWelcomeSubtitle(subtitle); setWelcomeEditing(false); }}>Salva</button></div></div> : <><h1>{welcomeTitle} <em>{welcomeAccent}</em></h1><img className="welcome-cetriolo" src="/mascotte-Photoroom.png" alt="Mascotte AndreaGPT" /><p>{welcomeSubtitle}</p></>}</>}
              </div>
              </div>
            ) : (
@@ -1589,18 +1765,18 @@ export default function App() {
                     {message.generatedFile && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
                     {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
-                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><MicelioScore message={message} /></> : null}</div>
-                    {message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
-                    {message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
+                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><AffinityScore message={message} /></> : null}</div>
+                    {diagnosticsEnabled && message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
+                    {diagnosticsEnabled && message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
-                    {message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
-                    {message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
-                    {message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} SHAP</button> : null}
-                    {openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
-                    {message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}{source.micelioScore !== undefined && <small className="citation-micelio-score"> · Micelio {Math.round(source.micelioScore * 100)}%</small>}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
-                    {message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
+                    {diagnosticsEnabled && message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
+                    {diagnosticsEnabled && message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
+                    {diagnosticsEnabled && message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} SHAP</button> : null}
+                    {diagnosticsEnabled && openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
+                    {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
+                    {diagnosticsEnabled && message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
                     {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details"><p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p></div>}
-                    {message.metrics && openMessagePanels[message.id]?.metrics && <div className="citation-panel metrics-citations"><p>
+                    {diagnosticsEnabled && message.metrics && openMessagePanels[message.id]?.metrics && <div className="citation-panel metrics-citations"><p>
                       {message.metrics.retrievalMs !== undefined && <>Ricerca: {(message.metrics.retrievalMs / 1000).toFixed(2)} s · </>}
                       {message.metrics.firstTokenMs !== undefined && <>Prima risposta: {(message.metrics.firstTokenMs / 1000).toFixed(1)} s · </>}
                       Totale: {((message.metrics.totalMs ?? 0) / 1000).toFixed(1)} s
@@ -1619,7 +1795,7 @@ export default function App() {
           <div className={`composer ${specialMode !== "normal" ? "special-composer" : ""}`}>
             {(recording || transcribing) && <div className="audio-status" role="status"><span className={recording ? "recording-dot" : ""} />{recording ? "Sto registrando audio" : "Sto trascrivendo audio"}</div>}
             {activeOperation && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
-            {specialMode !== "normal" && <div className="special-composer-label"><strong>{specialMode === "convert" ? null : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : "Qwen-Image-2.1"}</strong>{specialMode === "image" && <span><a href={comfyBrowserUrl()} target="_blank" rel="noreferrer">ComfyUI</a> · {imageService.ready ? "operativo · descrivi l'immagine" : "in avvio · attendi lo stato operativo"}</span>}</div>}
+            {specialMode !== "normal" && <div className="special-composer-label"><strong>{specialMode === "convert" ? null : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : "Qwen-Image-2.1"}</strong>{specialMode === "image" && <span><a href={comfyBrowserUrl()} target="_blank" rel="noreferrer">ComfyUI</a> · {imageService.message.replace(/^ComfyUI /, "")}</span>}</div>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
             {brainSource && <div className="mention-filter-chip" title="Filtro Brain attivo: la ricerca è limitata a questa fonte. Rimuovilo per cercare in tutto l'archivio."><span><span>@</span>{brainSource}</span><button type="button" onClick={() => setBrainSource("")} aria-label="Rimuovi filtro fonte Brain"><X size={14} /></button></div>}
             <div className="composer-row">
@@ -1685,9 +1861,11 @@ export default function App() {
         </Modal>
       )}
 
+      {candidatureOpen && <Modal title="Candidature" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
-      {outputOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolder === "images" ? "Immagini generate" : outputFolder === "compactChat" ? "Chat compatte" : outputFolder.toUpperCase()}</h3><div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap"><a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a><button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div></section>}</div></Modal>}
-      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); }); }}>Elimina</button></div></Modal>}
+      {outputOpen && !compactOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolder === "images" ? "Immagini generate" : outputFolder === "compactChat" ? "Chat compatte" : outputFolder.toUpperCase()}</h3><div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen(file.name)}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div></section>}</div></Modal>}
+      {outputOpen && compactOpen && <Modal title="Chat compatta" className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro la chat…</div>}><BrainDocumentReader key={compactOpen} source={`OUTPUT/Compatta_chat/${compactOpen}`} url={`/api/output/Compatta_chat/${encodeURIComponent(compactOpen)}/content`} backLabel="Torna alle chat" onBack={() => setCompactOpen(null)} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/Compatta_chat/${encodeURIComponent(compactOpen)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: "Compatta_chat", name: compactOpen })} /></Suspense></Modal>}
+      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); if (folder === "Compatta_chat") setCompactOpen(current => current === name ? null : current); }); }}>Elimina</button></div></Modal>}
       {researchOpen && <Modal
         className={researchFullscreen ? "research-modal-fullscreen" : researchResult || researchLoading ? "research-modal" : "research-initial"}
         compact={!researchResult && !researchLoading && !researchFullscreen}
@@ -1741,62 +1919,50 @@ export default function App() {
       {settingsOpen && (
         <Modal title="Impostazioni" className="settings-modal" onClose={() => setSettingsOpen(false)}>
           <div className="settings-compact">
-          <div className="settings-section">
-            <div className="settings-heading"><strong>Tema</strong><SettingsInfo text="Scegli l'aspetto di AndreaGPT." /></div>
+          <div className="settings-group">
+            <div className="settings-label">Tema</div>
             <div className="theme-options">
-              <button className={theme === "cosmic" ? "active" : ""} onClick={() => setTheme("cosmic")} aria-pressed={theme === "cosmic"}>
-                <span className="theme-preview cosmic-preview"><i /><i /><i /></span>
-                <span><strong>Latte Cosmico</strong><small>#FFF8E7 · chiaro</small></span>
-                {theme === "cosmic" && <Check size={16} />}
-              </button>
-              <button className={theme === "normal" ? "active" : ""} onClick={() => setTheme("normal")} aria-pressed={theme === "normal"}>
-                <span className="theme-preview normal-preview"><i /><i /><i /></span>
-                <span><strong>Normale</strong><small>Scuro · attuale</small></span>
-                {theme === "normal" && <Check size={16} />}
-              </button>
+              {([["cosmic", "Latte Cosmico", "Chiaro · crema"], ["normal", "Normale", "Scuro · lime"], ["aurora", "Aurora", "Viola · rosa"]] as const).map(([id, name, hint]) => <button key={id} type="button" className={theme === id ? "active" : ""} onClick={() => setTheme(id)} aria-pressed={theme === id}>
+                <span className={`theme-preview ${id}-preview`}><i /><i /><i /></span>
+                <span><strong>{name}</strong><small>{hint}</small></span>
+                {theme === id && <Check size={15} />}
+              </button>)}
             </div>
           </div>
           <AppearanceSettings appearance={appearance} />
-          <div className="settings-section image-settings">
-            <div className="settings-heading"><strong>Qwen Image 2.1</strong><SettingsInfo text="Generazione locale. Il modello viene scaricato al primo utilizzo e può richiedere molta RAM e spazio disco." /></div>
-            <button className="secondary-action image-settings-open" onClick={() => { setSettingsOpen(false); openSpecialChat("image"); }}><Image size={17} /> Apri chat Image</button>
-            <label className="setting-field brain-field"><span><strong>Formato</strong></span><select value={`${imageSettings.width}x${imageSettings.height}`} onChange={event => { const [width, height] = event.target.value.split("x").map(Number); setImageSettings(current => ({ ...current, width, height })); }}><option value="768x768">Quadrato · 768×768 consigliato</option><option value="1024x1024">Quadrato · 1024×1024</option><option value="1344x768">Orizzontale · 1344×768</option><option value="768x1344">Verticale · 768×1344</option></select></label>
-            <label className="setting-field"><span><strong>Passaggi</strong><SettingsInfo text="Più passaggi possono migliorare il risultato, ma aumentano i tempi." /></span><output>{imageSettings.steps}</output></label>
-            <input className="range" type="range" min="10" max="50" step="5" value={imageSettings.steps} onChange={event => setImageSettings(current => ({ ...current, steps: Number(event.target.value) }))} />
-            <label className="setting-field token-field"><span><strong>Seed</strong></span><input type="number" min="0" max="2147483647" value={imageSettings.seed} onChange={event => setImageSettings(current => ({ ...current, seed: Math.max(0, Math.min(2147483647, Number(event.target.value))) }))} /></label>
-            <p className="cookbook-note">Il backend seleziona automaticamente CUDA, Intel XPU oppure CPU. Per Intel Arc serve una build PyTorch con supporto XPU; i file sono salvati in <code>OUTPUT/Image</code>.</p>
-          </div>
-          <details className="settings-section brain-ranking-settings settings-collapse">
-            <summary className="settings-collapse-title"><span><strong>Ricerca nel Brain</strong><SettingsInfo text="Come vengono scelte le fonti dai tuoi documenti. Misura l'effetto con: npm run valuta:brain -- --confronta" /></span><ChevronDown size={15} /></summary>
-            <label className="setting-field"><span><strong>Micelio</strong><SettingsInfo text="Gli estratti collegati a molte fonti forti salgono di posizione (similarità coseno tra estratti)." /></span><input type="checkbox" checked={brainRanking.micelio} onChange={event => setBrainRanking(current => ({ ...current, micelio: event.target.checked }))} /></label>
-            <label className="setting-field"><span><strong>Fuzzy (temi)</strong><SettingsInfo text="Terzo canale: propone le fonti con gli stessi temi della domanda e le fonde con embedding e lessicale." /></span><input type="checkbox" checked={brainRanking.fuzzy} onChange={event => setBrainRanking(current => ({ ...current, fuzzy: event.target.checked }))} /></label>
-            <p className="cookbook-note">Ultima misura su 47 domande: spenti Recall@5 85%, Micelio 85%. Fuzzy da misurare.</p>
-          </details>
-          <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />
-          <div className="settings-section generation-settings">
-            <div className="settings-heading"><strong>Generazione</strong><SettingsInfo text="Configura il comportamento delle risposte." /></div>
-          <label className="setting-field"><span><strong>Temperatura</strong><SettingsInfo text="Valori bassi sono più precisi, valori alti più creativi." /></span><output>{settings.temperature.toFixed(1)}</output></label>
-          <input className="range" type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} />
-          <label className="setting-field token-field"><span><strong>Token massimi</strong><SettingsInfo text="Lunghezza massima della risposta." /></span><input type="number" min="1" max="8192" value={settings.maxTokens} onChange={(event) => setSettings({ ...settings, maxTokens: Math.min(8192, Math.max(1, Number(event.target.value))) })} /></label>
-          <details className="settings-collapse ollama-profile-settings">
-            <summary className="settings-collapse-title"><span><strong>Settings modello</strong></span><ChevronDown size={15} /></summary>
-            <div className="ollama-profile-table-wrap">
-              <table className="ollama-profile-table">
-                <thead><tr><th scope="col">Modello locale</th><th scope="col">Contesto</th><th scope="col">Output</th></tr></thead>
-                <tbody>{localOllamaModels.length ? localOllamaModels.map(model => {
-                  const profile = { ...defaultOllamaProfile(model), ...ollamaProfiles[model.id] };
-                  const extendedOutput = model.id === "qwen3:14b";
-                  return <tr key={model.id}>
-                    <th scope="row"><strong>{model.name.replace(/\s*\(locale\)$/i, "")}</strong><code>{model.id}</code></th>
-                    <td><select aria-label={`Contesto ${model.name}`} value={profile.numCtx} onChange={event => updateOllamaProfile(model, { numCtx: Number(event.target.value) as OllamaProfile["numCtx"] })}><option value={4096}>4096 · sicuro</option><option value={8192}>8192 · più memoria</option></select></td>
-                    <td><select aria-label={`Output ${model.name}`} value={profile.maxTokens} onChange={event => updateOllamaProfile(model, { maxTokens: Number(event.target.value) as OllamaProfile["maxTokens"] })}><option value={256}>256 · breve</option><option value={512}>512 · bilanciato</option><option value={1024}>1024 · lungo</option>{extendedOutput && <><option value={2048}>2048 · molto lungo</option><option value={4096}>4096 · massimo</option></>}</select></td>
-                  </tr>;
-                }) : <tr><td className="ollama-profile-empty" colSpan={3}>Nessun modello Ollama locale disponibile.</td></tr>}</tbody>
-              </table>
+          <label className="settings-row settings-toggle"><span>Diagnostica</span><input type="checkbox" checked={diagnosticsEnabled} onChange={event => setDiagnosticsEnabled(event.target.checked)} /></label>
+          <details className="settings-row">
+            <summary><span>Ricerca nel Brain</span><ChevronDown size={15} /></summary>
+            <div className="settings-body">
+              <label className="settings-line"><span>Numero di fonti</span><select value={brainSourceCount} onChange={event => setBrainSourceCount(Number(event.target.value))}><option value={0}>Automatico</option>{[1, 2, 3, 5, 8, 10, 12].map(count => <option key={count} value={count}>{count}</option>)}</select></label>
+              <label className="settings-line"><span>Reranker</span><input type="checkbox" checked={brainRerank} onChange={event => setBrainRerank(event.target.checked)} /></label>
             </div>
           </details>
-          </div>
-          <button className="primary-action" onClick={() => setSettingsOpen(false)}>Salva impostazioni</button>
+          <details className="settings-row">
+            <summary><span>Generazione</span><ChevronDown size={15} /></summary>
+            <div className="settings-body">
+              <label className="settings-line"><span>Temperatura</span><span className="settings-range"><input type="range" min="0" max="2" step="0.1" value={settings.temperature} onChange={(event) => setSettings({ ...settings, temperature: Number(event.target.value) })} /><output>{settings.temperature.toFixed(1)}</output></span></label>
+              <label className="settings-line"><span>Token massimi</span><input type="number" min="1" max="8192" value={settings.maxTokens} onChange={(event) => setSettings({ ...settings, maxTokens: Math.min(8192, Math.max(1, Number(event.target.value))) })} /></label>
+            </div>
+          </details>
+          <details className="settings-row">
+            <summary><span>Modelli locali</span><ChevronDown size={15} /></summary>
+            <div className="settings-body">
+              {localOllamaModels.length ? localOllamaModels.map(model => {
+                const profile = { ...defaultOllamaProfile(model), ...ollamaProfiles[model.id] };
+                const extendedOutput = model.id === "qwen3:14b";
+                return <div className="settings-line settings-model" key={model.id}>
+                  <span title={model.id}>{model.name.replace(/\s*\(locale\)$/i, "")}</span>
+                  <span className="settings-pair">
+                    <select aria-label={`Contesto ${model.name}`} title="Contesto" value={profile.numCtx} onChange={event => updateOllamaProfile(model, { numCtx: Number(event.target.value) as OllamaProfile["numCtx"] })}><option value={4096}>ctx 4096</option><option value={8192}>ctx 8192</option></select>
+                    <select aria-label={`Output ${model.name}`} title="Token di output" value={profile.maxTokens} onChange={event => updateOllamaProfile(model, { maxTokens: Number(event.target.value) as OllamaProfile["maxTokens"] })}><option value={256}>out 256</option><option value={512}>out 512</option><option value={1024}>out 1024</option>{extendedOutput && <><option value={2048}>out 2048</option><option value={4096}>out 4096</option></>}</select>
+                  </span>
+                </div>;
+              }) : <p className="settings-empty">Nessun modello Ollama locale.</p>}
+            </div>
+          </details>
+          <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />
+          <button type="button" className="settings-done" onClick={() => setSettingsOpen(false)}>Fatto</button>
           </div>
         </Modal>
       )}
@@ -1934,15 +2100,36 @@ function loadMessages(): ChatMessage[] {
   }
 }
 
+const DELETED_CONVERSATIONS_KEY = "andreagpt-deleted-conversations";
+
+/** ID cancellati: filtrati a ogni lettura e scrittura, così una scheda vecchia non può farli ricomparire. */
+function loadDeletedConversationIds() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DELETED_CONVERSATIONS_KEY) ?? "[]");
+    return new Set<string>(Array.isArray(saved) ? saved : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function rememberDeletedConversation(id: string) {
+  const deleted = [...loadDeletedConversationIds(), id].slice(-1000);
+  try { localStorage.setItem(DELETED_CONVERSATIONS_KEY, JSON.stringify(deleted)); } catch { /* sessione privata */ }
+}
+
 function loadConversations(): Conversation[] {
   try {
-    const saved = JSON.parse(localStorage.getItem("andreagpt-conversations") ?? "[]");
+    const raw = localStorage.getItem("andreagpt-conversations");
+    const saved = JSON.parse(raw ?? "[]");
     if (Array.isArray(saved) && saved.length) {
-      return saved.map((conversation: Conversation) => conversation.customTitle ? conversation : {
+      const deleted = loadDeletedConversationIds();
+      return saved.filter((conversation: Conversation) => !deleted.has(conversation.id)).map((conversation: Conversation) => conversation.customTitle ? conversation : {
         ...conversation,
         title: createConversationTitleFromMessages(conversation.messages),
       });
     }
+    // Migrazione dal vecchio formato solo se la lista non è mai esistita: una lista svuotata resta vuota.
+    if (raw !== null) return [];
     const messages = loadMessages();
     if (!messages.length) return [];
     const id = createId();
@@ -1994,7 +2181,9 @@ function persistMessages(key: string, messages: ChatMessage[]) {
   }
 }
 
-function persistConversations(conversations: Conversation[]) {
+function persistConversations(allConversations: Conversation[]) {
+  const deleted = loadDeletedConversationIds();
+  const conversations = allConversations.filter((conversation) => !deleted.has(conversation.id));
   try {
     localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations));
   } catch {

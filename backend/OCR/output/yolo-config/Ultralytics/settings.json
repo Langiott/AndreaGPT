@@ -1,0 +1,19 @@
+{
+  "settings_version": "0.0.8",
+  "datasets_dir": "C:\\Users\\utente\\Desktop\\AndreaGPT2\\datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "15b58655b1ec0a35aff34f8822099349ff24eefa2eaba59ce32d377bec335d77",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "mlflow": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

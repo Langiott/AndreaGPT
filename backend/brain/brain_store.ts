@@ -1,6 +1,6 @@
 /**
  * Legge l'indice SQLite creato dal Brain.
- * Fornisce ricerca lessicale, vettori, fonti e collegamenti tra chunk.
+ * Fornisce ricerca lessicale, vettori e fonti.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +11,7 @@ import { retrievalTokens } from "../retrieval/retrieval";
 export interface StoreManifest {
   schema: number; generation: string; updatedAt: string; model: string;
   sourceSize: number; sourceMtimeMs: number; dimension: number; count: number; files: number;
-  errors: Array<{ path: string; error: string }>; variants: Record<string, { bytes: number; variance: number }>; graph: boolean;
+  errors: Array<{ path: string; error: string }>; variants: Record<string, { bytes: number; variance: number }>;
 }
 export class BrainStore {
   private db?: DatabaseSync;
@@ -61,14 +61,6 @@ export class BrainStore {
       const found = this.chunks(rows.slice(0,1).map(row => Number(row.id)))[0];
       if (found) result.set(citation,found.chunk.embedding);
     }
-    return result;
-  }
-  edges(ids: number[]) {
-    const allowed = new Set(ids);
-    const result=new Map<number,Array<{id:number;similarity:number}>>(ids.map(id=>[id,[]]));
-    if(!ids.length)return result;
-    const rows=this.db!.prepare(`SELECT source,target,similarity FROM edges WHERE source IN (${ids.map(()=>"?").join(",")})`).all(...ids);
-    for(const row of rows)if(allowed.has(Number(row.target)))result.get(Number(row.source))!.push({id:Number(row.target),similarity:Number(row.similarity)});
     return result;
   }
 }

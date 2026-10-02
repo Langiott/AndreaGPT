@@ -16,4 +16,7 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Operazione fallita");
   process.exitCode = 1;
+} finally {
+  // Chiude i worker Python (TurboVec, reranker): altrimenti il comando resta aperto.
+  brain.close();
 }

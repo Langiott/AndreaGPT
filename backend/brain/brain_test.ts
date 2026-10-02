@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import AdmZip from "adm-zip";
-import { chunkBrainText, createBrain, validateBrainRepositoryUrl } from "./brain";
+import { acquireIndexLock, chunkBrainText, createBrain, validateBrainRepositoryUrl } from "./brain";
 
 test("retrieval conserva fatti lontani dalla frase che corrisponde alla domanda", async t => {
   const f = await fixture(t);
@@ -105,7 +105,7 @@ test("query embedding condiviso ma risultati aggiornati dopo reindicizzazione", 
   assert.ok((await f.brain.searchBrain("database Postgres")).some(hit => hit.path === "due.txt"));
 });
 
-test("Micelio misura l'allineamento semantico tra risposta e fonti", async t => {
+test("Il controllo semantico misura l'allineamento semantico tra risposta e fonti", async t => {
   const f = await fixture(t);
   await fs.writeFile(path.join(f.root, "database.txt"), "Il database Postgres conserva dati con backup giornalieri.");
   await f.brain.indexBrain();
@@ -213,6 +213,20 @@ test("chunking mantiene righe, sezioni e limiti anche per codice minificato", ()
   assert.equal(chunks.at(-1)?.endLine, 6);
   assert.equal(new Set(chunks.map(chunk => chunk.id)).size, chunks.length);
   assert.deepEqual(chunkBrainText(" \n\n", "empty.txt"), []);
+});
+
+test("chunk dopo la sovrapposizione: la riga iniziale contiene il suo primo testo, non il titolo di sezione", () => {
+  const paragraphs = Array.from({ length: 40 }, (_, i) => `Paragrafo ${i} con una frase abbastanza lunga da riempire il chunk in poche righe di testo.`);
+  const text = `# Sezione\n\n${paragraphs.join("\n\n")}`;
+  const lines = text.split("\n");
+  const chunks = chunkBrainText(text, "docs/lungo.md");
+  assert.ok(chunks.length > 2);
+  for (const chunk of chunks) {
+    const firstLine = chunk.text.split("\n")[0];
+    assert.ok(lines[chunk.startLine - 1].includes(firstLine), `riga ${chunk.startLine} non contiene "${firstLine.slice(0, 40)}"`);
+    assert.ok(chunk.startLine <= chunk.endLine);
+  }
+  assert.ok(chunks.slice(1).every(chunk => chunk.startLine > 1));
 });
 
 test("indice incrementale persistente, retrieval ibrido, filtri e rimozioni", async t => {
@@ -450,4 +464,16 @@ test("Office minuscolo o con DTD rifiutato; import salta destinazioni esistenti"
   const imported = await f.brain.importBrainRepository("https://github.com/owner/repo");
   assert.equal(imported.branch, "existing");
   assert.equal(await fs.readFile(path.join(destination, "keep.txt"), "utf8"), "preserve");
+});
+
+test("lock dell'indice lasciato da un processo morto viene ripreso; quello di un processo vivo no", async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "andreagpt-lock-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const lockPath = path.join(directory, "index.lock");
+  await fs.writeFile(lockPath, JSON.stringify({ pid: 2_147_483_000, at: Date.now() }));
+  const handle = await acquireIndexLock(lockPath);
+  assert.equal(JSON.parse(await fs.readFile(lockPath, "utf8")).pid, process.pid);
+  await handle.close();
+  await fs.writeFile(lockPath, JSON.stringify({ pid: process.ppid, at: Date.now() }));
+  await assert.rejects(acquireIndexLock(lockPath), /già in corso/);
 });

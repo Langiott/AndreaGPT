@@ -38,17 +38,19 @@ export function evidenceFormatBoost(query: string, text: string): number {
 
 interface Passage { id: string; path: string; section?: string; text: string; score: number }
 
-export function selectEvidence<T extends Passage>(ranked: T[], query: string, scoped: boolean): T[] {
+/** limit: numero di fonti scelto dall'utente; assente = 5, oppure 8 per domande dettagliate. */
+export function selectEvidence<T extends Passage>(ranked: T[], query: string, scoped: boolean, limit?: number): T[] {
   const { detailed } = evidenceIntent(query);
-  if (!detailed) return selectPassages(ranked, 5);
+  if (!detailed) return selectPassages(ranked, limit ?? 5);
+  const max = limit ?? 8;
   // Preserve a few continuations of the best section (e.g. an algorithm split
   // into chunks), then fill with diverse evidence. Never exclude summaries.
   const top = ranked[0];
-  if (!scoped || !top?.section) return selectPassages(ranked, 8);
+  if (!scoped || !top?.section) return selectPassages(ranked, max);
   const continuations = ranked.filter(hit => hit.path === top.path && hit.section === top.section && hit.score >= top.score * 0.8);
-  const anchors = selectPassages(continuations, 3);
-  const remainder = selectPassages(ranked.filter(hit => !anchors.some(anchor => anchor.id === hit.id)), 8);
+  const anchors = selectPassages(continuations, Math.min(3, max));
+  const remainder = selectPassages(ranked.filter(hit => !anchors.some(anchor => anchor.id === hit.id)), max);
   return [...anchors, ...remainder].filter((hit, i, all) =>
     all.findIndex(other => other.text.replace(/\s+/gu, " ").trim() === hit.text.replace(/\s+/gu, " ").trim()) === i,
-  ).slice(0, 8);
+  ).slice(0, max);
 }

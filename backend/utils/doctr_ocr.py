@@ -2,7 +2,11 @@
 import argparse
 import os
 from pathlib import Path
+import sys
 import tempfile
+
+# Predittore docTR già caricato (modalità --serve): le richieste successive non ricaricano i pesi.
+_predictor = None
 
 
 def raddrizza_foglio(image):
@@ -44,12 +48,26 @@ def raddrizza_foglio(image):
 
 
 def main() -> None:
-    """Legge input e output dai parametri e salva il testo estratto."""
+    """Legge input e output dai parametri e salva il testo estratto, oppure resta in ascolto con --serve."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--input")
+    parser.add_argument("--output")
     args = parser.parse_args()
-    cache_dir = Path(args.output).parent / "doctr-cache"
+    if args.serve:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from json_serve import serve
+        serve(lambda request: recognize(request["input"], request["output"]) or {"ok": True})
+        return
+    if not args.input or not args.output:
+        parser.error("--input e --output richiesti")
+    recognize(args.input, args.output)
+
+
+def recognize(input_path, output_path):
+    """Estrae il testo di un'immagine o di un PDF e lo salva in output_path."""
+    global _predictor
+    cache_dir = Path(output_path).parent / "doctr-cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("DOCTR_CACHE_DIR", str(cache_dir))
 
@@ -57,7 +75,7 @@ def main() -> None:
     from doctr.models import ocr_predictor
     from PIL import Image, ImageOps
 
-    source = Path(args.input)
+    source = Path(input_path)
     temporary = None
     if source.suffix.lower() == ".pdf":
         document = DocumentFile.from_pdf(str(source))
@@ -67,8 +85,9 @@ def main() -> None:
         image.save(temporary.name)
         temporary.close()
         document = DocumentFile.from_images(temporary.name)
-    predictor = ocr_predictor(pretrained=True)
-    result = predictor(document)
+    if _predictor is None:
+        _predictor = ocr_predictor(pretrained=True)
+    result = _predictor(document)
     lines = []
     for page in result.pages:
         # docTR a volte assegna un'intera tabella o un modulo a una sola
@@ -119,7 +138,7 @@ def main() -> None:
             lines.append("")
     if temporary:
         Path(temporary.name).unlink(missing_ok=True)
-    Path(args.output).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    Path(output_path).write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

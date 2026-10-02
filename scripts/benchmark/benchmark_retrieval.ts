@@ -23,8 +23,7 @@ const embed = async (texts: string[]) => Promise.all(texts.map(text => {
 }));
 const runs: unknown[] = [];
 const vectors: unknown[] = [];
-for (const mode of ["legacy", "sqlite", "sqlite-graph", "pca384", "pca256"]) {
-  process.env.BRAIN_PRECOMPUTED_GRAPH = mode === "sqlite-graph" ? "1" : "0";
+for (const mode of ["legacy", "sqlite", "pca384", "pca256"]) {
   if (mode.startsWith("pca")) process.env.BRAIN_PCA_DIM = mode.slice(3); else delete process.env.BRAIN_PCA_DIM;
   const brain = createBrain({ backend: mode === "legacy" ? "legacy" : "sqlite", embed, turbo: true });
   try {

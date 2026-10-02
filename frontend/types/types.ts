@@ -38,7 +38,7 @@ export interface ChatMessage {
 
 export interface DiagnosticEvent {
   at: string;
-  stage: "request" | "router" | "searchx" | "micelio" | "embedding" | "rag" | "model" | "response";
+  stage: "request" | "router" | "searchx" | "semantic" | "embedding" | "rag" | "model" | "response";
   status: "ok" | "warning" | "error" | "info";
   message: string;
   durationMs?: number;
@@ -96,5 +96,4 @@ export interface BrainCitation {
   id: string;
   source: string;
   text: string;
-  micelioScore?: number;
 }

@@ -24,7 +24,6 @@ export const paths = {
   imageOutputRoot: path.join(outputRoot, "Image"),
   doctrScript: path.join(serverDirectory, "utils", "doctr_ocr.py"),
   yoloScript: path.join(serverDirectory, "model", "yolo_predict.py"),
-  qwenImageScript: path.join(serverDirectory, "model", "qwen_image.py"),
   qwenVisionScript: path.join(serverDirectory, "model", "qwen_vision.py"),
   audioScript: path.join(serverDirectory, "utils", "transcribe_audio.py"),
   toolsRoot: path.resolve(process.env.TOOLS_ROOT || path.join(process.cwd(), "data/tools")),

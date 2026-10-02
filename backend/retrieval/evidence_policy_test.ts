@@ -31,3 +31,12 @@ test("summaries and their continuation remain available regardless of filename a
   assert.deepEqual(selected.map(hit => hit.id), ["a", "b", "c"]);
   assert.equal(JSON.stringify(hits), before);
 });
+
+test("il numero di fonti scelto dall'utente sostituisce 5/8", () => {
+  const hits = Array.from({ length: 15 }, (_, i) => ({ id: `h${i}`, path: `doc${i % 3}.md`, section: `S${i}`, text: `estratto numero ${i} con parole diverse ${"x".repeat(i)}`, score: 1 - i * 0.01 }));
+  assert.equal(selectEvidence(hits, "Cos'è HDFS?", false).length, 5);
+  assert.equal(selectEvidence(hits, "Descrivi tutta la procedura", true).length, 8);
+  assert.equal(selectEvidence(hits, "Cos'è HDFS?", false, 2).length, 2);
+  assert.equal(selectEvidence(hits, "Descrivi tutta la procedura", true, 12).length, 12);
+  assert.equal(selectEvidence(hits, "Descrivi tutta la procedura", true, 1).length, 1);
+});

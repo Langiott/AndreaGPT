@@ -9,7 +9,7 @@ export type DiagnosticStatus = "ok" | "warning" | "error" | "info";
 
 export interface DiagnosticEvent {
   at: string;
-  stage: "request" | "router" | "searchx" | "micelio" | "embedding" | "rag" | "model" | "response";
+  stage: "request" | "router" | "searchx" | "semantic" | "embedding" | "rag" | "model" | "response";
   status: DiagnosticStatus;
   message: string;
   durationMs?: number;
@@ -19,22 +19,25 @@ export interface DiagnosticEvent {
 export interface DiagnosticSummary {
   durationMs?: number;
   timings?: Record<string, number>;
+  /** Metriche numeriche non temporali (grounding, reranker, token): servono a misurare i miglioramenti dai log. */
+  metrics?: Record<string, number>;
   sources?: Array<{ type: "brain" | "web"; label: string; url?: string }>;
 }
 
 const logDirectory = path.resolve(process.env.DIAGNOSTICS_DIR || path.join(process.cwd(), "data", "logs"));
 
-/** Crea un registro vuoto dove aggiungere gli eventi della richiesta. */
-export function createDiagnosticTrace(requestId: string, conversationId: string) {
+/** Crea un registro vuoto dove aggiungere gli eventi della richiesta. Spento: non registra e non scrive su disco. */
+export function createDiagnosticTrace(requestId: string, conversationId: string, enabled = true) {
   const events: DiagnosticEvent[] = [];
   let summary: DiagnosticSummary = {};
   const add = (event: Omit<DiagnosticEvent, "at">) => {
-    events.push({ at: new Date().toISOString(), ...event });
+    if (enabled) events.push({ at: new Date().toISOString(), ...event });
   };
   const setSummary = (value: DiagnosticSummary) => {
     summary = { ...summary, ...value };
   };
   const persist = async (outcome: "ok" | "error") => {
+    if (!enabled) return;
     try {
       await fs.mkdir(logDirectory, { recursive: true });
       const day = new Date().toISOString().slice(0, 10);

@@ -41,8 +41,8 @@ test("efficienza: la somma dei contributi è il valore pieno meno quello vuoto, 
 
 test("la lettura pratica segnala la parola che comanda e le parti non coperte", () => {
   const findings = shapFindings(["reti", "neurali", "back"], [0.5, 0.45, 0.05], [3, 3, 0], 3);
-  assert.match(findings[0], /guidata soprattutto da "reti"/);
-  assert.match(findings[1], /"back" pesa poco e non compare in nessuna fonte/);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /"back" pesa poco e non compare in nessuna fonte/);
 });
 
 test("i verbi di richiesta non vengono segnalati come argomenti mancanti", () => {

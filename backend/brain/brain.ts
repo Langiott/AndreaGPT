@@ -14,8 +14,7 @@ import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { localOllamaUrl } from "../utils/local";
 import { projectEmbeddings, projectPoint } from "./embedding_map";
 import { coalitionText, contentOf, QUERY_STOP_WORDS, queryIntent, semanticQueryText, shapFindings, shapleyPlan, shapleyValues, shapPlayers, toShares, type ShapResult } from "./query_shap";
-import { fuzzyAuto, groupEmbeddings, memberships, themeCount, unit, type EmbeddingGroups, type GroupMethod, type GroupModel } from "./embedding_ml";
-import { fuseFuzzyChannel } from "../retrieval/fuzzy_rerank";
+import { groupEmbeddings, type EmbeddingGroups, type GroupMethod, type GroupModel } from "./embedding_ml";
 import { brainUploadPreset } from "../../frontend/config/brain_upload_limits";
 import {
   BRAIN_BATCH_SIZE,
@@ -98,8 +97,6 @@ export interface BrainSearchResult extends BrainChunk {
   score: number;
   lexicalScore: number;
   cosineScore: number;
-  /** Score normalizzato della rete Micelio usato per la propagazione semantica. */
-  micelioScore?: number;
   citation: string;
 }
 export interface BrainOptions {
@@ -109,19 +106,40 @@ export interface BrainOptions {
   embed?: (texts: string[]) => Promise<number[][]>;
   backend?: "legacy" | "sqlite";
   turbo?: boolean;
-  /** Spinta Micelio nel ranking (vicini nel grafo). Spenta di default: non migliora le metriche (BRAIN_MICELIO=1 la accende). */
-  micelio?: boolean;
-  /** Riordino fuzzy per temi della domanda. BRAIN_FUZZY=1 lo accende. */
-  fuzzy?: boolean;
+  /** Riordino dei primi candidati con un cross-encoder. Acceso di default (BRAIN_RERANK=0 lo spegne). */
+  rerank?: boolean;
 }
 
 export interface BrainSearchContext {
   metrics: Record<string, number>;
   queryVector?: number[];
-  /** Per singola richiesta: spinta Micelio nel ranking (predefinito: opzione del Brain). */
-  micelio?: boolean;
-  /** Per singola richiesta: riordino fuzzy per temi della domanda (predefinito: opzione del Brain). */
-  fuzzy?: boolean;
+  /** Numero di fonti da restituire (1-12). Assente: 5, oppure 8 per domande su metodi e formule. */
+  sourceLimit?: number;
+  /** Per singola richiesta: riordino con cross-encoder (predefinito: opzione del Brain). */
+  rerank?: boolean;
+}
+
+/** Fasce del supporto semantico (allineamento risposta-fonti con nomic). */
+export const SEMANTIC_STRONG = 0.75, SEMANTIC_WEAK = 0.65;
+
+/**
+ * Prende il lock dell'indice scrivendoci pid e ora. Un lock lasciato da un processo morto
+ * (Ctrl+C, riavvio durante l'indicizzazione) o più vecchio di 6 ore viene rimosso.
+ */
+export async function acquireIndexLock(lockPath: string): Promise<fs.FileHandle> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const handle = await fs.open(lockPath, "wx", 0o600);
+      await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+      return handle;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt) throw error;
+      const owner = await fs.readFile(lockPath, "utf8").then(text => JSON.parse(text) as { pid?: number; at?: number }).catch(() => ({} as { pid?: number; at?: number }));
+      const alive = (() => { if (!owner.pid || owner.pid === process.pid) return false; try { process.kill(owner.pid, 0); return true; } catch { return false; } })();
+      if (alive && Date.now() - (owner.at ?? 0) < 6 * 3_600_000) throw new Error("Indicizzazione già in corso in un altro processo.");
+      await fs.rm(lockPath, { force: true });
+    }
+  }
 }
 
 /** Controlla che un percorso resti dentro la cartella indicata. */
@@ -151,6 +169,8 @@ export function chunkBrainText(text: string, source: string, lineKind: BrainChun
   const chunks: BrainChunk[] = [];
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let buffer = "", start = 1, end = 1, section: string | undefined;
+  // Riga sorgente di ogni frammento nel buffer (uno per "\n"): serve a dare la riga giusta alla coda di sovrapposizione.
+  let bufferLines: number[] = [];
   /** Salva il chunk corrente e prepara il successivo. */
   const flush = () => {
     if (buffer.trim()) chunks.push({
@@ -158,6 +178,7 @@ export function chunkBrainText(text: string, source: string, lineKind: BrainChun
       path: source, text: buffer, startLine: start, endLine: end, section, lineKind,
     });
     buffer = "";
+    bufferLines = [];
   };
   lines.forEach((line, index) => {
     const heading = /^#{1,6}\s+(.+)/.exec(line);
@@ -168,14 +189,22 @@ export function chunkBrainText(text: string, source: string, lineKind: BrainChun
     const fragments = sentences.flatMap(sentence => sentence.length <= CHUNK_SIZE ? [sentence] : Array.from({ length: Math.ceil(sentence.length / (CHUNK_SIZE - CHUNK_OVERLAP)) }, (_, part) => sentence.slice(part * (CHUNK_SIZE - CHUNK_OVERLAP), part * (CHUNK_SIZE - CHUNK_OVERLAP) + CHUNK_SIZE)));
     for (const fragment of fragments.length ? fragments : [""]) {
       if (buffer.length + fragment.length + 1 > CHUNK_SIZE) {
-        const previous = buffer;
+        const previous = buffer, previousLines = bufferLines;
         flush();
         const tail = previous.slice(-CHUNK_OVERLAP).replace(/^\S*\s/u, "").trim();
-        if (tail && tail.length + fragment.length + 1 <= CHUNK_SIZE) buffer = tail;
+        if (tail && tail.length + fragment.length + 1 <= CHUNK_SIZE) {
+          // La coda parte dal frammento in cui cade: il chunk nuovo inizia da quella riga, non dal titolo di sezione.
+          const first = previous.slice(0, previous.lastIndexOf(tail)).split("\n").length - 1;
+          buffer = tail;
+          // trim() può togliere righe vuote finali: si tengono solo le righe davvero presenti nella coda.
+          bufferLines = previousLines.slice(first, first + tail.split("\n").length);
+          start = bufferLines[0] ?? index + 1;
+        }
       }
-      if (!buffer) start = index + 1;
+      if (!buffer) { start = index + 1; bufferLines = []; }
       end = index + 1;
       buffer += (buffer ? "\n" : "") + fragment.trim();
+      bufferLines.push(index + 1);
     }
   });
   flush();
@@ -433,24 +462,27 @@ export function createBrain(options: BrainOptions = {}) {
   const backupPaths = [path.join(dataDir, "index.backup.json"), path.join(dataDir, "index.previous.json")];
   const turboScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "utils", "turbovec_bridge.py");
   const turboEnabled = options.turbo ?? (process.env.BRAIN_TURBOVEC !== "0" && !options.embed);
-  const micelioBoost = options.micelio ?? process.env.BRAIN_MICELIO === "1";
-  const fuzzyDefault = options.fuzzy ?? process.env.BRAIN_FUZZY === "1";
-  // Spazio fuzzy dell'archivio: temi e profilo di ogni estratto, calcolati una volta per indice.
-  // Numero di temi: automatico (come in EmbeddingSpace) oppure BRAIN_FUZZY_THEMES per provarne di più.
-  const fuzzyCache = new WeakMap<BrainIndex, { centers: number[][]; m: number; profiles: Map<string, number[]> }>();
-  const fuzzyModel = (index: BrainIndex) => {
-    if (!fuzzyCache.has(index)) {
-      const chunks = Object.values(index.files).flatMap(file => file.chunks).filter(chunk => chunk.embedding?.length);
-      if (chunks.length < 12) return undefined;
-      const rows = chunks.map(chunk => unit(chunk.embedding));
-      const themes = Math.max(2, Math.min(rows.length - 1, Number(process.env.BRAIN_FUZZY_THEMES) || themeCount(rows.length)));
-      const { u, centers, m } = fuzzyAuto(rows, themes);
-      fuzzyCache.set(index, { centers, m, profiles: new Map(chunks.map((chunk, i) => [chunk.id, u[i]])) });
-    }
-    return fuzzyCache.get(index);
-  };
   const useStore = turboEnabled && (options.backend ?? process.env.BRAIN_RETRIEVAL_BACKEND) === "sqlite";
   const turboWorker = turboEnabled ? new JsonLineWorker(process.env.TURBOVEC_PYTHON || process.env.DOCTR_PYTHON || "python", [turboScript, "serve"], 30_000) : undefined;
+  // Cross-encoder: legge domanda e brano insieme. Il primo avvio carica (o scarica) il modello.
+  const rerankDefault = options.rerank ?? (process.env.BRAIN_RERANK !== "0" && !options.embed);
+  const rerankCandidates = Math.max(5, Math.min(50, Number(process.env.BRAIN_RERANK_CANDIDATES) || 20));
+  const rerankScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "utils", "reranker_bridge.py");
+  let rerankWorker: JsonLineWorker | undefined;
+  // Dopo un errore (Python o modello mancanti) il reranker resta spento per 5 minuti invece di riprovare a ogni domanda.
+  let rerankRetryAt = 0;
+  /** Avvia il reranker in anticipo: il modello si carica mentre l'utente scrive la prima domanda. */
+  const startReranker = () => {
+    if (Date.now() < rerankRetryAt) return undefined;
+    rerankWorker ??= new JsonLineWorker(process.env.RERANK_PYTHON || process.env.TURBOVEC_PYTHON || "python", [rerankScript], 15_000);
+    rerankWorker.start();
+    return rerankWorker;
+  };
+  // File temporanei lasciati da un'indicizzazione interrotta (fino a centinaia di MB): via se più vecchi di un'ora.
+  void fs.readdir(dataDir).then(names => Promise.all(names.filter(name => /^index-[0-9a-f-]{36}\.tmp$/u.test(name)).map(async name => {
+    const file = path.join(dataDir, name);
+    if (Date.now() - (await fs.stat(file)).mtimeMs > 3_600_000) await fs.rm(file, { force: true });
+  }))).catch(() => undefined);
   const ollama = new URL(localOllamaUrl(options.ollamaUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"));
   let indexing = false;
   let importing = false;
@@ -504,17 +536,25 @@ export function createBrain(options: BrainOptions = {}) {
   }
 
   /** Salva un giudizio dell'utente sui risultati Brain. */
-  async function recordBrainFeedback(input: { query: string; rating: 1 | -1; sources: string[] }) {
+  // I voti si scrivono uno alla volta: due voti ravvicinati non si sovrascrivono e non si perdono.
+  let feedbackWrites: Promise<unknown> = Promise.resolve();
+  function recordBrainFeedback(input: { query: string; rating: 1 | -1; sources: string[] }) {
     const query = input.query.trim().slice(0, 600);
     const sources = [...new Set(input.sources.map(source => source.replace(/\\/g, "/").trim()).filter(source => source && !source.includes("..") && !path.isAbsolute(source)))].slice(0, 8);
-    if (!query || !sources.length) throw new Error("Feedback senza domanda o fonti.");
-    const feedback = await loadFeedback();
-    feedback.push({ id: randomUUID(), query, terms: [...new Set(tokens(query).filter(term => term.length > 2))].slice(0, 16), sources, rating: input.rating, createdAt: new Date().toISOString() });
-    await fs.mkdir(dataDir, { recursive: true });
-    const temporary = `${feedbackPath}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify(feedback.slice(-2000), null, 2), { encoding: "utf8", flag: "wx" });
-    await fs.rename(temporary, feedbackPath);
-    return { saved: true, count: Math.min(feedback.length, 2000) };
+    if (!query || !sources.length) return Promise.reject(new Error("Feedback senza domanda o fonti."));
+    const write = feedbackWrites.catch(() => undefined).then(async () => {
+      const feedback = await loadFeedback();
+      feedback.push({ id: randomUUID(), query, terms: [...new Set(tokens(query).filter(term => term.length > 2))].slice(0, 16), sources, rating: input.rating, createdAt: new Date().toISOString() });
+      await fs.mkdir(dataDir, { recursive: true });
+      const temporary = `${feedbackPath}.${randomUUID()}.tmp`;
+      try {
+        await fs.writeFile(temporary, JSON.stringify(feedback.slice(-2000), null, 2), { encoding: "utf8", flag: "wx" });
+        await fs.rename(temporary, feedbackPath);
+      } finally { await fs.rm(temporary, { force: true }); }
+      return { saved: true, count: Math.min(feedback.length, 2000) };
+    });
+    feedbackWrites = write;
+    return write;
   }
 
   /** Carica l'indice JSON, usando una copia di sicurezza se serve. */
@@ -809,7 +849,7 @@ export function createBrain(options: BrainOptions = {}) {
       }
     });
     propagated.forEach((value, i) => { propagated[i] = propagatedWeight[i] ? value / propagatedWeight[i] : 0; });
-    const learnedFeedback = query ? await loadFeedback() : [];
+    const learnedFeedback = query ? await loadFeedback().catch(() => [] as BrainFeedback[]) : [];
     const rawScores = candidates.map((candidate, i) => query ? Math.max(0, 2.5 * direct[i] + 0.45 * propagated[i] + 0.05 * degree[i] / maxDegree - 0.08 * candidate.chunks.length / maxChunks + feedbackBoost(learnedFeedback, query, candidate.path)) : 0);
     const maxScore = Math.max(0, ...rawScores);
     // Come nel FactoryMicelio originale: una piccola "working set" evita che
@@ -869,12 +909,14 @@ export function createBrain(options: BrainOptions = {}) {
     const graphCohesion = pairSimilarities.length ? pairSimilarities.reduce((sum, value) => sum + value, 0) / pairSimilarities.length : 1;
     const answerAlignment = weightedAverage("answerAlignment");
     const queryAlignment = weightedAverage("queryAlignment");
-    // Cohesion describes the sources, not whether they answer the question.
-    const score = answerAlignment * queryAlignment;
+    // Conta solo quanto la risposta somiglia alle fonti: l'allineamento domanda-fonti misura la ricerca,
+    // non il supporto. Fasce tarate sulle risposte reali (log e 7B): giuste 0,63-0,87, fuori tema sotto 0,65.
+    // Coglie solo risposte fuori tema; la fedeltà frase per frase è misurata da inspectGrounding.
+    const score = answerAlignment;
     return {
       checked: true,
       score,
-      label: score >= 0.70 ? "forte" : score >= 0.45 ? "media" : "debole",
+      label: score >= SEMANTIC_STRONG ? "forte" : score >= SEMANTIC_WEAK ? "media" : "debole",
       answerAlignment,
       queryAlignment,
       graphCohesion,
@@ -905,7 +947,7 @@ export function createBrain(options: BrainOptions = {}) {
       await noLinks(root); await noLinks(dataDir);
       if (decoded.length) await fs.mkdir(root, { recursive: true });
       await fs.access(root); await fs.mkdir(dataDir, { recursive: true });
-      lock = await fs.open(lockPath, "wx", 0o600);
+      lock = await acquireIndexLock(lockPath);
       for (const file of decoded) {
         const extension = path.extname(file.name);
         const stem = file.name.slice(0, -extension.length);
@@ -1212,10 +1254,9 @@ export function createBrain(options: BrainOptions = {}) {
       for (const doc of documents) if (doc.has(term)) count++;
       return Math.log(1 + (chunks.length - count + 0.5) / (count + 0.5));
     });
-    const learnedFeedback = await loadFeedback();
-    const vectors = new Map<string, number[]>();
+    // Un feedback.json corrotto non deve bloccare la ricerca: si cerca senza i voti.
+    const learnedFeedback = await loadFeedback().catch(() => [] as BrainFeedback[]);
     const rankedBase = chunks.map((chunk, i) => {
-      vectors.set(chunk.id, chunk.embedding);
       const bm25 = terms.reduce((sum, term, j) => {
         const frequency = documents[i].get(term) ?? 0;
         if (!frequency) return sum;
@@ -1264,56 +1305,29 @@ export function createBrain(options: BrainOptions = {}) {
     // Se nessun estratto contiene almeno una parola della domanda, la sola somiglianza vettoriale non basta: meglio dire che non c'è nulla.
     // Le richieste di panoramica ("riassumi", "panoramica"...) restano escluse: riguardano l'archivio intero.
     if (!overviewQuestion && !rankedBase.some(hit => hit.lexicalScore > 0)) { measure("retrievalTotalMs", began); return []; }
-    // Propagazione Micelio: i candidati semanticamente vicini condividono
-    // una parte del segnale. In questo modo un passaggio utile può portare
-    // con sé i nodi collegati, senza affidarsi soltanto al match lessicale.
     measure("rankingMs", rankingStarted);
-    const graphStarted = performance.now();
-    const graphCandidates = rankedBase.slice(0, 96);
-    const neighbors = new Map<string, Array<{ id: string; similarity: number }>>();
-    const cachedGraph = meta?.graph && process.env.BRAIN_PRECOMPUTED_GRAPH === "1";
-    if (cachedGraph) {
-      const chunkIds = new Map(entries.map(entry => [entry.turboId, entry.chunk.id]));
-      for (const [id, links] of store.edges(entries.map(entry => entry.turboId))) neighbors.set(chunkIds.get(id)!, links.map(link => ({id:chunkIds.get(link.id)!,similarity:link.similarity})));
-    }
-    for (let i = 0; !cachedGraph && i < graphCandidates.length; i++) for (let j = i + 1; j < graphCandidates.length; j++) {
-      const left = graphCandidates[i], right = graphCandidates[j];
-      const leftVector = vectors.get(left.id), rightVector = vectors.get(right.id);
-      if (!leftVector || !rightVector) continue;
-      const similarity = cosine(leftVector, rightVector);
-      if (similarity < 0.58) continue;
-      neighbors.set(left.id, [...(neighbors.get(left.id) ?? []), { id: right.id, similarity }]);
-      neighbors.set(right.id, [...(neighbors.get(right.id) ?? []), { id: left.id, similarity }]);
-    }
-    const graphNeighbors = new Map<string, Array<{ id: string; similarity: number }>>();
-    neighbors.forEach((items, id) => graphNeighbors.set(id, items.sort((a, b) => b.similarity - a.similarity).slice(0, 4)));
-    const maxBaseScore = Math.max(0.0001, ...graphCandidates.map(hit => Math.max(0, hit.score)));
-    const maxDegree = Math.max(1, ...[...graphNeighbors.values()].map(items => items.length));
-    const ranked = rankedBase.map(hit => {
-      const links = graphNeighbors.get(hit.id) ?? [];
-      const propagated = links.reduce((sum, link) => sum + (rankedBase.find(candidate => candidate.id === link.id)?.score ?? 0) * link.similarity, 0) / (links.reduce((sum, link) => sum + link.similarity, 0) || 1);
-      const graphScore = Math.max(0, Math.min(1, 0.72 * Math.max(0, hit.score) / maxBaseScore + 0.20 * propagated / maxBaseScore + 0.08 * links.length / maxDegree));
-      const boost = (context.micelio ?? micelioBoost) ? 0.20 * propagated + 0.04 * links.length / maxDegree : 0;
-      return { ...hit, score: hit.score + boost, micelioScore: graphScore };
-    }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-    measure("graphMs", graphStarted);
-    // Canale fuzzy (proposta A): ordina i candidati per temi in comune con la domanda
-    // e fonde questa classifica, alla pari, con quella di embedding + lessicale (RRF).
-    let finalRanked = ranked;
-    if (context.fuzzy ?? fuzzyDefault) {
-      const fuzzyStarted = performance.now();
-      const model = fuzzyModel(index);
-      if (model) {
-        const queryProfile = memberships(unit(vector), model.centers, model.m);
-        const result = fuseFuzzyChannel(ranked, queryProfile, hit => model.profiles.get(hit.id));
-        finalRanked = result.ranked;
-        context.metrics.fuzzyThemes = model.centers.length;
-        context.metrics.fuzzyMovedTop5 = result.ranked.slice(0, 5).filter(hit => !ranked.slice(0, 5).some(other => other.id === hit.id)).length;
+    let ranked = rankedBase;
+    if (context.rerank ?? rerankDefault) {
+      // Solo i primi candidati: il cross-encoder rilegge ogni coppia a ogni domanda.
+      // Il punteggio diventa la pertinenza del cross-encoder (0-1); se il worker fallisce resta l'ordine attuale.
+      const rerankStarted = performance.now();
+      const head = rankedBase.slice(0, rerankCandidates);
+      const worker = startReranker();
+      // Modello ancora in caricamento (o in pausa dopo un errore): si risponde con l'ordine attuale.
+      if (!worker?.ready) context.metrics.rerankSkipped = 1;
+      else try {
+        const { scores } = await worker.request<{ scores: number[] }>({ query: contentQuery, passages: head.map(hit => `${hit.section ? `${hit.section}
+` : ""}${hit.text}`) });
+        ranked = head.map((hit, i) => ({ ...hit, score: scores[i] ?? 0 })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+        context.metrics.rerankCandidates = head.length;
+      } catch {
+        context.metrics.rerankFailed = 1;
+        rerankWorker?.close(); rerankWorker = undefined; rerankRetryAt = Date.now() + 300_000;
       }
-      measure("fuzzyMs", fuzzyStarted);
+      measure("rerankMs", rerankStarted);
     }
     const selectionStarted = performance.now();
-    const selected = selectEvidence(finalRanked, contentQuery, Boolean(filter));
+    const selected = selectEvidence(ranked, contentQuery, Boolean(filter), context.sourceLimit);
     measure("selectionMs", selectionStarted);
     measure("retrievalTotalMs", began);
     return selected.map(({ entityMatch: _entityMatch, roleEvidence: _roleEvidence, rankLine: _rankLine, ...hit }) => hit);
@@ -1455,8 +1469,15 @@ export function createBrain(options: BrainOptions = {}) {
     const coveredBy = words.map((_, i) => sources.filter(item => item.present[i]).length);
     return { query, words, exact: plan.exact, evaluations: unique.length, sources, overall, coveredBy, findings: shapFindings(words, overall, coveredBy, sources.length) };
   }
-  return { getBrainStatus, getBrainDocument, diagnose, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
-    close: () => { turboWorker?.close(); store.close(); } };
+  /** Riscaldamento all'avvio del server: reranker, embedding della domanda e snapshot SQLite pronti prima della prima domanda. */
+  async function warmUp() {
+    if (rerankDefault) startReranker();
+    if (useStore) await store.open().catch(() => undefined);
+    await embedQuery("search_query: riscaldamento").catch(() => undefined);
+  }
+
+  return { warmUp, getBrainStatus, getBrainDocument, diagnose, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
+    close: () => { turboWorker?.close(); rerankWorker?.close(); store.close(); } };
 }
 
 
