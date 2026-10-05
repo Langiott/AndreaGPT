@@ -242,7 +242,9 @@ app.use((request, response, next) => {
     if (origin && ![`http://${request.headers.host}`, `https://${request.headers.host}`, "http://localhost:5173", "http://127.0.0.1:5173"].includes(origin)) {
       response.status(403).json({ error: "Origine non autorizzata." }); return;
     }
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !request.is("application/json")) {
+    // Le DELETE senza body (es. /api/output/:folder/:name) non hanno Content-Type: request.is() restituisce null.
+    const bodylessDelete = request.method === "DELETE" && request.is("application/json") === null;
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !bodylessDelete && !request.is("application/json")) {
       response.status(415).json({ error: "Richiesto application/json." }); return;
     }
     if (!allowedHost(host) || (origin && (!allowedHost(new URL(origin).hostname) || !/^https?:$/.test(new URL(origin).protocol))) || request.headers["sec-fetch-site"] === "cross-site") {
@@ -261,13 +263,27 @@ const NEWS_TOPICS = {
   papers: ["machine learning paper experiments benchmark ablation", "computer science preprint new method quantitative results", "biology medicine study peer reviewed results", "physics materials research paper measurement"],
   science: ["scientific discovery new study results", "space astronomy mission discovery", "medicine biology breakthrough study", "climate earth physics research finding"],
 } as const;
-const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]) });
+const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]), job: z.string().regex(/^[\w-]{1,64}$/).optional() });
+// Le edizioni non dipendono dalla connessione: chiudere la finestra non le ferma, solo "Interrompi" (DELETE) lo fa.
+const newsJobs = new Map<string, AbortController>();
+async function saveNewsEdition(type: string, label: string, article: string, sources: ResearchSource[]) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = article.replace(new RegExp(`^\\s*#\\s+${escapedLabel}\\s*`, "iu"), "").trim();
+  if (!body) return;
+  const sourceText = sources.map(source => `[${source.id}] ${source.title}\n${source.url}`).join("\n\n");
+  const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}-news-${type}.md`;
+  try {
+    await fs.mkdir(path.join(outputRoot, "News"), { recursive: true });
+    await fs.writeFile(path.join(outputRoot, "News", filename), `# ${label}\n\nData: ${new Date().toLocaleDateString("it-IT")}\n\n${body}\n\n## Fonti consultate\n\n${sourceText}\n`, "utf8");
+  } catch (error) { console.warn(`News: salvataggio non riuscito: ${error instanceof Error ? error.message : error}`); }
+}
+app.delete("/api/research/:job", (request, response) => { newsJobs.get(request.params.job)?.abort(); response.json({ ok: true }); });
 app.post("/api/research", express.json({ limit: "1mb" }), async (request, response) => {
   const parsed = researchSchema.safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "Tipo di ricerca non valido." }); return; }
   const clientAbort = new AbortController();
-  request.once("aborted", () => clientAbort.abort());
-  response.once("close", () => { if (!response.writableEnded) clientAbort.abort(); });
+  const jobId = parsed.data.job ?? randomUUID();
+  newsJobs.set(jobId, clientAbort);
   const operationSignal = (timeoutMs: number) => AbortSignal.any([clientAbort.signal, AbortSignal.timeout(timeoutMs)]);
   const presets = {
     ai: { label: "AI News", query: "latest technical AI research new method explainability interpretability robustness evaluation benchmark architecture optimization ablation preprint paper", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "paperswithcode.com", "nature.com", "science.org", "ieee.org", "acm.org", "research.google", "deepmind.google", "ai.meta.com", "microsoft.com/en-us/research"], sources: ["news"] },
@@ -298,21 +314,24 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
         // Streaming: il giornale si riempie un articolo alla volta invece di attendere l'intera edizione.
         response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
         response.setHeader("Cache-Control", "no-store");
-        const send = (event: object) => { if (!response.writableEnded) response.write(`${JSON.stringify(event)}\n`); };
+        const send = (event: object) => { if (!response.writableEnded && !response.destroyed) response.write(`${JSON.stringify(event)}\n`); };
         send({ type: "meta", label: presets.label, sources: localSources });
+        const written: NewsArticle[] = [];
         try {
-          await writeEdition(chat, model, localSources, editionSignal, article => send({ type: "article", ...article }));
+          await writeEdition(chat, model, localSources, editionSignal, article => { written.push(article); send({ type: "article", ...article }); });
           send({ type: "done" });
         } catch {
           if (!clientAbort.signal.aborted) send({ type: "error", error: "Tempo massimo superato: edizione parziale." });
         }
-        response.end();
+        if (!clientAbort.signal.aborted) await saveNewsEdition(parsed.data.type, presets.label, written.map(article => article.markdown).join("\n\n"), localSources);
+        if (!response.destroyed) response.end();
         return;
       }
       const articles = new Map<number, NewsArticle>();
       try { await writeEdition(chat, model, localSources, editionSignal, article => articles.set(article.id, article)); }
       catch (error) { if (clientAbort.signal.aborted) throw error; }
       const ordered = localSources.map(source => articles.get(source.id) ?? sourceFallback(source));
+      await saveNewsEdition(parsed.data.type, presets.label, ordered.map(article => article.markdown).join("\n\n"), localSources);
       response.json({ type: parsed.data.type, label: presets.label, article: ordered.map(article => article.markdown).join("\n\n"), sources: localSources, fallback: ordered.every(article => article.fallback) });
       return;
     }
@@ -329,11 +348,13 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
       if (!completion.ok) throw new Error(`Perplexity HTTP ${completion.status}`);
       const completionData = await completion.json() as { choices?: Array<{ message?: { content?: string } }> };
       const finalized = finalizeResearchArticle(completionData.choices?.[0]?.message?.content || "", presets.label, normalizedSources);
+      await saveNewsEdition(parsed.data.type, presets.label, finalized.article, normalizedSources);
       response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
     } catch (error) {
       if (clientAbort.signal.aborted) throw error;
       const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore cloud non disponibile";
       console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
+      await saveNewsEdition(parsed.data.type, presets.label, qualityResearchFallback(normalizedSources), normalizedSources);
       response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
     }
   } catch (error) {
@@ -341,14 +362,14 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
     const message = error instanceof Error ? error.message : "Ricerca non riuscita.";
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message));
     response.status(timedOut ? 504 : 502).json({ error: timedOut ? "News ha superato il tempo massimo. Verifica Ollama e riprova con il modello già caricato." : message });
-  }
+  } finally { newsJobs.delete(jobId); }
 });
 app.use("/api/brain/upload", express.json({ limit: "270mb" }));
 app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.json({ limit: "140mb" }));
 app.use(express.json({ limit: "60mb" }));
 app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false, index: false, maxAge: 0 }));
 // Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
-for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
+for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
 app.use("/outputs", (_request, response) => { response.status(404).end(); });
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
@@ -369,11 +390,13 @@ app.get("/api/output", async (_request, response) => {
       return { ...note, thumb: picture?.url, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Analyze", note.name), "utf8").catch(() => "")) };
     }));
   };
+  const news = async () => Promise.all((await collect("News", "News")).filter(file => /\.md$/i.test(file.name)).map(async file => (
+    { ...file, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "News", file.name), "utf8").catch(() => "")) })));
   const audio = async () => Promise.all((await collect("Audio", "Audio")).filter(file => /\.md$/i.test(file.name)).map(async file => (
     { ...file, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Audio", file.name), "utf8").catch(() => "")) })));
   const newest = <T extends { updatedAt: number }>(items: T[]) => items.sort((a, b) => b.updatedAt - a.updatedAt);
-  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte"), analyze: newest(await analyze()), audio: newest(await audio()) }); }
-  catch { response.json({ images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [] }); }
+  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte"), analyze: newest(await analyze()), audio: newest(await audio()), news: newest(await news()) }); }
+  catch { response.json({ images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [], news: [] }); }
 });
 
 app.post("/api/chat/compact", async (request, response) => {
@@ -409,7 +432,7 @@ app.post("/api/chat/compact", async (request, response) => {
   */
 });
 app.delete("/api/output/:folder/:name", async (request, response) => {
-  if (!["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
+  if (!["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
   const target = path.resolve(outputRoot, request.params.folder, request.params.name);
   const root = path.resolve(outputRoot, request.params.folder);
   if (!target.startsWith(`${root}${path.sep}`)) { response.status(400).json({ error: "File non valido." }); return; }
@@ -425,7 +448,7 @@ app.delete("/api/output/:folder/:name", async (request, response) => {
 });
 /** Markdown in OUTPUT (chat compatte, analisi, trascrizioni): lettura e modifica. */
 function outputMarkdownPath(folder: string, name: string) {
-  if (!["Compatta_chat", "Analyze", "Audio"].includes(folder)) return null;
+  if (!["Compatta_chat", "Analyze", "Audio", "News"].includes(folder)) return null;
   const root = path.resolve(outputRoot, folder), target = path.resolve(root, name);
   return target.startsWith(`${root}${path.sep}`) && /\.md$/i.test(target) ? target : null;
 }
@@ -697,18 +720,22 @@ app.post("/api/yolo", async (request, response) => {
     let output: string;
     let image: string | undefined;
     let files: { url: string; name: string }[] | undefined;
+    let cutout: string | undefined;
+    let plain: string | undefined;
     if (process.env.YOLO_PATH) {
       const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
       const result = await withHeavySlot(() => execFileAsync(executable, args, { windowsHide: true, timeout: 10 * 60_000, maxBuffer: 2_000_000 }));
       output = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
     } else {
       const annotated = path.join(yoloOutputRoot, `yolo-${job}-${parsed.data.task}.jpg`);
-      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string; image?: string; files?: string[] }>({ task: parsed.data.task, model, source: inputPath, annotated }));
+      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string; image?: string; plain?: string; cutout?: string; files?: string[] }>({ task: parsed.data.task, model, source: inputPath, annotated }));
       output = result.text.trim();
       if (result.image) image = `/outputs/YOLO/${encodeURIComponent(path.basename(result.image))}`;
+      if (result.plain) plain = `/outputs/YOLO/${encodeURIComponent(path.basename(result.plain))}`;
+      if (result.cutout) cutout = `/outputs/YOLO/${encodeURIComponent(path.basename(result.cutout))}`;
       files = result.files?.map((file) => ({ url: `/outputs/YOLO/${encodeURIComponent(path.basename(file))}`, name: path.basename(file) }));
     }
-    response.json({ text: output || "YOLO non ha restituito rilevamenti.", image, files, output: path.relative(process.cwd(), inputPath) });
+    response.json({ text: output || "YOLO non ha restituito rilevamenti.", image, plain, cutout, files, output: path.relative(process.cwd(), inputPath) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Errore YOLO.";
     if (/ENOENT|not found|is not recognized|No module named/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics) oppure imposta YOLO_PATH." });
@@ -721,6 +748,7 @@ const analyzeImageSchema = z.object({
   type: z.string().max(100).optional(),
   prompt: z.string().trim().max(4000).default("Descrivi dettagliatamente questa immagine in italiano. Elenca oggetti, posizione, testo visibile e dettagli incerti."),
   data: z.string().startsWith("data:image/").max(45_000_000),
+  maxTokens: z.number().int().min(32).max(1024).optional(),
 }).strict();
 
 // Precarica il modello vision in background mentre l'utente allega le immagini:
@@ -748,16 +776,19 @@ app.post("/api/analyze-image", async (request, response) => {
   try {
     await fs.mkdir(analysisRoot, { recursive: true });
     await fs.writeFile(inputPath, Buffer.from(parsed.data.data.slice(parsed.data.data.indexOf(",") + 1), "base64"));
-    const parsedResult = await visionWorker.request<{ text?: string; resized?: { width: number; height: number }; model?: string; device?: string }>({ input: inputPath, prompt: parsed.data.prompt, max_pixels: Number(process.env.VISION_MAX_PIXELS) || 262144, max_tokens: Number(process.env.VISION_MAX_TOKENS) || 256 }, controller.signal);
-    const text = parsedResult.text || "Nessuna descrizione restituita.";
+    const parsedResult = await visionWorker.request<{ text?: string; resized?: { width: number; height: number }; model?: string; device?: string }>({ input: inputPath, prompt: parsed.data.prompt, max_pixels: Number(process.env.VISION_MAX_PIXELS) || 262144, max_tokens: parsed.data.maxTokens ?? (Number(process.env.VISION_MAX_TOKENS) || 1024) }, controller.signal);
+    // Una descrizione d'immagine non è codice: il modello a volte apre ``` senza chiuderlo e tutto il resto diventa un blocco codice.
+    const text = (parsedResult.text || "").replace(/^[ \t]*```[\w-]*[ \t]*$/gm, "").replace(/\n{3,}/g, "\n\n").trim() || "Nessuna descrizione restituita.";
+    let savedName: string | undefined;
     // Risultato in OUTPUT/Analyze: immagine + testo con lo stesso nome.
     try {
       const savedRoot = path.join(outputRoot, "Analyze"), stem = path.basename(inputPath, extension);
       await fs.mkdir(savedRoot, { recursive: true });
       await fs.copyFile(inputPath, path.join(savedRoot, `${stem}${extension}`));
       await fs.writeFile(path.join(savedRoot, `${stem}.md`), `# ${parsed.data.name}\n\n${text}\n`, "utf8");
+      savedName = `${stem}.md`;
     } catch { /* il salvataggio non deve far fallire l'analisi */ }
-    response.json({ text, resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
+    response.json({ text, output: savedName, resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
   } catch (error) {
     if (controller.signal.aborted || response.headersSent) return;
     const message = error instanceof Error ? error.message : "Errore Qwen3-VL.";

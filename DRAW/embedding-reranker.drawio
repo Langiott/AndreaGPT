@@ -41,11 +41,17 @@
         <mxCell id="q3" value="&lt;b&gt;Top-20 candidati&lt;/b&gt;&lt;br&gt;veloce, vettori&lt;br&gt;calcolati a priori" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
           <mxGeometry x="500" y="54" width="200" height="96" as="geometry"/>
         </mxCell>
-        <mxCell id="q4" value="&lt;b&gt;Cross-encoder&lt;/b&gt;&lt;br&gt;[query + brano] insieme&lt;br&gt;mmarco-mMiniLMv2" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+        <mxCell id="q4" value="&lt;b&gt;Reranking&lt;/b&gt;&lt;br&gt;cross-encoder mmarco&lt;br&gt;[domanda + brano] → voto 0–1&lt;br&gt;riordina i 20" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
           <mxGeometry x="740" y="54" width="200" height="96" as="geometry"/>
         </mxCell>
         <mxCell id="q5" value="&lt;b&gt;Estratti nel prompt&lt;/b&gt;&lt;br&gt;pochi brani con&lt;br&gt;citazione → LLM" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
           <mxGeometry x="990" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="pass1" value="1° passaggio · veloce, trova i candidati" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontStyle=3;fontColor=#1d4ed8;" vertex="1" parent="laneQ">
+          <mxGeometry x="380" y="34" width="340" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="pass2" value="2° passaggio · preciso, cambia solo l'ordine" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontStyle=3;fontColor=#c2410c;" vertex="1" parent="laneQ">
+          <mxGeometry x="720" y="34" width="240" height="20" as="geometry"/>
         </mxCell>
         <mxCell id="eq1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q1" target="q2"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="eq2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q2" target="q3"><mxGeometry relative="1" as="geometry"/></mxCell>

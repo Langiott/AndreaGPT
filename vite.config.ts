@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // OUTPUT e i dati del backend cambiano di continuo (lock, log): non vanno osservati dal frontend.
+    watch: { ignored: ["**/OUTPUT/**", "**/backend/**", "**/data/**", "**/runtime/**", "**/ANDREA-BRAIN/**", "**/searxng/**", "**/scrapling/**", "**/.venv/**"] },
     proxy: {
       "/api": "http://localhost:3000",
     },

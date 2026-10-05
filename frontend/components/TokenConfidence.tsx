@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { TokenBranch, TokenTrace, TraceToken } from "../types/types";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
@@ -63,7 +63,9 @@ function WordText({ tokens, selected, onSelect, lead }: { tokens: TraceToken[]; 
 type Alternative = { token: string; p: number; word: string | null };
 
 /** Parole incerte della risposta, alternative complete e rami alternativi. */
-export function TokenConfidencePanel({ trace, branches = [], branching, onBranch, onComplete }: {
+export function TokenConfidencePanel({ lead, trace, branches = [], branching, onBranch, onComplete }: {
+  /** Inizio della riga di riepilogo (es. affinità con le fonti). */
+  lead?: ReactNode;
   trace: TokenTrace; branches?: TokenBranch[]; branching: boolean;
   onBranch: (at: number, token: string, from: string, to: string) => void;
   /** Completa una parola alternativa: restituisce il testo generato dopo il prefisso. */
@@ -101,7 +103,7 @@ export function TokenConfidencePanel({ trace, branches = [], branching, onBranch
   }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div className="citation-panel token-panel">
-    <p className="token-summary"><b>Confidenza {percent(score)} · {verdict}</b> · {uncertain.length} {uncertain.length === 1 ? "parola incerta" : "parole incerte"}</p>
+    <p className="token-summary">{lead}<b>Confidenza {percent(score)} · {verdict}</b> · {uncertain.length} {uncertain.length === 1 ? "parola incerta" : "parole incerte"}</p>
     <WordText tokens={trace.tokens} selected={selected} onSelect={setSelected} />
     {word && <div className="token-choice">
       <span className="token-chosen">«{label(word.text)}» <b>{percent(trace.tokens[word.decision].p)}</b></span>

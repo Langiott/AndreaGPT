@@ -21,26 +21,3 @@ git push origin stabile
 
 --------------------------------------------------------------------------------
 
-NUOVE IMPLEMENTAZIONI :
-- Agente Harness: un sistema che mi permette di usare un modello non solo per la 
-chat ma fa azioni agentiche ( legge file, decide cosa fare, usa terminale , corregge
- e mostra risultati) 
-- Qlora : un modo per fare fine-tuning di un modello grande se hai poca RAM
-- Conversation Improvement Force: gestisce correzione utente e migliora prossime risposte
-		→ estrazione della regola
-		→ salvataggio persistente
-		→ ricerca nelle richieste future
-		→ inserimento nel contesto del modello
-
---------------------------------------------------------------------------------
-
-MICELIO E FUZZY NELLA RICERCA BRAIN — RIMOSSI (02/10)
-
-Misura su 51 domande della tesi (docs/report-micelio-fuzzy-tesi.md):
-	→ base         MRR 0,705   Hit@1 0,588
-	→ Micelio      MRR 0,716   neutro (p = 1,0)
-	→ Fuzzy        MRR 0,221   dannoso (p < 0,001), con 3-64 temi e anche solo sui top-10
-	→ solo tesi    MRR 0,783   unico guadagno reale
-Restano solo come visualizzazione: mappa Micelio e raggruppamenti Micelio/Fuzzy
-nell'EmbeddingSpace.
-

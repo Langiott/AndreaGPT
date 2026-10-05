@@ -64,6 +64,7 @@ import { writeClipboard } from "../utils/clipboard";
 import { userErrorMessage } from "../utils/errors";
 import { ShapPanel } from "../components/ShapPanel";
 import { TokenConfidencePanel } from "../components/TokenConfidence";
+import { parseCitation } from "../utils/cite_focus";
 import { Mainboard } from "../components/Mainboard";
 import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, TokenTrace, WebCitation } from "../types/types";
 
@@ -149,8 +150,8 @@ function WelcomeEditForm({ draft, onDraft, onCancel, onSave, lines = [["title", 
   </form>;
 }
 type OutputFile = { name: string; url: string; size: number; updatedAt: number; image: boolean; thumb?: string; excerpt?: string };
-const emptyOutputFiles = { images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [] };
-const outputFolderLabel = { images: "Immagini generate", ocr: "OCR", yolo: "YOLO", compactChat: "Chat compatte", analyze: "Analyze", audio: "Audio" } as const;
+const emptyOutputFiles = { images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [], news: [] };
+const outputFolderLabel = { images: "Immagini generate", ocr: "OCR", yolo: "YOLO", compactChat: "Chat compatte", analyze: "Analyze", audio: "Audio", news: "News" } as const;
 type CardEditProps = { editing: boolean; draft: WelcomeCardText; onDraft: (draft: WelcomeCardText) => void; onEdit: () => void; onCancel: () => void; onSave: () => void };
 
 /** Titolo, accento e descrizione: le righe vuote non vengono stampate. */
@@ -182,6 +183,7 @@ function loadSettings(): ChatSettings {
       temperature: Number.isFinite(saved.temperature) ? Math.max(0, Math.min(2, saved.temperature)) : initialSettings.temperature,
       maxTokens: Number.isFinite(saved.maxTokens) ? Math.max(1, Math.min(8192, saved.maxTokens)) : initialSettings.maxTokens,
       ollamaMaxTokens: Number.isFinite(saved.ollamaMaxTokens) ? saved.ollamaMaxTokens : initialSettings.ollamaMaxTokens,
+      visionMaxTokens: [256, 512, 1024].includes(saved.visionMaxTokens) ? saved.visionMaxTokens : 1024,
     };
   } catch { return initialSettings; }
 }
@@ -235,8 +237,10 @@ function conversationMode(conversation?: Conversation): SpecialMode {
 }
 type AudioWelcomeMode = "none" | "transcribe" | "record";
 type ImageServiceStatus = { status: "checking" | "stopped" | "ready" | "error"; ready: boolean; message: string };
-type ActiveOperation = { label: string; detail: string; startedAt: number };
+type ActiveOperation = { label: string; detail: string; startedAt: number; /** Già mostrata nel messaggio: niente banner nel composer. */ inline?: boolean };
 interface CustomInstruction { id: string; title: string; text: string; enabled: boolean }
+
+const hasAffinity = (message: ChatMessage) => Boolean(message.brainSources?.length && message.diagnostics?.events.some(item => item.details?.semanticSupportChecked === true && Number.isFinite(item.details?.semanticSupportScore)));
 
 function AffinityScore({ message }: { message: ChatMessage }) {
   const event = message.diagnostics?.events.find(item => item.details?.semanticSupportChecked === true);
@@ -245,7 +249,7 @@ function AffinityScore({ message }: { message: ChatMessage }) {
   const percent = Math.round(value * 100);
   const label = event?.details?.semanticSupportLabel;
   const tone = label === "forte" ? "strong" : label === "media" ? "medium" : "weak";
-  return <span className={`affinity-score ${tone}`} title="Somiglianza semantica stimata; non è una probabilità di correttezza né una verifica delle affermazioni">Affinità {percent}%</span>;
+  return <span className={`affinity-inline ${tone}`} title="Somiglianza semantica tra risposta e fonti Brain: misura se è in tema, non se è corretta">Affinità {percent}%</span>;
 }
 
 function LocalModelCookbook({ models, onChoose }: { models: ModelInfo[]; onChoose: (id: string) => void }) {
@@ -309,6 +313,8 @@ export default function App() {
   const [selectedModelId, setSelectedModelId] = useState("");
   const [taskId, setTaskId] = useState("general");
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
   const [activeConversationId, setActiveConversationId] = useState(() => loadActiveConversationId());
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadActiveMessages());
   const [input, setInput] = useState("");
@@ -369,14 +375,14 @@ export default function App() {
   const [researchType, setResearchType] = useState<"ai" | "papers" | "science">("ai");
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchSeconds, setResearchSeconds] = useState(0);
-  const [researchResult, setResearchResult] = useState<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }> } | null>(null);
+  const [researchResult, setResearchResult] = useState<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }>; date?: string } | null>(null);
   const [researchPage, setResearchPage] = useState(0);
   const [researchFullscreen, setResearchFullscreen] = useState(false);
   const [researchProgress, setResearchProgress] = useState<{ done: number; total: number } | null>(null);
-  const [outputFolder, setOutputFolder] = useState<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio" | null>(null);
-  const [outputDelete, setOutputDelete] = useState<{ folder: "Image" | "OCR" | "YOLO" | "Compatta_chat" | "Analyze" | "Audio"; name: string } | null>(null);
+  const [outputFolder, setOutputFolder] = useState<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio" | "news" | null>(null);
+  const [outputDelete, setOutputDelete] = useState<{ folder: "Image" | "OCR" | "YOLO" | "Compatta_chat" | "Analyze" | "Audio" | "News"; name: string } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{ id: string; title: string } | null>(null);
-  const [outputFiles, setOutputFiles] = useState<Record<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio", OutputFile[]>>(emptyOutputFiles);
+  const [outputFiles, setOutputFiles] = useState<Record<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio" | "news", OutputFile[]>>(emptyOutputFiles);
   const [compactingChat, setCompactingChat] = useState(false);
   // Chat compatta aperta nel lettore dell'archivio.
   const [compactOpen, setCompactOpen] = useState<{ folder: "Compatta_chat" | "Analyze" | "Audio"; name: string } | null>(null);
@@ -388,6 +394,8 @@ export default function App() {
   const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "semantic" | "logs", boolean>>>>({});
   const [shapLoading, setShapLoading] = useState("");
   const [branchingMessage, setBranchingMessage] = useState("");
+  // Fonte Brain aperta dalla chat sul tratto citato.
+  const [citeOpen, setCiteOpen] = useState<{ source: string; startLine: number; endLine: number; text: string } | null>(null);
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -467,6 +475,7 @@ export default function App() {
   const analyzeConversationIdRef = useRef("");
   const appShellRef = useRef<HTMLDivElement>(null);
   const researchAbortRef = useRef<AbortController | null>(null);
+  const researchJobRef = useRef<string | null>(null);
   const activeConversationIdRef = useRef(activeConversationId);
   const conversationRef = useRef<HTMLElement>(null);
   const stickToBottomRef = useRef(true);
@@ -636,6 +645,13 @@ export default function App() {
 
   function openOutputFolder(folder: "images" | "ocr" | "yolo" | null) {
     setOutputFolder(folder);
+    setOutputOpen(true);
+    void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles(emptyOutputFiles));
+  }
+
+  function openOutputNote(note: { folder: "Analyze"; name: string }) {
+    setOutputFolder("analyze");
+    setCompactOpen(note);
     setOutputOpen(true);
     void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles(emptyOutputFiles));
   }
@@ -1211,6 +1227,22 @@ export default function App() {
     focusComposerAfterNavigation();
   }
 
+  // Notifiche di sistema a fine lavoro lungo (News, Analyze, Image, OCR): solo se la pagina non è in primo piano.
+  function askNotifyPermission() {
+    if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission().catch(() => undefined);
+  }
+  function notifyDone(title: string, body: string, open: () => void) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (document.visibilityState === "visible" && document.hasFocus()) return;
+    const notification = new Notification(title, { body, icon: "/andreagpt-logo-128.png" });
+    notification.onclick = () => { window.focus(); open(); notification.close(); };
+  }
+  function goToConversation(id: string) {
+    const conversation = conversationsRef.current.find(item => item.id === id);
+    if (conversation && activeConversationIdRef.current !== id) openConversation(conversation);
+  }
+  const conversationTitle = (id: string) => conversationsRef.current.find(item => item.id === id)?.title ?? "chat";
+
   function openConversation(conversation: Conversation) {
     abortRef.current?.abort();
     activeConversationIdRef.current = conversation.id;
@@ -1262,14 +1294,19 @@ export default function App() {
     researchAbortRef.current?.abort();
     const controller = new AbortController();
     researchAbortRef.current = controller;
+    const job = createId();
+    researchJobRef.current = job;
+    askNotifyPermission();
+    let notice: { title: string; body: string } | null = null;
     setResearchType(type); setResearchLoading(true); setResearchResult(null); setResearchPage(0); setResearchOpen(true);
     setResearchProgress(null);
     try {
-      const response = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson, application/json" }, body: JSON.stringify({ type }), signal: controller.signal });
+      const response = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson, application/json" }, body: JSON.stringify({ type, job }), signal: controller.signal });
       if (!response.ok || !/x-ndjson/.test(response.headers.get("Content-Type") ?? "") || !response.body) {
         const data = await readJsonResponse<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }>; error?: string }>(response);
         if (!response.ok) throw new Error(data.error || "Ricerca non riuscita.");
         if (researchAbortRef.current === controller) setResearchResult(data);
+        notice = { title: "News pronta", body: `${data.label} · salvata in Output → News.` };
         return;
       }
       // Edizione locale in streaming: ogni riga è un evento, gli articoli arrivano appena redatti.
@@ -1284,6 +1321,7 @@ export default function App() {
         for (const line of lines) {
           if (!line.trim() || researchAbortRef.current !== controller) continue;
           const event = JSON.parse(line) as { type: string; label?: string; sources?: Array<{ id: number; title: string; url: string; description: string }>; markdown?: string; error?: string };
+          if (event.type === "done") notice = { title: "News pronta", body: "Edizione completa · salvata in Output → News." };
           if (event.type === "meta") { setResearchResult({ label: event.label ?? "", article: "", sources: event.sources ?? [] }); setResearchProgress({ done: 0, total: event.sources?.length ?? 0 }); }
           else if (event.type === "article" && event.markdown) {
             setResearchResult(current => current && { ...current, article: current.article ? `${current.article}\n\n${event.markdown}` : event.markdown! });
@@ -1296,11 +1334,27 @@ export default function App() {
       // Interruzione o errore a metà: gli articoli già arrivati restano leggibili.
       if (researchAbortRef.current === controller) setResearchResult(current => current?.article ? current : { label: aborted ? "Operazione annullata" : "Errore", article: aborted ? "La creazione dell’edizione è stata annullata. Puoi riprovarla quando vuoi." : `**Ricerca non disponibile**\n\n${error instanceof Error ? error.message : "Errore sconosciuto."}`, sources: [] });
     } finally {
-      if (researchAbortRef.current === controller) { researchAbortRef.current = null; setResearchLoading(false); }
+      if (researchAbortRef.current === controller) { researchAbortRef.current = null; researchJobRef.current = null; setResearchLoading(false); }
+      if (notice && !controller.signal.aborted) notifyDone(notice.title, notice.body, () => setResearchOpen(true));
+      // L'edizione è salvata in OUTPUT/News: il conteggio della cartella si aggiorna.
+      void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => undefined);
     }
   }
 
-  function stopResearch() { researchAbortRef.current?.abort(); }
+  // Chiudere la finestra lascia lavorare il backend; solo Interrompi annulla anche lato server.
+  function stopResearch() {
+    if (researchJobRef.current) void fetch(`/api/research/${researchJobRef.current}`, { method: "DELETE" }).catch(() => undefined);
+    researchAbortRef.current?.abort();
+  }
+
+  async function openSavedEdition(name: string) {
+    const response = await fetch(`/api/output/News/${encodeURIComponent(name)}/content`);
+    const text = ((await response.json().catch(() => ({}))) as { content?: string }).content?.replace(/\r\n/g, "\n") ?? "";
+    const [main, sourcesPart = ""] = text.split(/^## Fonti consultate\s*$/m);
+    const sources = [...sourcesPart.matchAll(/^\[(\d+)\]\s*(.+)\n(\S+)/gm)].map(match => ({ id: Number(match[1]), title: match[2], url: match[3], description: "" }));
+    setResearchResult({ label: text.match(/^#\s+(.+)$/m)?.[1] ?? "News", date: text.match(/^Data:\s*(.+)$/m)?.[1], article: main.replace(/^#\s+.+$/m, "").replace(/^Data:.*$/m, "").trim() || "—", sources });
+    setResearchPage(0); setOutputOpen(false); setOutputFolder(null); setResearchOpen(true);
+  }
 
   async function toggleResearchFullscreen() {
     const next = !researchFullscreen;
@@ -1316,7 +1370,7 @@ export default function App() {
     const sourceText = researchResult.sources.map(source => `[${source.id}] ${source.title}\n${source.url}`).join("\n\n");
     const escapedLabel = researchResult.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const article = researchResult.article.replace(new RegExp(`^\\s*#\\s+${escapedLabel}\\s*`, "iu"), "").trim();
-    const content = `# ${researchResult.label}\n\nData: ${new Date().toLocaleDateString("it-IT")}\n\n${article}\n\n## Fonti consultate\n\n${sourceText}`;
+    const content = `# ${researchResult.label}\n\nData: ${researchResult.date ?? new Date().toLocaleDateString("it-IT")}\n\n${article}\n\n## Fonti consultate\n\n${sourceText}`;
     const url = URL.createObjectURL(new Blob(["\uFEFF", content], { type: "text/markdown;charset=utf-8" }));
     const date = new Date().toLocaleDateString("it-IT").replaceAll("/", "_");
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `NEWS_ANDREA_GPT_${date}.md`; anchor.click(); URL.revokeObjectURL(url);
@@ -1579,7 +1633,9 @@ export default function App() {
   async function processOcrBatch() {
     if (!attachments.length) { setError("OCR: allega una o più immagini o PDF."); return; }
     const pending = attachments;
-    if (!activeConversationId) setActiveConversationId(createId());
+    const conversationId = activeConversationId || createId();
+    if (!activeConversationId) setActiveConversationId(conversationId);
+    askNotifyPermission();
     const assistantId = createId();
     setMessages((current) => [...current, { id: createId(), role: "user", content: "Esegui OCR sugli allegati.", attachments: pending }, { id: assistantId, role: "assistant", content: "Elaborazione OCR in corso…" }]);
     setAttachments([]); setInput(""); setError(""); setLoading(true);
@@ -1602,7 +1658,8 @@ export default function App() {
         results.push(`### ${attachment.name}\n${result.text || "Nessun testo riconosciuto."}\n\n_Risultato salvato in ${result.output || "OCR/output"}.${brainNote}_`);
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
       }
-    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "OCR non riuscito.")); }
+      notifyDone("OCR completato", `${results.length} file · testo in chat "${conversationTitle(conversationId)}" e in Output → OCR.`, () => goToConversation(conversationId));
+    } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "OCR non riuscito.")); notifyDone("OCR non riuscito", userErrorMessage(caught, "OCR non riuscito."), () => goToConversation(conversationId)); }
     finally { setLoading(false); }
   }
 
@@ -1614,14 +1671,14 @@ export default function App() {
     setAttachments([]); setInput(""); setError(""); setLoading(true);
     try {
       const results: string[] = [];
-      const images: { url: string; name: string }[] = [];
+      const images: { url: string; name: string; plain?: string; cutout?: string }[] = [];
       const files: { url: string; name: string }[] = [];
       for (const attachment of pending) {
         const response = await fetch("/api/yolo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, task: yoloTask, data: attachment.dataUrl }) });
-        const result = await response.json() as { text?: string; error?: string; image?: string; files?: { url: string; name: string }[] };
+        const result = await response.json() as { text?: string; error?: string; image?: string; plain?: string; cutout?: string; files?: { url: string; name: string }[] };
         if (!response.ok) throw new Error(result.error || `YOLO non riuscito per ${attachment.name}.`);
         results.push(`### ${attachment.name}\n${result.text || "Nessun elemento rilevato."}`);
-        if (result.image) images.push({ url: result.image, name: attachment.name });
+        if (result.image) images.push({ url: result.image, name: attachment.name, plain: result.plain, cutout: result.cutout });
         if (result.files) files.push(...result.files);
         setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), resultImages: images.length ? [...images] : undefined, resultFiles: files.length ? [...files] : undefined } : message));
       }
@@ -1636,7 +1693,7 @@ export default function App() {
     const conversationId = activeConversationId || createId();
     const userMessage: ChatMessage = { id: createId(), role: "user", content: question, attachments: pending };
     const assistantId = createId();
-    const assistantMessage: ChatMessage = { id: assistantId, role: "assistant", content: "Analyze · preparazione Qwen3-VL…" };
+    const assistantMessage: ChatMessage = { id: assistantId, role: "assistant", content: "", pending: { title: "Preparo Qwen3-VL", detail: "Il primo avvio può richiedere alcuni minuti", startedAt: Date.now() } };
     const baseMessages = activeConversationId === conversationId ? messages : conversations.find((conversation) => conversation.id === conversationId)?.messages ?? [];
     const initialMessages = [...baseMessages, userMessage, assistantMessage];
     if (!activeConversationId) {
@@ -1662,10 +1719,11 @@ export default function App() {
     });
     if (activeConversationIdRef.current === conversationId) setMessages(initialMessages);
     setAttachments([]); setInput(""); setError(""); setLoading(true);
-    setActiveOperation({ label: "Analyze", detail: "Preparazione del modello locale. Il primo avvio può richiedere alcuni minuti.", startedAt: Date.now() });
+    setActiveOperation({ label: "Analyze", detail: "Preparazione del modello locale. Il primo avvio può richiedere alcuni minuti.", startedAt: Date.now(), inline: true });
     const controller = new AbortController();
     analyzeAbortRef.current = controller;
     analyzeConversationIdRef.current = conversationId;
+    askNotifyPermission();
     const updateTargetMessages = (update: (current: ChatMessage[]) => ChatMessage[]) => {
       setConversations((current) => current.map((conversation) => conversation.id === conversationId
         ? { ...conversation, messages: update(conversation.messages), updatedAt: Date.now() }
@@ -1675,27 +1733,31 @@ export default function App() {
     try {
       const results: string[] = [];
       const logs: string[] = [];
+      const outputNotes: { folder: "Analyze"; name: string }[] = [];
       for (const [index, attachment] of pending.entries()) {
         const imageStarted = performance.now();
         if (activeConversationIdRef.current === conversationId) {
-          setActiveOperation({ label: `Analyze ${index + 1}/${pending.length}`, detail: `Caricamento e analisi di ${attachment.name}. Il processo è attivo; puoi interromperlo con Stop.`, startedAt: Date.now() });
+          setActiveOperation({ label: `Analyze ${index + 1}/${pending.length}`, detail: `Caricamento e analisi di ${attachment.name}. Il processo è attivo; puoi interromperlo con Stop.`, startedAt: Date.now(), inline: true });
         }
-        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `Analyze · immagine ${index + 1}/${pending.length} · modello locale in elaborazione…` } : message));
-        const response = await fetch("/api/analyze-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, prompt: question, data: attachment.dataUrl }), signal: controller.signal });
-        const result = await readJsonResponse<{ text?: string; error?: string; resized?: { width: number; height: number }; model?: string; device?: string }>(response);
+        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), pending: { title: "Sto analizzando il file", detail: pending.length > 1 ? `Immagine ${index + 1} di ${pending.length}` : "Qwen3-VL locale", startedAt: Date.now(), image: attachment.dataUrl } } : message));
+        const response = await fetch("/api/analyze-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, prompt: question, data: attachment.dataUrl, maxTokens: settings.visionMaxTokens ?? 1024 }), signal: controller.signal });
+        const result = await readJsonResponse<{ text?: string; output?: string; error?: string; resized?: { width: number; height: number }; model?: string; device?: string }>(response);
         if (!response.ok) throw new Error(result.error || `Analisi non riuscita per ${attachment.name}.`);
         const prefix = pending.length > 1 ? `${attachment.name} · ` : "";
+        if (result.output) outputNotes.push({ folder: "Analyze", name: result.output });
         const elapsed = Math.max(1, Math.round((performance.now() - imageStarted) / 1000));
         const elapsedLabel = `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, "0")}s`;
         if (result.resized) logs.push(`${prefix}Input ridimensionato a ${result.resized.width}×${result.resized.height} per il modello.`);
         logs.push(`${prefix}Analisi completata · tempo: ${elapsedLabel} · modello: ${result.model || "Qwen3-VL"}${result.device ? ` · dispositivo: ${result.device}` : ""}`);
         results.push(`### ${attachment.name}\n${result.text || "Nessuna descrizione restituita."}`);
-        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), logs: [...logs] } : message));
+        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), logs: [...logs], outputNotes: [...outputNotes], pending: undefined } : message));
       }
+      notifyDone("Analyze completato", `${pending.length} ${pending.length === 1 ? "immagine analizzata" : "immagini analizzate"} · risultato in chat "${conversationTitle(conversationId)}".`, () => goToConversation(conversationId));
     } catch (caught) {
       const aborted = caught instanceof Error && caught.name === "AbortError";
-      updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: aborted ? "Analyze annullato dall’utente." : `Analyze non riuscito: ${caught instanceof Error ? caught.message : "errore sconosciuto"}` } : message));
+      updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, pending: undefined, content: aborted ? "Analyze annullato dall’utente." : `Analyze non riuscito: ${caught instanceof Error ? caught.message : "errore sconosciuto"}` } : message));
       if (!aborted && activeConversationIdRef.current === conversationId) setError(userErrorMessage(caught, "Analisi immagine non riuscita."));
+      if (!aborted) notifyDone("Analyze non riuscito", userErrorMessage(caught, "Analisi immagine non riuscita."), () => goToConversation(conversationId));
     } finally {
       if (analyzeAbortRef.current === controller) {
         analyzeAbortRef.current = null;
@@ -1714,6 +1776,7 @@ export default function App() {
     const started = performance.now();
     const controller = new AbortController();
     abortRef.current = controller;
+    askNotifyPermission();
     let jobId = "";
     try {
       const response = await fetch("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, ...imageSettings, flow: imageModel }), signal: controller.signal });
@@ -1746,6 +1809,7 @@ export default function App() {
       setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(complete), updatedAt: Date.now() } : conversation));
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(complete));
       setImageSettings(current => ({ ...current, seed: Math.floor(Math.random() * 2147483647) }));
+      notifyDone("Immagine pronta", `In chat "${conversationTitle(conversationId)}" e in Output → Immagini generate.`, () => goToConversation(conversationId));
     } catch (caught) {
       const cancelled = controller.signal.aborted;
       if (cancelled && jobId) void fetch(`/api/image/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }).catch(() => undefined);
@@ -1753,6 +1817,7 @@ export default function App() {
       const failed = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content } : message;
       setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(failed), updatedAt: Date.now() } : conversation));
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(failed));
+      if (!cancelled) notifyDone("Immagine non riuscita", content, () => goToConversation(conversationId));
     } finally { if (abortRef.current === controller) abortRef.current = null; setLoading(false); }
   }
 
@@ -1771,7 +1836,7 @@ export default function App() {
               {specialMode === "ocr" && <ToolWelcomeCard model="docTR locale" text={cardTexts.ocr} {...cardEditProps("ocr")}
                 actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
               {specialMode === "yolo" && <ToolWelcomeCard model="YOLO11 locale" text={cardTexts.yolo} {...cardEditProps("yolo")}
-                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select><button type="button" className="welcome-chip" onClick={() => openOutputFolder("yolo")}><Folder size={16} /> Apri risultati</button></>} />}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select></>} />}
               {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" model="Pandoc + LibreOffice" text={cardTexts.convert} {...cardEditProps("convert")}>
                 <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
               </ToolWelcomeCard>}
@@ -1885,7 +1950,7 @@ export default function App() {
               </div>
             <button className={`brain-mode-button ${webSearchEnabled ? "active" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false} aria-pressed={webSearchEnabled} title={brainPrivate ? "Web bloccato: la conversazione Brain è privata" : webAvailable === false ? "Ricerca Web non disponibile" : webSearchEnabled ? "Ricerca Web attiva" : "Ricerca Web disattivata"}><Globe2 size={18} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button>
             <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><Network className="brain-symbol" size={18} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button>
-            <button className={`brain-mode-button ${codeAgentEnabled ? "active" : ""}`} onClick={() => {setCodeAgentEnabled(!codeAgentEnabled);setWebSearchEnabled(false);}} disabled={loading || !isOllama} aria-pressed={codeAgentEnabled} title="Legge il progetto configurato e propone modifiche senza applicarle. Richiede un modello locale con strumenti.">Codice {codeAgentEnabled ? "ON" : "OFF"}</button>
+            <button className={`brain-mode-button ${codeAgentEnabled ? "active" : ""}`} onClick={() => {setCodeAgentEnabled(!codeAgentEnabled);setWebSearchEnabled(false);}} disabled={loading || !isOllama} aria-pressed={codeAgentEnabled} title="Legge il progetto configurato e propone modifiche senza applicarle. Richiede un modello locale con strumenti."><Code2 size={17} /><span>Codice {codeAgentEnabled ? "ON" : "OFF"}</span></button>
             <button className={`brain-library-button yolo-button ${specialMode === "yolo" ? "active" : ""}`} onClick={() => openSpecialChat("yolo")} disabled={loading} title="Apri una nuova chat YOLO"><YoloIcon /><span>YOLO</span></button>
             <button className={`brain-library-button analyze-button ${specialMode === "analyze" ? "active" : ""}`} onClick={() => openSpecialChat("analyze")} disabled={loading} title="Analizza immagini con Qwen3-VL"><Eye size={17} /><span>Analyze</span></button>
             <button className={`brain-library-button image-button ${specialMode === "image" ? "active" : ""}`} onClick={() => openSpecialChat("image")} disabled={loading} title="Crea immagini con Qwen-Image-2.1"><Image size={17} /><span>Image</span></button>
@@ -1927,27 +1992,30 @@ export default function App() {
                 <article key={message.id} className={`message ${message.role}`}>
                   <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo-128.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
-                    <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
+                    <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}{message.pending?.detail && <span className="message-meta-detail">· {message.pending.detail}</span>}{message.pending && loading && <span className="message-meta-detail">· <ElapsedTime startedAt={message.pending.startedAt} /></span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
                     {message.generatedImage && <a className="generated-image" href={message.generatedImage.url} download={message.generatedImage.name} title="Scarica immagine"><img src={message.generatedImage.url} alt={message.content || "Immagine generata"} /></a>}
                     {message.generatedFile?.data && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
-                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" || message.pending ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.pending && (loading ? <PendingWork {...message.pending} /> : <p className="pending-stopped">Elaborazione interrotta.</p>)}
                     {message.resultImages?.length ? <ResultImages images={message.resultImages} /> : null}
                     {message.role === "assistant" && !message.generatedImage && message.content.startsWith("ComfyUI ·") && <a className="comfy-progress-link" href={comfyBrowserUrl()} target="_blank" rel="noreferrer">Apri ComfyUI</a>}
                     {message.resultFiles?.length ? <div className="result-files">{message.resultFiles.map((file) => <a key={file.url} className="generated-file-download" href={file.url} download={file.name}><Download size={16} /> {file.name.split(".").pop()?.toUpperCase()}</a>)}</div> : null}
-                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><AffinityScore message={message} /></> : null}</div>
+                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button></div>
                     {diagnosticsEnabled && message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
                     {diagnosticsEnabled && message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
+                    {message.outputNotes?.map((note) => <button key={note.name} type="button" className="citation-toggle output-note-toggle" onClick={() => openOutputNote(note)}><Folder size={13} /> Apri in Output{message.outputNotes!.length > 1 ? ` · ${note.name.replace(/\.md$/i, "").replace(/^\d+-/, "")}` : ""}</button>)}
                     {message.logs?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.logs)} onClick={() => toggleMessagePanel(message.id, "logs")}>{openMessagePanels[message.id]?.logs ? "▼" : "▶"} Logs</button> : null}
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
                     {diagnosticsEnabled && message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
                     {diagnosticsEnabled && message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
-                    {diagnosticsEnabled && message.role === "assistant" && message.tokenTrace ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.semantic)} onClick={() => toggleMessagePanel(message.id, "semantic")} title="Parole su cui il modello era incerto e risposte alternative">{openMessagePanels[message.id]?.semantic ? "▼" : "▶"} Semantic</button> : null}
-                    {diagnosticsEnabled && message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} SHAP</button> : null}
-                    {diagnosticsEnabled && openMessagePanels[message.id]?.semantic && message.tokenTrace && <TokenConfidencePanel trace={message.tokenTrace} branches={message.tokenBranches} branching={branchingMessage === message.id} onBranch={(at, token, from, to) => void branchFrom(message, at, token, from, to)} onComplete={(prefix) => completeWord(message, prefix)} />}
+                    {diagnosticsEnabled && message.role === "assistant" && (message.tokenTrace || hasAffinity(message)) ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.semantic)} onClick={() => toggleMessagePanel(message.id, "semantic")} title="Parole su cui il modello era incerto e risposte alternative">{openMessagePanels[message.id]?.semantic ? "▼" : "▶"} Semantic</button> : null}
+                    {diagnosticsEnabled && message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} Shap</button> : null}
+                    {diagnosticsEnabled && openMessagePanels[message.id]?.semantic && !message.tokenTrace && <div className="citation-panel token-panel"><p className="token-summary"><AffinityScore message={message} /></p></div>}
+                    {diagnosticsEnabled && openMessagePanels[message.id]?.semantic && message.tokenTrace && <TokenConfidencePanel lead={hasAffinity(message) ? <><AffinityScore message={message} /> · </> : null} trace={message.tokenTrace} branches={message.tokenBranches} branching={branchingMessage === message.id} onBranch={(at, token, from, to) => void branchFrom(message, at, token, from, to)} onComplete={(prefix) => completeWord(message, prefix)} />}
                     {diagnosticsEnabled && openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
-                    {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
+                    {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><button type="button" className="brain-source-link" onClick={() => setCiteOpen({ ...parseCitation(source.source), text: source.text })} title="Apri il documento sul tratto citato"><strong>[{source.id}] {source.source}</strong></button><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
                     {diagnosticsEnabled && message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
                     {message.logs?.length && openMessagePanels[message.id]?.logs ? <div className="citation-panel message-logs">{message.logs.map((line, index) => <p key={index}>{line}</p>)}</div> : null}
                     {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details"><p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p></div>}
@@ -1969,7 +2037,7 @@ export default function App() {
           {!configured && configured !== null && <div className="config-banner"><Info size={15} /> Verifica il server AndreaGPT. Ollama locale non richiede chiavi cloud.</div>}
           <div className={`composer ${specialMode !== "normal" ? "special-composer" : ""}`}>
             {(recording || transcribing) && <div className="audio-status" role="status"><span className={recording ? "recording-dot" : ""} />{recording ? "Sto registrando audio" : "Sto trascrivendo audio"}</div>}
-            {activeOperation && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
+            {activeOperation && !activeOperation.inline && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
             {brainSource && <div className="mention-filter-chip" title="Filtro Brain attivo: la ricerca è limitata a questa fonte. Rimuovilo per cercare in tutto l'archivio."><span><span>@</span>{brainSource}</span><button type="button" onClick={() => setBrainSource("")} aria-label="Rimuovi filtro fonte Brain"><X size={14} /></button></div>}
             <div className="composer-row">
@@ -2032,7 +2100,7 @@ export default function App() {
       })()}
 
       {detailsOpen && selectedModel && (
-        <Modal title="Informazioni modello" onClose={() => setDetailsOpen(false)}>
+        <Modal title="Informazioni modello" className="fit-modal" onClose={() => setDetailsOpen(false)}>
           <div className="model-detail-head"><span className="provider-avatar large">{selectedModel.provider[0].toUpperCase()}</span><div><h2>{selectedModel.name}</h2><code>{selectedModel.id}</code></div></div>
           <p className="detail-description">{selectedModel.description}</p>
           <dl className="detail-grid"><div><dt>Provider</dt><dd>{selectedModel.provider}</dd></div><div><dt>Contesto</dt><dd>{selectedModel.context ?? "Vedi model card"}</dd></div></dl>
@@ -2041,11 +2109,12 @@ export default function App() {
         </Modal>
       )}
 
-      {candidatureOpen && <Modal title="Candidature" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
+      {candidatureOpen && <Modal title="Candidature" className="fit-modal" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
+      {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
-      {outputOpen && !compactOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["analyze", "Analyze", ScanEye], ["audio", "Audio", AudioLines], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolderLabel[outputFolder]}</h3>{outputFolder === "analyze" || outputFolder === "audio" ? <div className="output-results">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => { const folder = outputFolder === "analyze" ? "Analyze" as const : "Audio" as const; return <div key={file.name} className="output-result"><button type="button" className="output-result-open" onClick={() => setCompactOpen({ folder, name: file.name })}>{file.thumb ? <img src={file.thumb} alt="" /> : outputFolder === "audio" ? <span className="output-file-icon"><AudioLines size={22} /></span> : null}<span><strong>{file.name.replace(/\.md$/i, "").replace(/^[\dTZ-]+-(?=.)/, "")}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder, name: file.name })}>Elimina</button></div>; }) : <p>Nessun risultato.</p>}</div> : <div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen({ folder: "Compatta_chat", name: file.name })}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div>}</section>}</div></Modal>}
-      {outputOpen && compactOpen && <Modal title={compactOpen.folder === "Compatta_chat" ? "Chat compatta" : compactOpen.folder} className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro il file…</div>}><BrainDocumentReader key={`${compactOpen.folder}/${compactOpen.name}`} source={`OUTPUT/${compactOpen.folder}/${compactOpen.name}`} url={`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`} backLabel="Torna ai risultati" onBack={() => setCompactOpen(null)} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: compactOpen.folder, name: compactOpen.name })} /></Suspense></Modal>}
-      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); setCompactOpen(current => current?.folder === folder && current.name === name ? null : current); }); }}>Elimina</button></div></Modal>}
+      {outputOpen && !compactOpen && <Modal title="Output" className="output-modal fit-modal" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["news", "News", Newspaper], ["analyze", "Analyze", ScanEye], ["audio", "Audio", AudioLines], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolderLabel[outputFolder]}</h3>{outputFolder === "news" ? <div className="output-results">{researchLoading && <div className="output-result"><button type="button" className="output-result-open" onClick={() => { setOutputOpen(false); setOutputFolder(null); setResearchOpen(true); }}><span className="output-file-icon"><span className="operation-pulse" /></span><span><strong>In corso · {formatElapsed(researchSeconds)}</strong><small>{researchProgress ? `${researchProgress.done}/${researchProgress.total} articoli` : "Ricerca fonti…"}</small><em>{researchResult?.label || "—"}</em></span></button></div>}{outputFiles.news.length ? outputFiles.news.map(file => <div key={file.name} className="output-result"><button type="button" className="output-result-open" disabled={researchLoading} onClick={() => void openSavedEdition(file.name)}><span className="output-file-icon"><Newspaper size={22} /></span><span><strong>{({ ai: "AI News", papers: "Paper scientifici", science: "Scienza e Curiosità" } as Record<string, string>)[file.name.match(/-news-(\w+)\.md$/)?.[1] ?? ""] ?? file.name}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt?.replace(/^.*?Data:\s*\S+\s*/, "") || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder: "News", name: file.name })}>Elimina</button></div>) : !researchLoading && <p>Nessun risultato.</p>}</div> : outputFolder === "analyze" || outputFolder === "audio" ? <div className="output-results">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => { const folder = outputFolder === "analyze" ? "Analyze" as const : "Audio" as const; return <div key={file.name} className="output-result"><button type="button" className="output-result-open" onClick={() => setCompactOpen({ folder, name: file.name })}>{file.thumb ? <img src={file.thumb} alt="" /> : outputFolder === "audio" ? <span className="output-file-icon"><AudioLines size={22} /></span> : null}<span><strong>{file.name.replace(/\.md$/i, "").replace(/^[\dTZ-]+-(?=.)/, "")}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder, name: file.name })}>Elimina</button></div>; }) : <p>Nessun risultato.</p>}</div> : <div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen({ folder: "Compatta_chat", name: file.name })}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div>}</section>}</div></Modal>}
+      {outputOpen && compactOpen && <Modal title={compactOpen.folder === "Compatta_chat" ? "Chat compatta" : compactOpen.folder} className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro il file…</div>}><BrainDocumentReader key={`${compactOpen.folder}/${compactOpen.name}`} source={`OUTPUT/${compactOpen.folder}/${compactOpen.name}`} url={`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`} backLabel="Torna ai risultati" onBack={() => setCompactOpen(null)} image={compactOpen.folder === "Analyze" ? outputFiles.analyze.find(file => file.name === compactOpen.name)?.thumb : undefined} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: compactOpen.folder, name: compactOpen.name })} /></Suspense></Modal>}
+      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(async response => { if (!response.ok) { const message = (await response.json().catch(() => ({}))).error ?? "Eliminazione non riuscita."; window.alert(message); throw new Error(message); } return fetch("/api/output"); }).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); setCompactOpen(current => current?.folder === folder && current.name === name ? null : current); }).catch(() => undefined); }}>Elimina</button></div></Modal>}
       {researchOpen && <Modal
         className={researchFullscreen ? "research-modal-fullscreen" : researchResult?.article ? "research-modal" : "research-initial"}
         compact={!researchResult?.article && !researchFullscreen}
@@ -2056,14 +2125,14 @@ export default function App() {
           <button className="icon-button" onClick={() => void toggleResearchFullscreen()} aria-label={researchFullscreen ? "Finestra" : "Schermo intero"} title={researchFullscreen ? "Finestra" : "Schermo intero"}>{researchFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}</button>
         </>}
         wide={Boolean(researchResult?.article || researchFullscreen)}
-        onClose={() => { researchAbortRef.current?.abort(); setResearchOpen(false); setResearchFullscreen(false); }}
+        onClose={() => { setResearchOpen(false); setResearchFullscreen(false); }}
       >
         <div className="research-toolbar">
           <button disabled={researchLoading} className={researchType === "ai" ? "active" : ""} onClick={() => void createResearchEdition("ai")}>AI News</button>
           <button disabled={researchLoading} className={researchType === "papers" ? "active" : ""} onClick={() => void createResearchEdition("papers")}>Paper scientifici</button>
           <button disabled={researchLoading} className={researchType === "science" ? "active" : ""} onClick={() => void createResearchEdition("science")}>Scienza e Curiosità</button>
         </div>
-        {researchLoading && !researchResult?.article ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchProgress ? `Redazione articoli · ${researchProgress.total} fonti` : "Ricerca fonti…"}</span></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
+        {researchLoading && !researchResult?.article ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchProgress ? `Redazione articoli · ${researchProgress.total} fonti` : "Ricerca fonti…"}</span></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{researchResult.date ?? new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
       </Modal>}
       {renameDialog && <Modal title="Rinomina conversazione" compact onClose={() => setRenameDialog(null)}><label className="dialog-field">Nome conversazione<input autoFocus maxLength={60} value={renameDialog.title} onChange={event => setRenameDialog({ ...renameDialog, title: event.target.value })} /></label><div className="dialog-actions"><button className="secondary-action" onClick={() => setRenameDialog(null)}>Annulla</button><button className="primary-action" onClick={() => { const title = renameDialog.title.trim(); if (title) setConversations(current => current.map(item => item.id === renameDialog.id ? { ...item, title, customTitle: true } : item)); setRenameDialog(null); }}>Salva</button></div></Modal>}
       {embeddingOpen && <Suspense fallback={<div className="thinking">Caricamento EmbeddingSpace…</div>}><EmbeddingSpace onClose={() => setEmbeddingOpen(false)} /></Suspense>}
@@ -2071,7 +2140,7 @@ export default function App() {
 
 
       {instructionsOpen && (
-        <Modal title="Istruzioni" onClose={() => setInstructionsOpen(false)}>
+        <Modal title="Istruzioni" className="fit-modal" onClose={() => setInstructionsOpen(false)}>
           <div className="instructions-panel editor">
             <p>Le istruzioni attive vengono inviate al modello. La cartella <code>ISTRUZIONI</code> resta come copia fisica leggibile nel progetto.</p>
             <div className="instruction-actions">
@@ -2099,7 +2168,7 @@ export default function App() {
       )}
 
       {settingsOpen && (
-        <Modal title="Impostazioni" className="settings-modal" onClose={() => setSettingsOpen(false)}>
+        <Modal title="Impostazioni" className="settings-modal fit-modal" onClose={() => setSettingsOpen(false)}>
           <div className="settings-compact">
           <div className="settings-group">
             <div className="settings-label">Tema</div>
@@ -2141,6 +2210,12 @@ export default function App() {
                   </span>
                 </div>;
               }) : <p className="settings-empty">Nessun modello Ollama locale.</p>}
+              <div className="settings-line settings-model">
+                <span title="Qwen/Qwen3-VL-2B-Instruct · Analyze">Qwen3-VL 2B</span>
+                <span className="settings-pair">
+                  <select aria-label="Output Qwen3-VL 2B" title="Token di output" value={settings.visionMaxTokens ?? 1024} onChange={event => setSettings({ ...settings, visionMaxTokens: Number(event.target.value) as NonNullable<ChatSettings["visionMaxTokens"]> })}><option value={256}>out 256</option><option value={512}>out 512</option><option value={1024}>out 1024</option></select>
+                </span>
+              </div>
             </div>
           </details>
           <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />
@@ -2152,10 +2227,27 @@ export default function App() {
   );
 }
 
-function ResultImages({ images }: { images: { url: string; name: string }[] }) {
+function ResultImages({ images }: { images: { url: string; name: string; plain?: string; cutout?: string }[] }) {
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  // Versioni già pronte (senza box, scontornata): i pulsanti scambiano solo l'immagine mostrata.
+  const [shownBoxes, setShownBoxes] = useState<Set<string>>(new Set());
+  const [cutouts, setCutouts] = useState<Set<string>>(new Set());
+  const toggle = (set: (update: (current: Set<string>) => Set<string>) => void, key: string) => set(current => { const next = new Set(current); if (!next.delete(key)) next.add(key); return next; });
   return <div className="result-images">
-    {images.map((image) => <button type="button" key={image.url} onClick={() => setPreview(image)} title={image.name}><img src={image.url} alt={image.name} /></button>)}
+    {images.map((image) => {
+      const cut = Boolean(image.cutout && cutouts.has(image.url));
+      // Di default senza box: la checkbox li mostra.
+      const boxes = !image.plain || shownBoxes.has(image.url);
+      const shown = cut ? image.cutout! : !boxes && image.plain ? image.plain : image.url;
+      return <div key={image.url} className="result-image">
+        <button type="button" className={cut ? "cutout" : ""} onClick={() => setPreview({ url: shown, name: image.name })} title={image.name}><img src={shown} alt={image.name} /></button>
+        <div className="result-image-actions">
+          {image.plain && <label className="welcome-chip"><input type="checkbox" checked={boxes} disabled={cut} onChange={() => toggle(setShownBoxes, image.url)} /> Box</label>}
+          {image.cutout && <button type="button" className="welcome-chip" onClick={() => toggle(setCutouts, image.url)}>{cut ? "Mostra sfondo" : "Rimuovi sfondo"}</button>}
+          <a className="welcome-chip" href={shown} download={`${image.name.replace(/\.[^.]+$/, "")}${cut ? "-scontornata.png" : !boxes && image.plain ? "-senza-box.jpg" : "-yolo.jpg"}`}><Download size={15} /> Scarica</a>
+        </div>
+      </div>;
+    })}
     {preview && <ImageLightbox src={preview.url} name={preview.name} onClose={() => setPreview(null)} />}
   </div>;
 }
@@ -2275,6 +2367,33 @@ function renderCustomInstructions(instructions: CustomInstruction[]) {
     if (lines.length <= 1) return `- ${title}: ${lines[0] ?? ""}`;
     return `- ${title}:\n${lines.map((line) => `  - ${line}`).join("\n")}`;
   }).join("\n")}`;
+}
+
+/** Attesa dentro il messaggio: titolo, tempo che scorre e barra animata. */
+function PendingWork({ title, image }: { title: string; detail?: string; startedAt: number; image?: string }) {
+  return <div className={image ? "pending-work has-image" : "pending-work"} role="status" aria-live="polite">
+    <div className="pending-work-head"><strong>{title}</strong></div>
+    {image ? <ScanGrid image={image} /> : <div className="pending-work-bar" aria-hidden="true"><span /></div>}
+  </div>;
+}
+
+/** Immagine in analisi coperta da una griglia 4×4 che si scopre una cella alla volta, poi ricomincia. */
+function ScanGrid({ image }: { image: string }) {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setStep(current => current >= 16 ? 0 : current + 1), step >= 16 ? 1400 : 170);
+    return () => window.clearTimeout(timer);
+  }, [step]);
+  return <div className="scan-grid" style={{ backgroundImage: `url(${image})` }} aria-hidden="true">
+    {Array.from({ length: 16 }, (_, cell) => <i key={cell} className={cell < step - 1 || step >= 16 ? "ok" : cell === step - 1 ? "now" : ""} />)}
+  </div>;
+}
+
+/** Tempo trascorso, aggiornato ogni secondo (mostrato nella riga meta del messaggio). */
+function ElapsedTime({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+  return <time className="elapsed-time">{formatElapsed(Math.max(0, Math.floor((now - startedAt) / 1000)))}</time>;
 }
 
 function formatElapsed(totalSeconds: number) {

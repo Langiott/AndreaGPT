@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, MoreHorizontal, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { BRAIN_UPLOAD_PRESETS, brainUploadPreset } from "../config/brain_upload_limits";
+import { findPassage, plainWords } from "../utils/cite_focus";
 
 interface BrainStatus {
   sources?: Array<{ id: string; chunks?: number }>;
@@ -55,7 +56,10 @@ function ownListItemText(item: Element) {
 }
 
 /** Lettore Markdown dell'archivio. Con `url` legge altrove (es. OUTPUT); `onSave` e `onDelete` abilitano modifica ed eliminazione. */
-export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = "Torna all’archivio", onSave, onDelete }: { source: string; onBack: () => void; onClose?: () => void; url?: string; backLabel?: string; onSave?: (content: string) => Promise<void>; onDelete?: () => void }) {
+/** Tratto citato da aprire: righe del file originale ed estratto inviato al modello (riserva se le righe non si ritrovano). */
+export type DocumentFocus = { startLine: number; endLine: number; text?: string };
+
+export function BrainDocumentReader({ source, focus, onBack, onClose, url, backLabel = "Torna all’archivio", onSave, onDelete, image }: { source: string; focus?: DocumentFocus; onBack: () => void; onClose?: () => void; url?: string; backLabel?: string; image?: string; onSave?: (content: string) => Promise<void>; onDelete?: () => void }) {
   const [fileDocument, setFileDocument] = useState<BrainDocument | null>(null);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
@@ -148,8 +152,35 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
 
   useEffect(() => () => {
     const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
-    highlights?.delete("brain-search"); highlights?.delete("brain-search-current");
+    highlights?.delete("brain-search"); highlights?.delete("brain-search-current"); highlights?.delete("brain-cite");
   }, []);
+
+  // Citazione: evidenzia il tratto citato e lo porta in vista (confronto per parole, il Markdown renderizzato non conserva le righe).
+  useEffect(() => {
+    const article = articleRef.current;
+    const body = bodyRef.current;
+    if (!focus || !article || !body || !fileDocument) return;
+    const words: string[] = [];
+    const spots: Array<{ node: Text; start: number; end: number }> = [];
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      if (node.parentElement?.closest(".katex")) continue;
+      for (const match of (node.textContent ?? "").matchAll(/[\p{L}\p{N}]+/gu)) {
+        words.push(match[0].toLocaleLowerCase("it-IT"));
+        spots.push({ node, start: match.index!, end: match.index! + match[0].length });
+      }
+    }
+    const lines = focus.startLine ? fileDocument.content.split(/\r?\n/).slice(focus.startLine - 1, focus.endLine).join("\n") : "";
+    const found = findPassage(words, plainWords(lines)) ?? (focus.text ? findPassage(words, plainWords(focus.text)) : null);
+    if (!found) return;
+    const range = document.createRange();
+    range.setStart(spots[found.start].node, spots[found.start].start);
+    range.setEnd(spots[found.end].node, spots[found.end].end);
+    const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+    const HighlightClass = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+    if (highlights && HighlightClass) highlights.set("brain-cite", new HighlightClass(range));
+    body.scrollTo({ top: body.scrollTop + range.getBoundingClientRect().top - body.getBoundingClientRect().top - 80 });
+  }, [fileDocument, focus]);
 
   function stepMatch(direction: 1 | -1) {
     if (!matches.length) return;
@@ -225,7 +256,7 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
 
   return <section className="brain-document-reader" ref={readerRef}>
     <div className="brain-document-toolbar">
-      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel}><ArrowLeft size={16} /> <span>{backLabel}</span></button>
+      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel} aria-label={backLabel}><ArrowLeft size={17} /></button>
       <div className="brain-document-heading"><FileText size={16} /><strong title={fileDocument?.source ?? source}>{fileDocument?.name ?? source.split("/").at(-1)}</strong><small>{fileDocument?.extension.replace(".", "").toUpperCase() || "Documento"}</small></div>
       <div className="brain-document-actions">
         <div className="brain-document-search" role="search">
@@ -249,7 +280,8 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
       <div className="brain-document-outline-head"><strong>Indice</strong><button type="button" onClick={() => setOutlineOpen(false)} aria-label="Chiudi indice" title="Chiudi indice"><X size={14} /></button></div>
       <ol>{outline.map(item => <li key={item.id}><button type="button" className={item.id === activeHeading ? "is-active" : undefined} style={{ paddingLeft: 10 + item.level * 14 }} data-level={item.level} onClick={() => scrollToHeading(item.id)} title={item.text}>{item.text}</button></li>)}</ol>
     </nav>}
-    <div className="brain-document-body" ref={bodyRef}>
+    <div className={image ? "brain-document-body has-image" : "brain-document-body"} ref={bodyRef}>
+      {image && <a className="brain-document-image" href={image} target="_blank" rel="noreferrer" title="Apri immagine"><img src={image} alt="" /></a>}
       {error && draft === null ? <div className="brain-document-error" role="alert"><strong>Impossibile aprire il documento</strong><span>{error}</span><button type="button" onClick={onBack}>{backLabel}</button></div>
         : draft !== null ? <>{error && <p className="error-banner" role="alert">{error}</p>}<textarea className="brain-document-editor" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} autoFocus aria-label="Testo Markdown" /></>
         : !fileDocument ? <p className="brain-document-loading" role="status">Apro il documento…</p>
@@ -265,6 +297,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null); const [deleteBusy, setDeleteBusy] = useState(false);
   const [openDocument, setOpenDocument] = useState<string | null>(null);
   const [headerToolbarTarget, setHeaderToolbarTarget] = useState<HTMLElement | null>(null);
+  const toolbarMenu = useRef<HTMLDetailsElement>(null);
   const [presetId, setPresetId] = useState(() => { try { return brainUploadPreset(Number(localStorage.getItem("brain-upload-preset") ?? 20)).id; } catch { return 20; } });
   const preset = brainUploadPreset(presetId);
 
@@ -307,7 +340,8 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
     catch (caught) { setError(caught instanceof Error ? caught.message : "Brain non disponibile."); } finally { setBusy(false); }
   }
 
-  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button>{onOpenEmbedding && <button type="button" disabled={busy || locked} onClick={onOpenEmbedding} title="Vedi gli embedding reali in 3D">EmbeddingSpace</button>}<label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></div>;
+  const toolbarActions = <><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button>{onOpenEmbedding && <button type="button" disabled={busy || locked} onClick={onOpenEmbedding} title="Vedi gli embedding reali in 3D">EmbeddingSpace</button>}<label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></>;
+  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><div className="brain-toolbar-inline">{toolbarActions}</div><details className="brain-toolbar-menu" ref={toolbarMenu}><summary aria-label="Azioni Brain" title="Azioni"><MoreHorizontal size={17} /><span>Azioni</span><ChevronDown size={14} /></summary><div className="brain-toolbar-dropdown" onClick={event => { if ((event.target as HTMLElement).closest("button")) toolbarMenu.current?.removeAttribute("open"); }}>{toolbarActions}</div></details></div>;
 
   return <section className="brain-panel">
     {openDocument ? <BrainDocumentReader source={openDocument} onBack={() => setOpenDocument(null)} onClose={onClose} /> : <>

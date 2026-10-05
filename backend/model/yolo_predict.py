@@ -16,7 +16,7 @@ import csv
 import json
 import sys
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from ultralytics import YOLO
 
 # Modelli già caricati (modalità --serve), per task e pesi.
@@ -47,16 +47,32 @@ def label(name):
     return name[:1].upper() + name[1:]
 
 
+# Nomi italiani delle classi COCO (detect/segment/pose) e ImageNet (classify).
+LABELS_IT = json.loads((Path(__file__).with_name("yolo_labels_it.json")).read_text(encoding="utf-8"))
+
+
+def bilingual(name, table="coco"):
+    """Inglese · italiano, es. "Beaver · Castoro"; solo inglese se manca la traduzione."""
+    italian = LABELS_IT[table].get(name)
+    return f"{label(name)} · {italian[:1].upper() + italian[1:]}" if italian and italian.lower() != label(name).lower() else label(name)
+
+
+def prediction(number, singular, plural, groups):
+    """Una sola riga: PREDICTION : Oggetto segmentato · **Bear** ×1 · 91% (area 46%)."""
+    head = singular[:1].upper() + singular[1:] if number == 1 else f"{number} {plural}"
+    return " · ".join([f"PREDICTION : {head}", *groups])
+
+
 def describe_boxes(result, extra=None):
     """Raggruppa i box per classe: conteggio e confidenze, opzionalmente un dato per oggetto."""
     groups = defaultdict(list)
     for index, (cls, conf) in enumerate(zip(result.boxes.cls.tolist(), result.boxes.conf.tolist())):
-        groups[label(result.names[int(cls)])].append((conf, extra[index] if extra else None))
+        groups[bilingual(result.names[int(cls)])].append((conf, extra[index] if extra else None))
     lines = []
     for name, items in sorted(groups.items(), key=lambda item: -len(item[1])):
         items.sort(key=lambda item: -item[0])
         details = ", ".join(percent(conf) + (f" ({value})" if value else "") for conf, value in items)
-        lines.append(f"- {name} ×{len(items)} · {details}")
+        lines.append(f"**{name}** ×{len(items)} · {details}")
     return lines
 
 
@@ -110,6 +126,21 @@ def bounding_boxes(result, annotated=None):
     return reply
 
 
+def cutout(result, source, annotated):
+    """PNG trasparente: resta solo ciò che coprono i contorni della segmentazione."""
+    # cv2 (usato da YOLO) applica la rotazione EXIF: va applicata anche qui, o il contorno non combacia
+    image = ImageOps.exif_transpose(Image.open(source)).convert("RGBA")
+    mask = Image.new("L", image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    for polygon in result.masks.xy:
+        if len(polygon) >= 3:
+            draw.polygon([tuple(point) for point in polygon.tolist()], fill=255)
+    image.putalpha(mask)
+    target = f"{Path(annotated).with_suffix('')}-cutout.png"
+    image.save(target)
+    return target
+
+
 def predict(task, model_name, source, annotated=None):
     """Esegue la previsione; restituisce testo e, se richiesto, il percorso dell'immagine annotata."""
     model_path = Path(model_name)
@@ -130,33 +161,37 @@ def predict(task, model_name, source, annotated=None):
     if task == "classify":
         lines.append("Classificazione — probabilità stimate:")
         for index in result.probs.top5:
-            lines.append(f"- {label(result.names[index])}: {float(result.probs.data[index]) * 100:.2f}%".replace(".", ","))
+            lines.append(f"- {bilingual(result.names[index], 'imagenet')}: {float(result.probs.data[index]) * 100:.2f}%".replace(".", ","))
     elif result.boxes is None or len(result.boxes) == 0:
         lines.append({"segment": "Nessun oggetto segmentato.", "pose": "Nessuna persona rilevata."}.get(task, "Nessun oggetto rilevato."))
     elif task == "segment":
         found = True
         # area del contorno (coordinate normalizzate sull'immagine originale) = frazione dell'immagine
         areas = [f"area {percent(area) if (area := polygon_area(polygon)) >= 0.01 else '<1%'}" for polygon in result.masks.xyn] if result.masks is not None else None
-        lines.append(count(len(result.boxes), "oggetto segmentato", "oggetti segmentati"))
-        lines.extend(describe_boxes(result, areas))
+        lines.append(prediction(len(result.boxes), "oggetto segmentato", "oggetti segmentati", describe_boxes(result, areas)))
     elif task == "pose":
         found = True
         visible = []
         if result.keypoints is not None and result.keypoints.conf is not None:
             total = result.keypoints.conf.shape[1]
             visible = [f"{int((row > KEYPOINT_VISIBLE).sum())}/{total} punti" for row in result.keypoints.conf]
-        lines.append(count(len(result.boxes), "persona", "persone"))
+        lines.append(f"Il modello ha rilevato {count(len(result.boxes), 'persona', 'persone')}:")
         for index, conf in enumerate(result.boxes.conf.tolist()):
             lines.append(f"- Persona {index + 1} · {percent(conf)}" + (f" · {visible[index]}" if visible else ""))
     else:
         found = True
-        lines.append(count(len(result.boxes), "oggetto rilevato", "oggetti rilevati"))
-        lines.extend(describe_boxes(result))
+        lines.append(prediction(len(result.boxes), "oggetto rilevato", "oggetti rilevati", describe_boxes(result)))
     reply = {"text": "\n".join(lines)}
     if annotated and found:
         # plot() restituisce BGR
         Image.fromarray(result.plot()[..., ::-1]).save(annotated, quality=90)
         reply["image"] = annotated
+        # Versione senza box: il pulsante Box nel risultato scambia solo l'immagine.
+        plain = f"{Path(annotated).with_suffix('')}-nobox.jpg"
+        Image.fromarray(result.plot(boxes=False)[..., ::-1]).save(plain, quality=90)
+        reply["plain"] = plain
+        if task == "segment" and result.masks is not None:
+            reply["cutout"] = cutout(result, source, annotated)
     return reply
 
 

@@ -44,10 +44,14 @@ export interface ChatMessage {
   generatedImage?: { url: string; name: string; width: number; height: number; seed: number; output: string; device?: string; model?: string };
   generatedFile?: { name: string; type: string; data: string };
   /** Immagini prodotte da uno strumento (es. YOLO annotato), apribili a schermo intero. */
-  resultImages?: { url: string; name: string }[];
+  resultImages?: { url: string; name: string; plain?: string; cutout?: string }[];
   /** File scaricabili prodotti da uno strumento (es. CSV/JSON dei bounding box). */
   resultFiles?: { url: string; name: string }[];
+  /** Note salvate in OUTPUT (es. Analyze), apribili dal pulsante "Apri in Output". */
+  outputNotes?: { folder: "Analyze"; name: string }[];
   audio?: { status: "transcribing" | "complete" | "error"; fileName: string };
+  /** Lavoro in corso mostrato nel messaggio stesso (titolo + tempo che scorre). */
+  pending?: { title: string; detail?: string; startedAt: number; image?: string };
   /** Righe tecniche (tempi, modello, dispositivo) mostrate solo dal pulsante Logs. */
   logs?: string[];
   /** Messaggio-segnaposto creato da \chat: card di benvenuto dello strumento della chat (ocr, yolo, transcribe…). */
@@ -110,6 +114,7 @@ export interface ChatSettings {
   maxTokens: number;
   numCtx?: 4096 | 8192;
   ollamaMaxTokens?: 256 | 512 | 1024 | 2048 | 4096;
+  visionMaxTokens?: 256 | 512 | 1024;
 }
 
 export interface BrainCitation {
