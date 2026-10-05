@@ -32,6 +32,8 @@ import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
 import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
 import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
+import { branchContext, rememberBranchContext, toTraceTokens, type OllamaLogprob } from "./model/token_trace";
+import { sourceFallback, sourceTitle, writeEdition, type NewsArticle, type OllamaChat } from "./news/news_edition";
 
 const app = express();
 const execFileAsync = promisify(execFile);
@@ -107,7 +109,8 @@ function qualityResearchFallback(sources: ResearchSource[]) {
   return `> Edizione verificabile costruita esclusivamente dalle schede delle fonti disponibili.\n\n${articles}`;
 }
 
-function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date) {
+/** true/false se la data è ricavabile, null se la fonte non ne dà indizi. */
+function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date): boolean | null {
   const published = source.excerpt.match(/\[Pubblicato:\s*(\d{4}-\d{2}-\d{2})/iu)?.[1];
   if (published) return new Date(`${published}T00:00:00Z`) >= cutoff;
   const relative = source.excerpt.match(/\b(\d+)\s+(ora|ore|giorno|giorni|settimana|settimane)\s+fa\b/iu);
@@ -120,7 +123,7 @@ function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date) {
   const arxiv = source.url.match(/arxiv\.org\/(?:abs|html|pdf)\/(\d{2})(\d{2})\.\d+/iu);
   if (arxiv) return Number(`20${arxiv[1]}${arxiv[2]}`) >= Number(`${cutoff.getUTCFullYear()}${String(cutoff.getUTCMonth() + 1).padStart(2, "0")}`);
   const years = [...source.url.matchAll(/(?:^|\D)(20\d{2})(?:\D|$)/gu)].map(match => Number(match[1]));
-  return years.length > 0 && Math.max(...years) >= cutoff.getUTCFullYear();
+  return years.length > 0 ? Math.max(...years) >= cutoff.getUTCFullYear() : null;
 }
 
 function finalizeResearchArticle(article: string, label: string, sources: ResearchSource[]) {
@@ -131,14 +134,8 @@ function finalizeResearchArticle(article: string, label: string, sources: Resear
   const headings = sanitized.match(/^##\s+.+$/gmu) ?? [];
   const sections = headings.length;
   const citations = new Set([...sanitized.matchAll(/\[(\d+)\]/gu)].map(match => Number(match[1])).filter(id => sources.some(source => source.id === id)));
-  const mismatchedHeading = headings.some(heading => {
-    const id = Number(heading.match(/\[(\d+)\]/u)?.[1]);
-    const source = sources.find(item => item.id === id);
-    if (!source) return true;
-    const sourceTerms = new Set((source.title.toLocaleLowerCase("it-IT").match(/[\p{L}\p{N}]{4,}/gu) ?? []).filter(term => !["with", "from", "that", "della", "delle", "degli", "sulla", "nelle"].includes(term)));
-    const headingTerms = heading.toLocaleLowerCase("it-IT").match(/[\p{L}\p{N}]{4,}/gu) ?? [];
-    return !headingTerms.some(term => sourceTerms.has(term));
-  });
+  // Basta che ogni titolo citi una fonte esistente: i titoli tradotti non condividono parole con l'originale inglese.
+  const mismatchedHeading = headings.some(heading => !sources.some(source => source.id === Number(heading.match(/\[(\d+)\]/u)?.[1])));
   if (!sanitized || leaksInstructions || refusal || mismatchedHeading || sections < Math.min(3, sources.length) || citations.size < Math.min(2, sources.length)) {
     return { article: qualityResearchFallback(sources), fallback: true };
   }
@@ -258,6 +255,12 @@ app.use((request, response, next) => {
 app.use(cors({ origin: process.env.NODE_ENV === "production" ? false : /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/ }));
 // Registrata dopo il middleware: origine, host e limite richieste valgono anche per News.
 // Sta prima del parser JSON globale, così il limite di 1 MB resta valido.
+const NEWS_MAX_SOURCES = 12;
+const NEWS_TOPICS = {
+  ai: ["new large language model method paper", "AI interpretability robustness evaluation benchmark preprint", "AI lab research announcement new model release", "efficient inference training optimization machine learning paper"],
+  papers: ["machine learning paper experiments benchmark ablation", "computer science preprint new method quantitative results", "biology medicine study peer reviewed results", "physics materials research paper measurement"],
+  science: ["scientific discovery new study results", "space astronomy mission discovery", "medicine biology breakthrough study", "climate earth physics research finding"],
+} as const;
 const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]) });
 app.post("/api/research", express.json({ limit: "1mb" }), async (request, response) => {
   const parsed = researchSchema.safeParse(request.body);
@@ -276,24 +279,41 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
   const curatedQuery = `${presets.query} ${freshness} (${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
   try {
     if (!perplexityKey || !firecrawlKey) {
-      const rawSources = JSON.parse(await searchWeb(curatedQuery, operationSignal(45_000))) as Array<{ source: number; title: string; url: string; excerpt: string }>;
+      // Più ricerche tematiche in parallelo: una sola query curata restituiva 1-2 fonti dopo il filtro di freschezza.
+      const siteFilter = `(${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
+      const found = await Promise.allSettled(NEWS_TOPICS[parsed.data.type].map(topic => searchWeb(`${topic} ${freshness} ${siteFilter}`, operationSignal(45_000))));
+      if (clientAbort.signal.aborted) throw new Error("Operazione annullata.");
+      const rawSources = found.flatMap(result => result.status === "fulfilled" ? JSON.parse(result.value) as Array<{ title: string; url: string; excerpt: string }> : []);
       const cutoff = new Date(Date.now() - (parsed.data.type === "papers" ? 35 : 14) * 24 * 60 * 60_000);
-      const localSources = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, ""), source])).values()].filter(source => sourceIsFresh(source, cutoff)).slice(0, 6).map((source, index) => ({ ...source, source: index + 1 }));
+      const unique = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, "").replace(/\/$/, ""), source])).values()];
+      const dated = unique.map(source => ({ source, fresh: sourceIsFresh(source, cutoff) })).filter(item => item.fresh !== false);
+      // Prima le fonti con data recente verificata, poi quelle senza indizi di data; quelle vecchie sono escluse.
+      const localSources: ResearchSource[] = [...dated.filter(item => item.fresh), ...dated.filter(item => item.fresh === null)]
+        .slice(0, NEWS_MAX_SOURCES).map(({ source }, index) => ({ id: index + 1, title: sourceTitle(source.title), url: source.url, description: source.excerpt }));
       if (!localSources.length) throw new Error("Nessuna fonte pertinente trovata. Verifica SearXNG o la connessione Web e riprova.");
-      const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}" usando solo queste fonti locali. Seleziona 4-6 notizie pertinenti. Ogni articolo deve avere titolo informativo, perché conta, problema, metodo/contributo, dati o benchmark, metriche, confronto, risultato, limiti, stato di revisione/preprint e conclusione pratica. Evita titoli vaghi e riassunti di una sola frase. Se un dato manca scrivi "non specificato"; non inventare. Cita solo con [N].\n\n${localSources.map(source => `[${source.source}] ${source.title}\n${source.url}\n${source.excerpt}`).join("\n\n")}`;
-      const normalizedSources = localSources.map(source => ({ id: source.source, title: source.title, url: source.url, description: source.excerpt }));
-      try {
-        const local = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL, stream: false, think: false, keep_alive: "15m", options: { temperature: 0.15, num_ctx: 4096, num_predict: 1200 }, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Non inventare fonti o dati." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi. Mantieni l’intera edizione sotto 1200 token.` }] }), signal: operationSignal(90_000) });
-        if (!local.ok) throw new Error(`Ollama HTTP ${local.status}`);
-        const localData = await local.json() as { message?: { content?: string } };
-        const finalized = finalizeResearchArticle(localData.message?.content || "", presets.label, normalizedSources);
-        response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
-      } catch (error) {
-        if (clientAbort.signal.aborted) throw error;
-        const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore locale non disponibile";
-        console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
-        response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
+      const model = process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL;
+      const chat: OllamaChat = (body, signal) => upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      const editionSignal = operationSignal(8 * 60_000);
+      if (/application\/x-ndjson/i.test(request.headers.accept ?? "")) {
+        // Streaming: il giornale si riempie un articolo alla volta invece di attendere l'intera edizione.
+        response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        const send = (event: object) => { if (!response.writableEnded) response.write(`${JSON.stringify(event)}\n`); };
+        send({ type: "meta", label: presets.label, sources: localSources });
+        try {
+          await writeEdition(chat, model, localSources, editionSignal, article => send({ type: "article", ...article }));
+          send({ type: "done" });
+        } catch {
+          if (!clientAbort.signal.aborted) send({ type: "error", error: "Tempo massimo superato: edizione parziale." });
+        }
+        response.end();
+        return;
       }
+      const articles = new Map<number, NewsArticle>();
+      try { await writeEdition(chat, model, localSources, editionSignal, article => articles.set(article.id, article)); }
+      catch (error) { if (clientAbort.signal.aborted) throw error; }
+      const ordered = localSources.map(source => articles.get(source.id) ?? sourceFallback(source));
+      response.json({ type: parsed.data.type, label: presets.label, article: ordered.map(article => article.markdown).join("\n\n"), sources: localSources, fallback: ordered.every(article => article.fallback) });
       return;
     }
     const search = await upstreamFetch("https://api.firecrawl.dev/v2/search", { method: "POST", headers: { Authorization: `Bearer ${firecrawlKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: curatedQuery, limit: 12, ...(presets.sources ? { sources: presets.sources } : {}), ...(presets.categories ? { categories: presets.categories } : {}), scrapeOptions: { formats: ["markdown"] } }), signal: operationSignal(45_000) });
@@ -302,10 +322,10 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
     const raw = Array.isArray(searchData.data) ? searchData.data : searchData.data?.web ?? [];
     const sources = raw.filter(item => item.url).slice(0, 24).map((item, index) => ({ id: index + 1, title: item.title || item.url!, url: item.url!, description: item.description || "", content: item.markdown?.slice(0, 3000) || "" }));
     if (!sources.length) throw new Error("Firecrawl non ha restituito fonti utilizzabili.");
-    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 4-6 notizie pertinenti. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
+    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 8-12 notizie pertinenti. Titoli e testo sempre in italiano, anche se la fonte è in inglese. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
     const normalizedSources = sources.map(({ id, title, url, description }) => ({ id, title, url, description }));
     try {
-      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 1800, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
+      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 4000, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
       if (!completion.ok) throw new Error(`Perplexity HTTP ${completion.status}`);
       const completionData = await completion.json() as { choices?: Array<{ message?: { content?: string } }> };
       const finalized = finalizeResearchArticle(completionData.choices?.[0]?.message?.content || "", presets.label, normalizedSources);
@@ -1162,6 +1182,28 @@ const chatSchema = z.object({
   diagnostics: z.boolean().default(true),
 });
 
+const TOP_LOGPROBS = 5;
+// maxTokens piccolo = completamento di una parola alternativa (anteprima), assente = ramo completo
+const branchSchema = z.object({ id: z.string().uuid(), prefix: z.string().min(1).max(200_000), maxTokens: z.number().int().min(1).max(16).optional() }).strict();
+/** Biforcazione: il modello riprende la risposta da un prefisso (fino al token scelto) con lo stesso contesto. */
+app.post("/api/branch", async (request, response) => {
+  const parsed = branchSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Biforcazione non valida." }); return; }
+  const context = branchContext(parsed.data.id);
+  if (!context) { response.status(410).json({ error: "Contesto della risposta scaduto: rigenera la risposta per biforcarla." }); return; }
+  try {
+    const upstream = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", redirect: "error", headers: { "Content-Type": "application/json" },
+      // messaggio assistant finale = prefisso da continuare; temperatura 0 per il proseguimento più probabile
+      body: JSON.stringify({ model: context.model, stream: false, think: false, keep_alive: "30m", logprobs: true, top_logprobs: TOP_LOGPROBS, options: { ...context.options, temperature: 0, ...(parsed.data.maxTokens ? { num_predict: parsed.data.maxTokens } : {}) }, messages: [...context.messages, { role: "assistant", content: parsed.data.prefix }] }),
+      signal: AbortSignal.timeout(10 * 60_000) });
+    const result = await upstream.json() as { message?: { content?: string }; logprobs?: OllamaLogprob[]; error?: string };
+    if (!upstream.ok || result.error) { response.status(502).json({ error: `Biforcazione non riuscita: ${(result.error || `HTTP ${upstream.status}`).slice(0, 300)}` }); return; }
+    response.json({ text: result.message?.content ?? "", tokens: toTraceTokens(result.logprobs ?? []) });
+  } catch (error) {
+    response.status(502).json({ error: `Biforcazione non riuscita: ${error instanceof Error ? error.message.slice(0, 300) : "errore Ollama"}` });
+  }
+});
+
 app.post("/api/chat", async (request, response) => {
   const parsed = chatSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -1420,6 +1462,13 @@ app.post("/api/chat", async (request, response) => {
     }
     metrics.promptBuildMs = performance.now() - promptStarted;
     if (controller.signal.aborted) return;
+    const ollamaOptions = { num_ctx: effectiveNumCtx, num_predict: parsed.data.maxTokens,
+      temperature: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 0 : effectiveBrain || parsed.data.model === OLLAMA_MODEL ? 0.2 : parsed.data.temperature,
+      top_p: parsed.data.model === OLLAMA_MODEL ? 0.8 : undefined,
+      repeat_penalty: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 1 : 1.2,
+    };
+    // Con la diagnostica attiva Ollama restituisce anche le probabilità dei token (stesso stream, nessuna generazione in più).
+    const traceTokens = usesOllama && diagnostics;
     const upstream = await upstreamFetch(usesOllama ? `${ollamaBase}/api/chat` : `${usesOpenRouter ? openRouterBase : apiBase}/chat/completions`, {
       dispatcher: usesOllama ? ollamaTransport : cloudTransport,
       method: "POST",
@@ -1435,11 +1484,8 @@ app.post("/api/chat", async (request, response) => {
         temperature: parsed.data.temperature,
         max_tokens: parsed.data.maxTokens,
         stream: true,
-        ...(usesOllama ? { think: false, keep_alive: "30m", options: { num_ctx: effectiveNumCtx, num_predict: parsed.data.maxTokens,
-          temperature: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 0 : effectiveBrain || parsed.data.model === OLLAMA_MODEL ? 0.2 : parsed.data.temperature,
-          top_p: parsed.data.model === OLLAMA_MODEL ? 0.8 : undefined,
-          repeat_penalty: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 1 : 1.2,
-        } } : {}),
+        ...(usesOllama ? { think: false, keep_alive: "30m", options: ollamaOptions } : {}),
+        ...(traceTokens ? { logprobs: true, top_logprobs: TOP_LOGPROBS } : {}),
       }),
       signal: controller.signal,
       redirect: usesOllama ? "error" : "follow",
@@ -1483,6 +1529,7 @@ app.post("/api/chat", async (request, response) => {
     const decoder = new TextDecoder();
     let buffer = "";
     let generatedText = "";
+    const logprobs: OllamaLogprob[] = [];
     while (true) {
       const { done, value } = await reader.read();
       if (usesOllama) {
@@ -1496,6 +1543,7 @@ app.post("/api/chat", async (request, response) => {
           if (event.error) throw new Error(event.error);
           if (event.message?.content && metrics.firstTokenMs === undefined) metrics.firstTokenMs = Math.round(performance.now() - started);
           if (event.message?.content) generatedText += event.message.content;
+          if (traceTokens && Array.isArray(event.logprobs)) logprobs.push(...event.logprobs);
           if (event.done) {
             for (const [key, value] of Object.entries(event)) {
               if (typeof value === "number" && /^(?:load_duration|prompt_eval_duration|eval_duration|prompt_eval_count|eval_count)$/.test(key)) metrics[key] = value;
@@ -1540,6 +1588,10 @@ app.post("/api/chat", async (request, response) => {
     }
     if (diagnostics) response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
     if (diagnostics) response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
+    if (logprobs.length) {
+      const id = rememberBranchContext({ model: parsed.data.model, messages: upstreamMessages, options: ollamaOptions, maxTokens: parsed.data.maxTokens });
+      response.write(`data: ${JSON.stringify({ tokenTrace: { id, tokens: toTraceTokens(logprobs) } })}\n\n`);
+    }
     if (usesOllama) response.write("data: [DONE]\n\n");
     response.end();
     traceOutcome = "ok";

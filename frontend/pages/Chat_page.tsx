@@ -63,8 +63,9 @@ import { createStreamBatch } from "../utils/stream_batch";
 import { writeClipboard } from "../utils/clipboard";
 import { userErrorMessage } from "../utils/errors";
 import { ShapPanel } from "../components/ShapPanel";
+import { TokenConfidencePanel } from "../components/TokenConfidence";
 import { Mainboard } from "../components/Mainboard";
-import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, WebCitation } from "../types/types";
+import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, TokenTrace, WebCitation } from "../types/types";
 
 const iconByName = {
   sparkles: Sparkles,
@@ -210,7 +211,7 @@ const MAX_ATTACHMENTS_SIZE = 12 * 1024 * 1024;
 const ANALYZE_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 const ANALYZE_ATTACHMENTS_SIZE = 50 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
-type Theme = "cosmic" | "normal" | "aurora";
+type Theme = "cosmic" | "normal" | "tropico";
 type YoloTask = "detect" | "bbox" | "segment" | "classify" | "pose";
 type SpecialMode = "normal" | "ocr" | "yolo" | "analyze" | "image" | "convert";
 const specialModes: SpecialMode[] = ["normal", "ocr", "yolo", "analyze", "image", "convert"];
@@ -371,6 +372,7 @@ export default function App() {
   const [researchResult, setResearchResult] = useState<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }> } | null>(null);
   const [researchPage, setResearchPage] = useState(0);
   const [researchFullscreen, setResearchFullscreen] = useState(false);
+  const [researchProgress, setResearchProgress] = useState<{ done: number; total: number } | null>(null);
   const [outputFolder, setOutputFolder] = useState<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio" | null>(null);
   const [outputDelete, setOutputDelete] = useState<{ folder: "Image" | "OCR" | "YOLO" | "Compatta_chat" | "Analyze" | "Audio"; name: string } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{ id: string; title: string } | null>(null);
@@ -383,8 +385,9 @@ export default function App() {
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [diagnosticReportMessageId, setDiagnosticReportMessageId] = useState("");
   const [diagnosticReportCopied, setDiagnosticReportCopied] = useState(false);
-  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "logs", boolean>>>>({});
+  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "semantic" | "logs", boolean>>>>({});
   const [shapLoading, setShapLoading] = useState("");
+  const [branchingMessage, setBranchingMessage] = useState("");
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -395,7 +398,7 @@ export default function App() {
   const [ocrToBrain, setOcrToBrain] = useState(() => { try { return localStorage.getItem("andreagpt-ocr-brain") === "true"; } catch { return false; } });
   // La registrazione termina in una callback creata all'avvio: il ref legge l'interruttore aggiornato.
   const audioSummaryRef = useRef(audioSummary);
-  const [theme, setTheme] = useState<Theme>(() => { const saved = localStorage.getItem("andreagpt-theme"); return saved === "normal" || saved === "aurora" ? saved : "cosmic"; });
+  const [theme, setTheme] = useState<Theme>(() => { const saved = localStorage.getItem("andreagpt-theme"); return saved === "normal" || saved === "tropico" ? saved : saved === "aurora" ? "tropico" : "cosmic"; });
   const [historyCollapsed, setHistoryCollapsed] = useState(() => localStorage.getItem("andreagpt-history-collapsed") === "true");
   const [modelsCollapsed, setModelsCollapsed] = useState(() => localStorage.getItem("andreagpt-models-collapsed") === "true");
   const DEFAULT_CARD_TEXTS: Record<string, WelcomeCardText> = {
@@ -830,7 +833,7 @@ export default function App() {
     }
   }
 
-  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "logs") {
+  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "semantic" | "logs") {
     setOpenMessagePanels((current) => ({
       ...current,
       [messageId]: { brain: false, web: false, metrics: false, diagnostics: false, ...current[messageId], [panel]: !current[messageId]?.[panel] },
@@ -859,6 +862,29 @@ export default function App() {
       setMessages(current => current.map(item => item.id === message.id ? { ...item, shap: result } : item));
     } catch (caught) { setError(userErrorMessage(caught, "SHAP non disponibile.")); }
     finally { setShapLoading(""); }
+  }
+
+  /** Biforcazione: riprende la risposta dal token `at` usando `token` al posto di quello scelto dal modello. */
+  async function branchFrom(message: ChatMessage, at: number, token: string, from: string, to: string) {
+    if (!message.tokenTrace || branchingMessage) return;
+    const prefix = message.tokenTrace.tokens.slice(0, at).map(item => item.t).join("") + token;
+    setBranchingMessage(message.id);
+    try {
+      const response = await fetch("/api/branch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: message.tokenTrace.id, prefix }) });
+      const result = await response.json() as { tokens?: TokenTrace["tokens"]; error?: string };
+      if (!response.ok || !result.tokens) throw new Error(result.error || "Biforcazione non riuscita.");
+      const branch = { at, from, to, token, tokens: result.tokens };
+      setMessages(current => current.map(item => item.id === message.id ? { ...item, tokenBranches: [...(item.tokenBranches ?? []), branch] } : item));
+    } catch (caught) { setError(userErrorMessage(caught, "Biforcazione non riuscita.")); }
+    finally { setBranchingMessage(""); }
+  }
+
+  /** Anteprima di una parola alternativa: pochi token dopo il prefisso, stesso contesto della risposta. */
+  async function completeWord(message: ChatMessage, prefix: string) {
+    const response = await fetch("/api/branch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: message.tokenTrace!.id, prefix, maxTokens: 4 }) });
+    const result = await response.json() as { text?: string; error?: string };
+    if (!response.ok) throw new Error(result.error || "Completamento non riuscito.");
+    return result.text ?? "";
   }
 
   /** Voto su una singola fonte: cambia solo il suo ranking per domande simili, non la mappa Micelio. */
@@ -1047,7 +1073,7 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("andreagpt-theme", theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "cosmic" ? "#FFF8E7" : theme === "aurora" ? "#150F26" : "#080A08");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "cosmic" ? "#FFF8E7" : theme === "tropico" ? "#0A1426" : "#080A08");
   }, [theme]);
 
   useEffect(() => {
@@ -1237,14 +1263,38 @@ export default function App() {
     const controller = new AbortController();
     researchAbortRef.current = controller;
     setResearchType(type); setResearchLoading(true); setResearchResult(null); setResearchPage(0); setResearchOpen(true);
+    setResearchProgress(null);
     try {
-      const response = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type }), signal: controller.signal });
-      const data = await readJsonResponse<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }>; error?: string }>(response);
-      if (!response.ok) throw new Error(data.error || "Ricerca non riuscita.");
-      if (researchAbortRef.current === controller) setResearchResult(data);
+      const response = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/x-ndjson, application/json" }, body: JSON.stringify({ type }), signal: controller.signal });
+      if (!response.ok || !/x-ndjson/.test(response.headers.get("Content-Type") ?? "") || !response.body) {
+        const data = await readJsonResponse<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }>; error?: string }>(response);
+        if (!response.ok) throw new Error(data.error || "Ricerca non riuscita.");
+        if (researchAbortRef.current === controller) setResearchResult(data);
+        return;
+      }
+      // Edizione locale in streaming: ogni riga è un evento, gli articoli arrivano appena redatti.
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim() || researchAbortRef.current !== controller) continue;
+          const event = JSON.parse(line) as { type: string; label?: string; sources?: Array<{ id: number; title: string; url: string; description: string }>; markdown?: string; error?: string };
+          if (event.type === "meta") { setResearchResult({ label: event.label ?? "", article: "", sources: event.sources ?? [] }); setResearchProgress({ done: 0, total: event.sources?.length ?? 0 }); }
+          else if (event.type === "article" && event.markdown) {
+            setResearchResult(current => current && { ...current, article: current.article ? `${current.article}\n\n${event.markdown}` : event.markdown! });
+            setResearchProgress(current => current && { ...current, done: current.done + 1 });
+          } else if (event.type === "error") throw new Error(event.error);
+        }
+      }
     } catch (error) {
       const aborted = error instanceof Error && error.name === "AbortError";
-      if (researchAbortRef.current === controller) setResearchResult({ label: aborted ? "Operazione annullata" : "Errore", article: aborted ? "La creazione dell’edizione è stata annullata. Puoi riprovarla quando vuoi." : `**Ricerca non disponibile**\n\n${error instanceof Error ? error.message : "Errore sconosciuto."}`, sources: [] });
+      // Interruzione o errore a metà: gli articoli già arrivati restano leggibili.
+      if (researchAbortRef.current === controller) setResearchResult(current => current?.article ? current : { label: aborted ? "Operazione annullata" : "Errore", article: aborted ? "La creazione dell’edizione è stata annullata. Puoi riprovarla quando vuoi." : `**Ricerca non disponibile**\n\n${error instanceof Error ? error.message : "Errore sconosciuto."}`, sources: [] });
     } finally {
       if (researchAbortRef.current === controller) { researchAbortRef.current = null; setResearchLoading(false); }
     }
@@ -1376,10 +1426,11 @@ export default function App() {
         for (const line of lines) {
           const data = line.trim().replace(/^data:\s*/, "");
           if (!data || data === "[DONE]") continue;
-          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; webSources?: WebCitation[]; metrics?: Record<string, number>; diagnostics?: DiagnosticTrace; error?: string };
+          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; webSources?: WebCitation[]; metrics?: Record<string, number>; diagnostics?: DiagnosticTrace; tokenTrace?: TokenTrace; error?: string };
           try { event = JSON.parse(data); } catch { continue; }
             if (event.error) throw new Error(event.error);
             if (event.metrics) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, metrics: event.metrics } : message));
+            if (event.tokenTrace) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, tokenTrace: event.tokenTrace, tokenBranches: undefined } : message));
             if (event.diagnostics) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, diagnostics: event.diagnostics } : message));
             if (Array.isArray(event.brainSources)) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, brainSources: event.brainSources, brainPrivate: true } : message));
             if (Array.isArray(event.webSources)) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, webSources: event.webSources } : message));
@@ -1732,7 +1783,7 @@ export default function App() {
   );
 
   return (
-    <div ref={appShellRef} className="app-shell" data-theme={theme === "aurora" ? "normal" : theme} data-palette={theme}>
+    <div ref={appShellRef} className="app-shell" data-theme={theme === "tropico" ? "normal" : theme} data-palette={theme}>
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand-row">
           <div className="brand-mark"><img src="/andreagpt-logo-128.png" alt="" /></div>
@@ -1883,6 +1934,7 @@ export default function App() {
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
                     {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
                     {message.resultImages?.length ? <ResultImages images={message.resultImages} /> : null}
+                    {message.role === "assistant" && !message.generatedImage && message.content.startsWith("ComfyUI ·") && <a className="comfy-progress-link" href={comfyBrowserUrl()} target="_blank" rel="noreferrer">Apri ComfyUI</a>}
                     {message.resultFiles?.length ? <div className="result-files">{message.resultFiles.map((file) => <a key={file.url} className="generated-file-download" href={file.url} download={file.name}><Download size={16} /> {file.name.split(".").pop()?.toUpperCase()}</a>)}</div> : null}
                     {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><AffinityScore message={message} /></> : null}</div>
                     {diagnosticsEnabled && message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
@@ -1891,7 +1943,9 @@ export default function App() {
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
                     {diagnosticsEnabled && message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
                     {diagnosticsEnabled && message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
+                    {diagnosticsEnabled && message.role === "assistant" && message.tokenTrace ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.semantic)} onClick={() => toggleMessagePanel(message.id, "semantic")} title="Parole su cui il modello era incerto e risposte alternative">{openMessagePanels[message.id]?.semantic ? "▼" : "▶"} Semantic</button> : null}
                     {diagnosticsEnabled && message.role === "assistant" && message.brainSources?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.shap)} onClick={() => void openShap(message, messageIndex)} title="Quanto ogni parola della domanda ha guidato la scelta delle fonti">{openMessagePanels[message.id]?.shap ? "▼" : "▶"} SHAP</button> : null}
+                    {diagnosticsEnabled && openMessagePanels[message.id]?.semantic && message.tokenTrace && <TokenConfidencePanel trace={message.tokenTrace} branches={message.tokenBranches} branching={branchingMessage === message.id} onBranch={(at, token, from, to) => void branchFrom(message, at, token, from, to)} onComplete={(prefix) => completeWord(message, prefix)} />}
                     {diagnosticsEnabled && openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
                     {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
                     {diagnosticsEnabled && message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
@@ -1916,7 +1970,6 @@ export default function App() {
           <div className={`composer ${specialMode !== "normal" ? "special-composer" : ""}`}>
             {(recording || transcribing) && <div className="audio-status" role="status"><span className={recording ? "recording-dot" : ""} />{recording ? "Sto registrando audio" : "Sto trascrivendo audio"}</div>}
             {activeOperation && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
-            {specialMode !== "normal" && <div className="special-composer-label"><strong>{specialMode === "convert" ? null : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : "Qwen-Image-2.1"}</strong>{specialMode === "image" && <span><a href={comfyBrowserUrl()} target="_blank" rel="noreferrer">ComfyUI</a> · {imageService.message.replace(/^ComfyUI /, "")}</span>}</div>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
             {brainSource && <div className="mention-filter-chip" title="Filtro Brain attivo: la ricerca è limitata a questa fonte. Rimuovilo per cercare in tutto l'archivio."><span><span>@</span>{brainSource}</span><button type="button" onClick={() => setBrainSource("")} aria-label="Rimuovi filtro fonte Brain"><X size={14} /></button></div>}
             <div className="composer-row">
@@ -1994,21 +2047,23 @@ export default function App() {
       {outputOpen && compactOpen && <Modal title={compactOpen.folder === "Compatta_chat" ? "Chat compatta" : compactOpen.folder} className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro il file…</div>}><BrainDocumentReader key={`${compactOpen.folder}/${compactOpen.name}`} source={`OUTPUT/${compactOpen.folder}/${compactOpen.name}`} url={`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`} backLabel="Torna ai risultati" onBack={() => setCompactOpen(null)} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: compactOpen.folder, name: compactOpen.name })} /></Suspense></Modal>}
       {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); setCompactOpen(current => current?.folder === folder && current.name === name ? null : current); }); }}>Elimina</button></div></Modal>}
       {researchOpen && <Modal
-        className={researchFullscreen ? "research-modal-fullscreen" : researchResult || researchLoading ? "research-modal" : "research-initial"}
-        compact={!researchResult && !researchLoading && !researchFullscreen}
-        title={<span className="newspaper-modal-title"><Newspaper size={19} /> Edizione News</span>}
-        wide={Boolean(researchResult || researchLoading || researchFullscreen)}
+        className={researchFullscreen ? "research-modal-fullscreen" : researchResult?.article ? "research-modal" : "research-initial"}
+        compact={!researchResult?.article && !researchFullscreen}
+        title={<span className="newspaper-modal-title"><Newspaper size={19} /> Edizione News{researchLoading && researchProgress ? <small className="research-progress">{researchProgress.done}/{researchProgress.total}</small> : null}</span>}
+        actions={<>
+          {researchLoading && <button className="icon-button" onClick={stopResearch} aria-label="Interrompi" title="Interrompi"><Square size={15} fill="currentColor" /></button>}
+          {researchResult?.article && <button className="icon-button" onClick={downloadResearchEdition} aria-label="Scarica giornale" title="Scarica giornale"><Download size={18} /></button>}
+          <button className="icon-button" onClick={() => void toggleResearchFullscreen()} aria-label={researchFullscreen ? "Finestra" : "Schermo intero"} title={researchFullscreen ? "Finestra" : "Schermo intero"}>{researchFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}</button>
+        </>}
+        wide={Boolean(researchResult?.article || researchFullscreen)}
         onClose={() => { researchAbortRef.current?.abort(); setResearchOpen(false); setResearchFullscreen(false); }}
       >
         <div className="research-toolbar">
           <button disabled={researchLoading} className={researchType === "ai" ? "active" : ""} onClick={() => void createResearchEdition("ai")}>AI News</button>
           <button disabled={researchLoading} className={researchType === "papers" ? "active" : ""} onClick={() => void createResearchEdition("papers")}>Paper scientifici</button>
           <button disabled={researchLoading} className={researchType === "science" ? "active" : ""} onClick={() => void createResearchEdition("science")}>Scienza e Curiosità</button>
-          {researchLoading && <button className="cancel-research" onClick={stopResearch}><Square size={13} fill="currentColor" /> Interrompi</button>}
-          {researchResult && <button className="download-research" onClick={downloadResearchEdition}><Download size={14} /> Scarica giornale</button>}
-          <button className="fullscreen-research" onClick={() => void toggleResearchFullscreen()}>{researchFullscreen ? <Minimize size={14} /> : <Maximize size={14} />} {researchFullscreen ? "Finestra" : "Schermo intero"}</button>
         </div>
-        {researchLoading ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchSeconds < 20 ? "Ricerca e selezione delle fonti…" : researchSeconds < 60 ? "Le fonti sono in elaborazione…" : "Il modello sta componendo l’edizione. Con Ollama locale il primo avvio può richiedere alcuni minuti."}</span><small>Puoi interrompere senza bloccare le altre funzioni.</small></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
+        {researchLoading && !researchResult?.article ? <div className="newspaper-loading" role="status" aria-live="polite"><span className="operation-pulse" /><strong>Operazione attiva · {formatElapsed(researchSeconds)}</strong><span>{researchProgress ? `Redazione articoli · ${researchProgress.total} fonti` : "Ricerca fonti…"}</span></div> : researchResult ? (() => { const pages = researchPages(researchResult.article); const page = Math.min(researchPage, pages.length - 1); return <div className="newspaper-reader"><button className="newspaper-arrow left" aria-label="Pagina precedente" disabled={page === 0} onClick={() => setResearchPage(current => Math.max(0, current - 1))}><ChevronLeft size={25} /></button><article className="newspaper"><div className="newspaper-masthead"><span>ANDREAGPT · EDIZIONE TECNICA</span><small>{new Date().toLocaleDateString("it-IT")}</small></div><Suspense fallback={<p>{pages[page]}</p>}><NewspaperMarkdown content={pages[page]} /></Suspense>{page === pages.length - 1 && researchResult.sources.length > 0 && <footer className="newspaper-sources"><strong>Fonti consultate</strong>{researchResult.sources.map(source => <a key={source.id} href={source.url} target="_blank" rel="noreferrer">[{source.id}] {source.title}</a>)}</footer>}<div className="newspaper-page-number">Pagina {page + 1} / {pages.length}</div></article><button className="newspaper-arrow right" aria-label="Pagina successiva" disabled={page === pages.length - 1} onClick={() => setResearchPage(current => Math.min(pages.length - 1, current + 1))}><ChevronRight size={25} /></button></div>; })() : <div className="newspaper-empty"><strong>Scegli un’edizione</strong><span>AndreaGPT userà solo le fonti trovate e produrrà un articolo per fonte.</span></div>}
       </Modal>}
       {renameDialog && <Modal title="Rinomina conversazione" compact onClose={() => setRenameDialog(null)}><label className="dialog-field">Nome conversazione<input autoFocus maxLength={60} value={renameDialog.title} onChange={event => setRenameDialog({ ...renameDialog, title: event.target.value })} /></label><div className="dialog-actions"><button className="secondary-action" onClick={() => setRenameDialog(null)}>Annulla</button><button className="primary-action" onClick={() => { const title = renameDialog.title.trim(); if (title) setConversations(current => current.map(item => item.id === renameDialog.id ? { ...item, title, customTitle: true } : item)); setRenameDialog(null); }}>Salva</button></div></Modal>}
       {embeddingOpen && <Suspense fallback={<div className="thinking">Caricamento EmbeddingSpace…</div>}><EmbeddingSpace onClose={() => setEmbeddingOpen(false)} /></Suspense>}
@@ -2049,7 +2104,7 @@ export default function App() {
           <div className="settings-group">
             <div className="settings-label">Tema</div>
             <div className="theme-options">
-              {([["cosmic", "Latte Cosmico", "Chiaro · crema"], ["normal", "Normale", "Scuro · lime"], ["aurora", "Aurora", "Viola · rosa"]] as const).map(([id, name, hint]) => <button key={id} type="button" className={theme === id ? "active" : ""} onClick={() => setTheme(id)} aria-pressed={theme === id}>
+              {([["cosmic", "Latte Cosmico", "Chiaro · crema"], ["normal", "Normale", "Scuro · lime"], ["tropico", "Tropico", "Scuro · multicolore"]] as const).map(([id, name, hint]) => <button key={id} type="button" className={theme === id ? "active" : ""} onClick={() => setTheme(id)} aria-pressed={theme === id}>
                 <span className={`theme-preview ${id}-preview`}><i /><i /><i /></span>
                 <span><strong>{name}</strong><small>{hint}</small></span>
                 {theme === id && <Check size={15} />}
@@ -2242,8 +2297,8 @@ async function readHealth() {
   return response.json() as Promise<{ providers?: { searxng?: boolean; web?: boolean } }>;
 }
 
-function Modal({ title, onClose, onBack, children, headerSlot, wide = false, compact = false, className = "" }: { title: React.ReactNode; onClose: () => void; onBack?: () => void; children: React.ReactNode; headerSlot?: string; wide?: boolean; compact?: boolean; className?: string }) {
-  return <div className={`modal-backdrop${compact ? " compact-backdrop" : ""}`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal ${wide ? "wide" : ""} ${compact ? "compact-modal" : ""} ${className}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} onClick={(event) => event.stopPropagation()}><header>{onBack && <button className="modal-back" aria-label="Indietro" onClick={onBack}><ArrowLeft size={17} /></button>}<h2>{title}</h2>{headerSlot && <div id={headerSlot} className="modal-header-slot" />}<button className="icon-button" aria-label="Chiudi" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
+function Modal({ title, onClose, onBack, children, headerSlot, actions, wide = false, compact = false, className = "" }: { title: React.ReactNode; onClose: () => void; onBack?: () => void; children: React.ReactNode; headerSlot?: string; actions?: React.ReactNode; wide?: boolean; compact?: boolean; className?: string }) {
+  return <div className={`modal-backdrop${compact ? " compact-backdrop" : ""}`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal ${wide ? "wide" : ""} ${compact ? "compact-modal" : ""} ${className}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} onClick={(event) => event.stopPropagation()}><header>{onBack && <button className="modal-back" aria-label="Indietro" onClick={onBack}><ArrowLeft size={17} /></button>}<h2>{title}</h2>{headerSlot && <div id={headerSlot} className="modal-header-slot" />}{actions && <div className="modal-actions">{actions}</div>}<button className="icon-button" aria-label="Chiudi" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
 }
 
 function loadMessages(): ChatMessage[] {
@@ -2386,7 +2441,8 @@ function withoutHeavyPayloads(messages: ChatMessage[]) {
 }
 
 function withoutAttachmentPayloads(messages: ChatMessage[]) {
-  return messages.map((message) => ({
+  // la traccia dei token resta solo in memoria: pesante e legata a un contesto server temporaneo
+  return messages.map(({ tokenTrace: _tokenTrace, tokenBranches: _tokenBranches, ...message }) => ({
     ...message,
     attachments: message.attachments?.map(({ dataUrl: _dataUrl, text: _text, ...attachment }) => attachment),
   }));
