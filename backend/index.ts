@@ -19,6 +19,7 @@ import { assessCitations, assessOutputLanguage, createDiagnosticTrace } from "./
 import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "../frontend/config/language";
 import { compactEvidence } from "./grounding/evidence";
 import { extractSearchQuery } from "./search/search_query";
+import { fuseRankings, planWebSearch, relaxWebPlan, selectRelevant, type PlanModel, type WebPlan } from "./search/web_plan";
 import { isSmallTalk } from "./retrieval/evidence_policy";
 import { JsonLineWorker } from "./utils/json_line_worker";
 import { GROUP_METHODS } from "./brain/embedding_ml";
@@ -46,7 +47,7 @@ async function withHeavySlot<T>(task: () => Promise<T>): Promise<T> {
   try { return await task(); } finally { const next = heavyQueue.shift(); if (next) next(); else heavyRunning--; }
 }
 const { outputRoot, ocrInputRoot, ocrOutputRoot, yoloOutputRoot, imageOutputRoot, doctrScript, yoloScript, qwenVisionScript, audioScript, toolsRoot } = paths;
-const { port, apiBase, apiKey, openRouterKey, perplexityKey, firecrawlKey, openRouterBase, localRouterThreshold, localRouterEnabled, lanAccessEnabled, searxngBaseUrl, ollamaBase } = settings;
+const { port, apiBase, apiKey, openRouterKey, perplexityKey, firecrawlKey, openRouterBase, localRouterThreshold, localRouterEnabled, lanAccessEnabled, searxngBaseUrl, scraplingBaseUrl, ollamaBase } = settings;
 // Il router automatico è opt-in: Web OFF e Brain OFF devono restare OFF.
 const supportedChatModels = [
   "minimaxai/minimax-m3",
@@ -327,7 +328,7 @@ app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.j
 app.use(express.json({ limit: "60mb" }));
 app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false, index: false, maxAge: 0 }));
 // Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
-for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
+for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
 app.use("/outputs", (_request, response) => { response.status(404).end(); });
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
@@ -338,8 +339,21 @@ app.get("/api/output", async (_request, response) => {
       return { category, name: entry.name, url: `/outputs/${folder}/${encodeURIComponent(entry.name)}`, size: stat.size, updatedAt: stat.mtimeMs, image: /\.(png|jpe?g|webp|gif)$/i.test(entry.name) };
     }));
   };
-  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte") }); }
-  catch { response.json({ images: [], ocr: [], yolo: [] }); }
+  const excerpt = (text: string) => text.replace(/^#.*$/gm, "").replace(/[#*_>`]/g, "").replace(/\s+/g, " ").trim().slice(0, 260);
+  // Analyze: una voce per analisi (testo .md + immagine con lo stesso nome), con anteprima del testo.
+  const analyze = async () => {
+    const files = await collect("Analyze", "Analyze");
+    return Promise.all(files.filter(file => /\.md$/i.test(file.name)).map(async note => {
+      const stem = note.name.slice(0, -3);
+      const picture = files.find(file => file.image && file.name.slice(0, file.name.lastIndexOf(".")) === stem);
+      return { ...note, thumb: picture?.url, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Analyze", note.name), "utf8").catch(() => "")) };
+    }));
+  };
+  const audio = async () => Promise.all((await collect("Audio", "Audio")).filter(file => /\.md$/i.test(file.name)).map(async file => (
+    { ...file, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Audio", file.name), "utf8").catch(() => "")) })));
+  const newest = <T extends { updatedAt: number }>(items: T[]) => items.sort((a, b) => b.updatedAt - a.updatedAt);
+  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte"), analyze: newest(await analyze()), audio: newest(await audio()) }); }
+  catch { response.json({ images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [] }); }
 });
 
 app.post("/api/chat/compact", async (request, response) => {
@@ -375,25 +389,46 @@ app.post("/api/chat/compact", async (request, response) => {
   */
 });
 app.delete("/api/output/:folder/:name", async (request, response) => {
-  if (!["Image", "OCR", "YOLO", "Compatta_chat"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
+  if (!["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
   const target = path.resolve(outputRoot, request.params.folder, request.params.name);
   const root = path.resolve(outputRoot, request.params.folder);
   if (!target.startsWith(`${root}${path.sep}`)) { response.status(400).json({ error: "File non valido." }); return; }
-  try { await fs.rm(target); response.json({ ok: true }); } catch { response.status(404).json({ error: "File non trovato." }); }
+  try {
+    await fs.rm(target);
+    // Analyze: insieme al testo va via anche l'immagine con lo stesso nome.
+    if (request.params.folder === "Analyze" && /\.md$/i.test(target)) {
+      const stem = path.basename(target, ".md");
+      for (const entry of await fs.readdir(root).catch(() => [] as string[])) if (entry.slice(0, entry.lastIndexOf(".")) === stem) await fs.rm(path.join(root, entry), { force: true });
+    }
+    response.json({ ok: true });
+  } catch { response.status(404).json({ error: "File non trovato." }); }
 });
-/** Chat compatte: lettura e modifica del Markdown salvato in OUTPUT/Compatta_chat. */
-function compactChatPath(name: string) {
-  const root = path.resolve(outputRoot, "Compatta_chat"), target = path.resolve(root, name);
+/** Markdown in OUTPUT (chat compatte, analisi, trascrizioni): lettura e modifica. */
+function outputMarkdownPath(folder: string, name: string) {
+  if (!["Compatta_chat", "Analyze", "Audio"].includes(folder)) return null;
+  const root = path.resolve(outputRoot, folder), target = path.resolve(root, name);
   return target.startsWith(`${root}${path.sep}`) && /\.md$/i.test(target) ? target : null;
 }
-app.get("/api/output/Compatta_chat/:name/content", async (request, response) => {
-  const target = compactChatPath(request.params.name);
+app.get("/api/output/:folder/:name/content", async (request, response) => {
+  const target = outputMarkdownPath(request.params.folder, request.params.name);
   if (!target) { response.status(400).json({ error: "File non valido." }); return; }
-  try { response.json({ source: `OUTPUT/Compatta_chat/${request.params.name}`, name: request.params.name, extension: ".md", content: await fs.readFile(target, "utf8") }); }
+  try { response.json({ source: `OUTPUT/${request.params.folder}/${request.params.name}`, name: request.params.name, extension: ".md", content: await fs.readFile(target, "utf8") }); }
   catch { response.status(404).json({ error: "File non trovato." }); }
 });
-app.put("/api/output/Compatta_chat/:name/content", async (request, response) => {
-  const target = compactChatPath(request.params.name);
+/** Trascrizioni (carica audio o registra): una nota .md per audio in OUTPUT/Audio. */
+app.post("/api/output/Audio", async (request, response) => {
+  const parsed = z.object({ name: z.string().min(1).max(180), content: z.string().min(1).max(5_000_000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Trascrizione non valida." }); return; }
+  const stem = path.basename(parsed.data.name, path.extname(parsed.data.name)).replace(/[^a-z0-9._-]+/gi, "_").slice(0, 100) || "audio";
+  const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}-${stem}.md`;
+  try {
+    await fs.mkdir(path.join(outputRoot, "Audio"), { recursive: true });
+    await fs.writeFile(path.join(outputRoot, "Audio", filename), parsed.data.content, "utf8");
+    response.json({ ok: true, name: filename });
+  } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
+});
+app.put("/api/output/:folder/:name/content", async (request, response) => {
+  const target = outputMarkdownPath(request.params.folder, request.params.name);
   const parsed = z.object({ content: z.string().max(5_000_000) }).safeParse(request.body);
   if (!target || !parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
   try { await fs.access(target); await fs.writeFile(target, parsed.data.content, "utf8"); response.json({ ok: true }); }
@@ -623,7 +658,7 @@ async function tesseractText(inputPath: string, outputPath: string, outputBase: 
   return text;
 }
 
-const yoloSchema = z.object({ name: z.string().min(1).max(180), type: z.string().max(100).optional(), task: z.enum(["detect", "segment", "classify", "pose", "obb"]).default("detect"), data: z.string().startsWith("data:image/").max(16_000_000) }).strict();
+const yoloSchema = z.object({ name: z.string().min(1).max(180), type: z.string().max(100).optional(), task: z.enum(["detect", "bbox", "segment", "classify", "pose"]).default("detect"), data: z.string().startsWith("data:image/").max(16_000_000) }).strict();
 app.post("/api/yolo", async (request, response) => {
   const parsed = yoloSchema.safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "YOLO non valido: carica una sola immagine." }); return; }
@@ -637,18 +672,23 @@ app.post("/api/yolo", async (request, response) => {
     const base64 = parsed.data.data.slice(parsed.data.data.indexOf(",") + 1);
     await fs.writeFile(inputPath, Buffer.from(base64, "base64"));
     const executable = process.env.YOLO_PATH || "yolo";
-    const models = { detect: "yolo11n.pt", segment: "yolo11n-seg.pt", classify: "yolo11n-cls.pt", pose: "yolo11n-pose.pt", obb: "yolo11n-obb.pt" };
+    const models = { detect: "yolo11n.pt", bbox: "yolo11n.pt", segment: "yolo11n-seg.pt", classify: "yolo11n-cls.pt", pose: "yolo11n-pose.pt" };
     const model = process.env.YOLO_MODEL || models[parsed.data.task];
-    const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
     let output: string;
+    let image: string | undefined;
+    let files: { url: string; name: string }[] | undefined;
     if (process.env.YOLO_PATH) {
+      const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
       const result = await withHeavySlot(() => execFileAsync(executable, args, { windowsHide: true, timeout: 10 * 60_000, maxBuffer: 2_000_000 }));
       output = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
     } else {
-      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string }>({ task: parsed.data.task, model, source: inputPath }));
-      output = result.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
+      const annotated = path.join(yoloOutputRoot, `yolo-${job}-${parsed.data.task}.jpg`);
+      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string; image?: string; files?: string[] }>({ task: parsed.data.task, model, source: inputPath, annotated }));
+      output = result.text.trim();
+      if (result.image) image = `/outputs/YOLO/${encodeURIComponent(path.basename(result.image))}`;
+      files = result.files?.map((file) => ({ url: `/outputs/YOLO/${encodeURIComponent(path.basename(file))}`, name: path.basename(file) }));
     }
-    response.json({ text: output || "YOLO non ha restituito rilevamenti.", output: path.relative(process.cwd(), inputPath) });
+    response.json({ text: output || "YOLO non ha restituito rilevamenti.", image, files, output: path.relative(process.cwd(), inputPath) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Errore YOLO.";
     if (/ENOENT|not found|is not recognized|No module named/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics) oppure imposta YOLO_PATH." });
@@ -689,7 +729,15 @@ app.post("/api/analyze-image", async (request, response) => {
     await fs.mkdir(analysisRoot, { recursive: true });
     await fs.writeFile(inputPath, Buffer.from(parsed.data.data.slice(parsed.data.data.indexOf(",") + 1), "base64"));
     const parsedResult = await visionWorker.request<{ text?: string; resized?: { width: number; height: number }; model?: string; device?: string }>({ input: inputPath, prompt: parsed.data.prompt, max_pixels: Number(process.env.VISION_MAX_PIXELS) || 262144, max_tokens: Number(process.env.VISION_MAX_TOKENS) || 256 }, controller.signal);
-    response.json({ text: parsedResult.text || "Nessuna descrizione restituita.", resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
+    const text = parsedResult.text || "Nessuna descrizione restituita.";
+    // Risultato in OUTPUT/Analyze: immagine + testo con lo stesso nome.
+    try {
+      const savedRoot = path.join(outputRoot, "Analyze"), stem = path.basename(inputPath, extension);
+      await fs.mkdir(savedRoot, { recursive: true });
+      await fs.copyFile(inputPath, path.join(savedRoot, `${stem}${extension}`));
+      await fs.writeFile(path.join(savedRoot, `${stem}.md`), `# ${parsed.data.name}\n\n${text}\n`, "utf8");
+    } catch { /* il salvataggio non deve far fallire l'analisi */ }
+    response.json({ text, resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
   } catch (error) {
     if (controller.signal.aborted || response.headersSent) return;
     const message = error instanceof Error ? error.message : "Errore Qwen3-VL.";
@@ -944,6 +992,39 @@ app.patch("/api/candidature/:id", async (request, response) => {
   if (!parsed.success) { response.status(400).json({ error: "Aggiornamento non valido." }); return; }
   try { response.json(await candidature.aggiorna(request.params.id, parsed.data)); }
   catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Offerta non trovata." }); }
+});
+
+// Le chat vivono nel localStorage del browser, che Chrome scrive su disco in ritardo: se il browser si chiude
+// male una cancellazione si perde. L'elenco degli ID cancellati sta quindi anche qui, scritto subito su disco.
+const deletedConversationsFile = path.join(paths.toolsRoot, "deleted-conversations.json");
+let deletedConversationsWrite: Promise<void> = Promise.resolve();
+
+async function readDeletedConversations(): Promise<string[]> {
+  try {
+    const saved = JSON.parse(await fs.readFile(deletedConversationsFile, "utf8"));
+    return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+app.get("/api/conversations/deleted", async (_request, response) => {
+  response.json({ ids: await readDeletedConversations() });
+});
+
+app.post("/api/conversations/deleted", async (request, response) => {
+  const parsed = z.object({ ids: z.array(z.string().min(1).max(100)).min(1).max(1000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "ID non validi." }); return; }
+  // Scritture in fila e file sostituito con rename: due cancellazioni ravvicinate non si sovrascrivono.
+  const write = deletedConversationsWrite.then(async () => {
+    const ids = [...new Set([...await readDeletedConversations(), ...parsed.data.ids])].slice(-5000);
+    await fs.mkdir(path.dirname(deletedConversationsFile), { recursive: true });
+    await fs.writeFile(`${deletedConversationsFile}.tmp`, JSON.stringify(ids));
+    await fs.rename(`${deletedConversationsFile}.tmp`, deletedConversationsFile);
+  });
+  deletedConversationsWrite = write.catch(() => undefined);
+  try { await write; response.json({ ok: true }); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
 });
 
 app.get("/api/health", async (_request, response) => {
@@ -1262,7 +1343,13 @@ app.post("/api/chat", async (request, response) => {
         // il testo delle fonti entra nello stesso context della cronologia:
         // manteniamo le fonti complete nella UI, ma passiamo a Ollama una
         // versione compatta e prevedibile del contesto.
-        const searchContext = compactWebContext(await searchWeb(query, controller.signal, (event) => trace.add(event)));
+        // Lo stesso modello della chat traduce la domanda in query/categoria/periodo per SearXNG.
+        const planModel: PlanModel = usesOllama
+          ? { kind: "ollama", base: ollamaBase, model: parsed.data.model }
+          : { kind: "openai", base: usesOpenRouter ? openRouterBase : apiBase, model: parsed.data.model, apiKey: selectedApiKey ?? "" };
+        const plan = await planWebSearch(query, planModel, controller.signal);
+        trace.add({ stage: "searchx", status: "ok", message: "Piano di ricerca generato.", details: { queries: plan.queries.join(" | "), language: plan.language, category: plan.category, timeRange: plan.timeRange || "none" } });
+        const searchContext = compactWebContext(await searchWeb(query, controller.signal, (event) => trace.add(event), plan, (candidates) => selectRelevant(query, candidates, planModel, controller.signal)), usesOllama && effectiveNumCtx < 8192 ? 700 : WEB_EXCERPT_CHARS);
         webSourcesForResponse = JSON.parse(searchContext) as WebSource[];
         if (mainboardTracking) reportSources = webSourcesForResponse.map(source => ({ type: "web", label: `[${source.source}] ${source.title}`, url: source.url }));
         upstreamMessages = [
@@ -1615,14 +1702,21 @@ function capitalize(value: string) {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
 
-async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: Parameters<ReturnType<typeof createDiagnosticTrace>["add"]>[0]) => void) {
-  const recentRequested = /\b(oggi|ora|attual(?:e|i)|recent(?:e|i)|ultim[aei]\s+(?:giorn[oi]|settimana|mese)|questa\s+settimana|breaking)\b/iu.test(query);
+// Senza piano (query curate della pagina News) la query va a SearXNG intatta, categoria generale.
+async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: Parameters<ReturnType<typeof createDiagnosticTrace>["add"]>[0]) => void, plan: WebPlan = { queries: [query], category: "general", timeRange: "", language: "it" }, keepRelevant: (candidates: WebSource[]) => Promise<WebSource[]> = async (candidates) => candidates) {
+  const recentRequested = Boolean(plan.timeRange);
   const specificLookup = /\b(?:cos['’]è|cosa\s+si\s+sa\s+di|parlami\s+di|chi\s+è|informazioni\s+su)\b/iu.test(query);
   // 1) Prova SearXNG (Docker) se risponde con risultati reali.
   try {
     const started = performance.now();
-    const sources = await searchViaSearxng(query, signal);
-    if (sources.length > 0) { diagnose?.({ stage: "searchx", status: "ok", message: "SearXNG ha restituito risultati utilizzabili.", durationMs: Math.round(performance.now() - started), details: { results: sources.length, fallback: false } }); return JSON.stringify(sources); }
+    // Si tengono solo i candidati pertinenti; se sono pochi si allarga il piano e si accumula (senza duplicati).
+    let sources: WebSource[] = [];
+    for (const step of relaxWebPlan(plan)) {
+      const found = (await searchViaSearxng(step, signal)).filter((item) => !sources.some((known) => known.url === item.url));
+      sources = [...sources, ...await keepRelevant(found)].slice(0, 6).map((item, index) => ({ ...item, source: index + 1 }));
+      if (sources.length >= 3) break;
+    }
+    if (sources.length > 0) { diagnose?.({ stage: "searchx", status: "ok", message: "SearXNG ha restituito risultati utilizzabili.", durationMs: Math.round(performance.now() - started), details: { results: sources.length, fallback: false } }); return JSON.stringify(await withPageText(sources, signal)); }
     diagnose?.({ stage: "searchx", status: "warning", message: "SearXNG raggiungibile ma senza risultati utilizzabili; attivato fallback.", durationMs: Math.round(performance.now() - started), details: { results: 0, fallback: true } });
     console.warn("SearXNG ha risposto senza risultati (motori non raggiungibili dal container?), uso fallback diretto.");
   } catch (error) {
@@ -1630,26 +1724,30 @@ async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: 
     console.warn("SearXNG non raggiungibile, uso fallback diretto:", error instanceof Error ? error.message : error);
   }
   // 2) Fallback diretto dall'host: non richiede Docker, usa il proxy di sistema.
-  const fallback = await searchDirect(query, signal);
+  const fallback = await searchDirect(plan.queries[0], signal);
   diagnose?.({ stage: "searchx", status: fallback.length ? "ok" : "error", message: fallback.length ? "Fallback Web completato." : "Anche il fallback Web non ha trovato risultati.", details: { results: fallback.length, fallback: true } });
   if (recentRequested && fallback.length === 0) throw new Error("Nessuna fonte recente con data verificabile trovata.");
   if (specificLookup && fallback.length === 0) return "[]";
   if (fallback.length === 0) throw new Error("Nessun risultato dalla ricerca diretta.");
-  return JSON.stringify(fallback);
+  return JSON.stringify(await withPageText(fallback, signal));
 }
 
-async function searchViaSearxng(query: string, signal: AbortSignal) {
+/** Cerca ogni variante di query in parallelo e fonde le classifiche (RRF). */
+async function searchViaSearxng(plan: WebPlan, signal: AbortSignal): Promise<WebSource[]> {
+  const rankings = await Promise.all(plan.queries.map((query) => searxngQuery(query, plan, signal)));
+  return fuseRankings(rankings, (result) => result.url.replace(/[#?].*$/, "").replace(/\/$/, ""))
+    .slice(0, 12)
+    .map((result, index) => ({ ...result, source: index + 1 }));
+}
+
+async function searxngQuery(query: string, plan: WebPlan, signal: AbortSignal): Promise<WebSource[]> {
   const url = new URL(`${searxngBaseUrl}/search`);
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
-  url.searchParams.set("language", "it-IT");
+  url.searchParams.set("language", plan.language);
   url.searchParams.set("safesearch", "1");
-  url.searchParams.set("categories", "general");
-  const lowerQuery = query.toLocaleLowerCase("it-IT");
-  const recentWindow = /\b(oggi|ora|attual(?:e|i)|recent(?:e|i)|ultim[aei]\s+(?:giorn[oi]|settimana|mese)|questa\s+settimana|breaking)\b/u.test(lowerQuery)
-    ? (/\b(oggi|ora|breaking)\b/u.test(lowerQuery) ? "day" : /\bsettimana|giorn/u.test(lowerQuery) ? "week" : "month")
-    : "";
-  if (recentWindow) url.searchParams.set("time_range", recentWindow);
+  url.searchParams.set("categories", plan.category);
+  if (plan.timeRange) url.searchParams.set("time_range", plan.timeRange);
 
   const searchResponse = await upstreamFetch(url, {
     dispatcher: cloudTransport,
@@ -1661,23 +1759,56 @@ async function searchViaSearxng(query: string, signal: AbortSignal) {
   if (Array.isArray(payload.unresponsive_engines) && payload.unresponsive_engines.length > 0) {
     console.warn("SearXNG motori non raggiungibili:", JSON.stringify(payload.unresponsive_engines).slice(0, 500));
   }
-  const recentOnly = Boolean(recentWindow);
-  const terms = webQueryTerms(query);
-  const results = (payload.results ?? [])
+  // L'ordine è quello di SearXNG: serve alla fusione. Molti motori (es. Bing News) non danno la data,
+  // il filtro temporale lo applica già time_range, quindi i risultati senza data non vengono scartati.
+  return (payload.results ?? [])
     .filter((result) => result.title && result.url && /^https?:\/\//i.test(result.url))
-    .filter((result) => !recentOnly || Boolean(result.publishedDate))
-    .filter((result) => !terms.length || terms.some((term) => `${result.title} ${result.content}`.toLocaleLowerCase("it-IT").includes(term)))
-    .slice(0, 6);
-  return results.map((result, index) => {
-    const title = result.title!.replace(/\s+/g, " ").trim().slice(0, 200);
-    const excerpt = (result.content || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500);
-    return { source: index + 1, title, url: result.url, excerpt: result.publishedDate ? `[Pubblicato: ${result.publishedDate}] ${excerpt}` : excerpt };
+    .slice(0, 15)
+    .map((result, index) => {
+      const title = result.title!.replace(/\s+/g, " ").trim().slice(0, 200);
+      const excerpt = (result.content || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500);
+      return { source: index + 1, title, url: result.url!, excerpt: result.publishedDate ? `[Pubblicato: ${result.publishedDate}] ${excerpt}` : excerpt };
+    });
+}
+
+/** Sostituisce gli snippet con il testo della pagina (una sola chiamata Scrapling sulle fonti finali). */
+async function withPageText(sources: WebSource[], signal: AbortSignal): Promise<WebSource[]> {
+  const pages = await extractPages(sources.map((source) => source.url), signal);
+  return sources.map((source) => {
+    const page = pages.get(source.url);
+    if (!page) return source;
+    const date = source.excerpt.match(/^\[Pubblicato: ([^\]]+)\]/)?.[1] ?? page.date;
+    return { ...source, excerpt: date ? `[Pubblicato: ${date}] ${page.text}` : page.text };
   });
+}
+
+const WEB_EXCERPT_CHARS = 1500;
+
+/** Testo completo delle pagine via servizio Scrapling; se non risponde restano gli snippet di SearXNG. */
+async function extractPages(urls: string[], signal: AbortSignal) {
+  const pages = new Map<string, { text: string; date?: string }>();
+  if (!urls.length) return pages;
+  try {
+    const response = await upstreamFetch(`${scraplingBaseUrl}/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls, max_chars: WEB_EXCERPT_CHARS }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    });
+    if (!response.ok) throw new Error(`Scrapling HTTP ${response.status}`);
+    for (const page of await response.json() as Array<{ url: string; ok: boolean; text?: string; date?: string | null }>) {
+      if (page.ok && page.text) pages.set(page.url, { text: page.text, date: page.date ?? undefined });
+    }
+  } catch (error) {
+    console.warn("Scrapling non disponibile, uso gli snippet:", error instanceof Error ? error.message : error);
+  }
+  return pages;
 }
 
 type WebSource = { source: number; title: string; url: string; excerpt: string };
 
-function compactWebContext(value: string) {
+// Con num_ctx 4096 sei estratti lunghi saturano il contesto locale: il chiamante sceglie quanto testo per fonte.
+function compactWebContext(value: string, excerptChars = WEB_EXCERPT_CHARS) {
   try {
     const sources = JSON.parse(value) as WebSource[];
     if (!Array.isArray(sources)) return value.slice(0, 8_000);
@@ -1685,7 +1816,7 @@ function compactWebContext(value: string) {
       source: index + 1,
       title: String(source.title || "").slice(0, 160),
       url: String(source.url || "").slice(0, 500),
-      excerpt: String(source.excerpt || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500),
+      excerpt: String(source.excerpt || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, excerptChars + 40),
     })));
   } catch {
     return value.slice(0, 8_000);

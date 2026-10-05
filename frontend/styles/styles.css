@@ -367,6 +367,16 @@ button { color: inherit; }
 .attachment-copy small { margin-top: 4px; color: var(--muted); font-size: 8px; }
 .attachment-card > button { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #d8ddd5; background: rgba(8,10,8,.78); cursor: pointer; opacity: 0; }
 .attachment-card:hover > button, .attachment-card > button:focus-visible { opacity: 1; }
+.attachment-card.viewable { cursor: zoom-in; }
+.result-images { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 0; }
+.result-images > button { display: block; max-width: min(520px, 100%); padding: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: transparent; cursor: zoom-in; }
+.result-images img { display: block; width: 100%; height: auto; max-height: 420px; object-fit: contain; }
+.result-files { display: flex; flex-wrap: wrap; gap: 8px; }
+.result-files .generated-file-download { text-decoration: none; }
+.modal.image-viewer-modal { width: auto; max-width: min(1100px, calc(100vw - 40px)); }
+.modal.image-viewer-modal > header h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.image-viewer-modal .modal-body { display: grid; place-items: center; padding: 14px; }
+.image-viewer-modal .modal-body img { display: block; max-width: 100%; max-height: calc(100dvh - 140px); object-fit: contain; border-radius: 8px; }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.68); backdrop-filter: blur(5px); }
 .modal { width: min(510px, 100%); display: flex; flex-direction: column; background: #111411; border: 1px solid #2b3129; border-radius: 15px; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
@@ -2322,3 +2332,64 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 /* Card audio: cassetta e testo come blocco unico centrato, niente vuoto a destra. */
 .audio-mode-card .audio-welcome-card { justify-content: center; gap: 32px; }
 .audio-mode-card .audio-welcome-copy { flex: 0 1 auto; align-self: center; }
+
+/* Home: righe del titolo compatte e mascotte piccola a destra (solo desktop; sotto 850px resta la regola mobile). */
+.home-welcome h1 { margin: 10px 0 8px; line-height: 1; }
+@media (min-width: 851px) {
+  .main-panel .welcome.home-welcome { padding-right: 150px; }
+  /* immagine già ritagliata: occupa tutta l'altezza della card */
+  .home-welcome .welcome-cetriolo { display: block; position: absolute; right: 30px; top: 18px; bottom: 16px; width: auto; height: calc(100% - 34px); object-fit: contain; object-position: center bottom; margin: 0; pointer-events: none; }
+}
+
+/* Accento e descrizione delle card: stesso font, blocco compatto. */
+.welcome h1 em { margin-top: 12px; font-size: 18px; font-weight: 400; letter-spacing: 0; line-height: 1.35; }
+.welcome h1, .home-welcome h1, .main-panel .special-welcome-card h1 { margin-bottom: 2px; }
+.home-welcome > p, .main-panel .special-welcome-card p { margin-top: 0; font-family: inherit; font-size: 18px; font-weight: 500; letter-spacing: 0; line-height: 1.35; }
+
+/* Output Analyze/Audio: una riga per risultato, miniatura + testo troncato. */
+.output-results { display: grid; gap: 8px; }
+.output-result { display: flex; min-width: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.output-result-open { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: flex-start; padding: 8px; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.output-result:hover { border-color: var(--lime); }
+.output-result-open img, .output-result-open .output-file-icon { flex: 0 0 72px; width: 72px; height: 72px; border-radius: 7px; object-fit: cover; display: grid; place-items: center; }
+.output-result-open > span:last-child { min-width: 0; display: grid; gap: 3px; }
+.output-result-open strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.output-result-open small { color: var(--muted); font-size: 10px; }
+.output-result-open em { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-style: normal; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.output-result .output-delete { width: auto; flex: 0 0 auto; border-width: 0 0 0 1px; border-radius: 0; padding: 0 12px; }
+@media (max-width: 520px) { .output-result-open img, .output-result-open .output-file-icon { flex-basis: 52px; width: 52px; height: 52px; } }
+.message-logs p { margin: 2px 0; font-family: ui-monospace, monospace; color: var(--muted); }
+
+/* Card ristampata da \chat in mezzo ai messaggi. */
+.message-list .welcome-stage.message-welcome-card { min-height: 0; overflow: visible; margin: 18px 0 26px; }
+
+/* Descrizione delle card: più piccola dell'accento, non in competizione col titolo. */
+.home-welcome > p, .main-panel .special-welcome-card p { font-size: 14px; font-weight: 400; line-height: 1.45; margin-bottom: 12px; }
+
+/* Editor card compatto: testo + px + B sulla stessa riga. */
+.welcome-edit-form.compact-edit { gap: 6px; margin: 8px 0 10px; max-width: 560px; }
+.welcome-edit-row { display: flex; gap: 6px; align-items: center; }
+.welcome-edit-form .welcome-edit-row input { flex: 1; min-width: 0; height: 32px; padding: 5px 9px; font-size: 13px; }
+.welcome-edit-form .welcome-edit-row .welcome-edit-size { flex: 0 0 58px; width: 58px; padding: 5px 6px; text-align: center; }
+.welcome-edit-bold { flex: 0 0 32px; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
+.welcome-edit-bold.active { color: #fff; background: #17140f; border-color: #17140f; }
+.welcome-edit-form.compact-edit .welcome-edit-actions { justify-content: flex-start; }
+.welcome-edit-form.compact-edit .welcome-edit-actions button { min-height: 30px; padding: 5px 12px; }
+
+/* Seconda riga delle card (accento) identica alla descrizione sotto: stesso font, dimensione, peso normale e grigio. */
+.welcome h1 em, .special-welcome-card h1 em { display: block; margin-top: 12px; font-family: inherit; font-size: 14px; font-style: normal; font-weight: 400; letter-spacing: 0; line-height: 1.45; color: var(--muted); }
+.welcome > p, .home-welcome > p, .special-welcome-card p { color: var(--muted); font-weight: 400; }
+
+/* Titolo card: nome strumento · modello (modello più leggero, stessa riga). */
+.welcome-model { font-size: .55em; font-weight: 500; letter-spacing: 0; color: var(--muted); white-space: nowrap; }
+/* Card audio: titolo su una riga, modello sotto. */
+.audio-welcome-copy h2 { white-space: nowrap; margin-bottom: 2px; }
+.audio-welcome-model { display: block; margin: 0 0 12px; color: var(--muted); font-size: 14px; font-weight: 500; }
+/* Card strumenti e audio: linea di separazione sotto la riga del titolo.
+   Margini ridotti per compensare la linea: l'altezza della card resta invariata. */
+.welcome-title-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.main-panel .special-welcome-card h1 { margin-top: 4px; }
+.special-welcome-card .welcome-title-line + em { margin-top: 8px; }
+.audio-welcome-copy .welcome-title-line { margin-bottom: 6px; }
+.audio-welcome-copy .welcome-title-line h2 { margin: 0; }
+.app-shell[data-theme="cosmic"] .welcome-title-line { border-bottom-color: rgba(23,20,15,.14); }

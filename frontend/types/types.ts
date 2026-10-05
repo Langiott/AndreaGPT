@@ -33,7 +33,15 @@ export interface ChatMessage {
   diagnosticFeedback?: 1 | -1;
   generatedImage?: { url: string; name: string; width: number; height: number; seed: number; output: string; device?: string; model?: string };
   generatedFile?: { name: string; type: string; data: string };
+  /** Immagini prodotte da uno strumento (es. YOLO annotato), apribili a schermo intero. */
+  resultImages?: { url: string; name: string }[];
+  /** File scaricabili prodotti da uno strumento (es. CSV/JSON dei bounding box). */
+  resultFiles?: { url: string; name: string }[];
   audio?: { status: "transcribing" | "complete" | "error"; fileName: string };
+  /** Righe tecniche (tempi, modello, dispositivo) mostrate solo dal pulsante Logs. */
+  logs?: string[];
+  /** Messaggio-segnaposto creato da \chat: card di benvenuto dello strumento della chat (ocr, yolo, transcribe…). */
+  welcomeCard?: string;
 }
 
 export interface DiagnosticEvent {
@@ -58,6 +66,8 @@ export interface Conversation {
   id: string;
   title: string;
   customTitle?: boolean;
+  /** Strumento della chat (yolo, ocr, analyze…): resta valido anche se la chat viene rinominata. */
+  mode?: string;
   brainPrivate?: boolean;
   messages: ChatMessage[];
   modelId: string;

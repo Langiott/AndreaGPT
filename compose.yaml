@@ -19,6 +19,25 @@ services:
       retries: 10
       start_period: 15s
 
+  scrapling:
+    build:
+      context: ./scrapling
+    container_name: andreagpt-scrapling
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: andreagpt-n8n
@@ -94,6 +113,7 @@ services:
       LOCAL_ROUTER_ENABLED: ${LOCAL_ROUTER_ENABLED:-1}
       LOCAL_ROUTER_THRESHOLD: ${LOCAL_ROUTER_THRESHOLD:-0.75}
       SEARXNG_URL: http://searxng:8080
+      SCRAPLING_URL: http://scrapling:8090
       N8N_URL: http://n8n:5678
       N8N_API_KEY: ${N8N_API_KEY:-}
       ADZUNA_APP_ID: ${ADZUNA_APP_ID:-}
@@ -116,6 +136,8 @@ services:
     depends_on:
       searxng:
         condition: service_healthy
+      scrapling:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s

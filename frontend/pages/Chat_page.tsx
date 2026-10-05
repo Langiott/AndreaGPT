@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 /**
  * Pagina principale della chat AndreaGPT.
  * Collega conversazioni, Brain, Web, file, modelli e strumenti locali.
@@ -11,6 +12,7 @@ import {
   AudioLines,
   ArrowLeft,
   Archive,
+  ScanEye,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -107,47 +109,66 @@ function removeUnwantedAudioMessages(messages: ChatMessage[]) {
   return messages.filter((message) => !(message.role === "assistant" && message.audio && unwantedAudioCaptionTest.test(message.content)));
 }
 
-function AudioWelcomeCard({ variant, recording, transcribing, title, kicker, actions }: { variant: "transcribe" | "record"; recording: boolean; transcribing: boolean; title: string; kicker: string; actions: ReactNode }) {
+function AudioWelcomeCard({ variant, recording, transcribing, title, model, actions, titleStyle }: { variant: "transcribe" | "record"; recording: boolean; transcribing: boolean; title: string; model: string; actions: ReactNode; titleStyle?: CSSProperties }) {
   const isRecordingCard = variant === "record";
   const busy = isRecordingCard ? recording : transcribing;
   return <div className="audio-welcome-card">
     <div className="audio-welcome-visual"><AudioCassette playing={busy} /><span className="audio-signal audio-signal-one" /><span className="audio-signal audio-signal-two" /></div>
     <div className="audio-welcome-copy">
-      <span className="welcome-kicker">{kicker}</span>
-      <h2>{isRecordingCard ? recording ? "Sto registrando audio" : title : transcribing ? "Sto trascrivendo audio" : title}</h2>
+      <div className="welcome-title-line"><h2 style={titleStyle}>{isRecordingCard ? recording ? "Sto registrando audio" : title : transcribing ? "Sto trascrivendo audio" : title}</h2></div>
+      <span className="audio-welcome-model">{model}</span>
       <div className="audio-welcome-actions welcome-tool-actions">{actions}</div>
     </div>
   </div>;
 }
 
-function AudioCardEditForm({ draft, onDraft, onCancel, onSave }: Pick<CardEditProps, "draft" | "onDraft" | "onCancel" | "onSave">) {
-  return <form className="welcome-edit-form audio-edit-form" onSubmit={(event) => { event.preventDefault(); onSave(); }} onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}>
-    <label>Titolo<input autoFocus value={draft.title} maxLength={80} onChange={(event) => onDraft({ ...draft, title: event.target.value })} /></label>
-    <label>Etichetta<input value={draft.accent} maxLength={40} onChange={(event) => onDraft({ ...draft, accent: event.target.value })} /></label>
+function AudioCardEditForm(props: Pick<CardEditProps, "draft" | "onDraft" | "onCancel" | "onSave">) {
+  return <WelcomeEditForm {...props} className="audio-edit-form" lines={[["title", "Titolo"]]} />;
+}
+
+type WelcomeLine = "title" | "accent" | "subtitle";
+/** Stile di una riga della card: dimensione in px (vuota = automatica) e grassetto. */
+type WelcomeLineStyle = { size?: number; bold?: boolean };
+type WelcomeCardText = { title: string; accent: string; subtitle: string; styles?: Partial<Record<WelcomeLine, WelcomeLineStyle>> };
+function lineStyle(text: WelcomeCardText, line: WelcomeLine): CSSProperties | undefined {
+  const style = text.styles?.[line];
+  if (!style) return undefined;
+  return { ...(style.size ? { fontSize: `${style.size}px` } : {}), ...(style.bold === undefined ? {} : { fontWeight: style.bold ? 700 : 400 }) };
+}
+/** Editor compatto: una riga per testo, con dimensione e grassetto accanto. Un testo vuoto nasconde la riga. */
+function WelcomeEditForm({ draft, onDraft, onCancel, onSave, lines = [["title", "Titolo"], ["accent", "Accento"], ["subtitle", "Descrizione"]], className = "" }: Pick<CardEditProps, "draft" | "onDraft" | "onCancel" | "onSave"> & { lines?: Array<[WelcomeLine, string]>; className?: string }) {
+  const setStyle = (line: WelcomeLine, patch: WelcomeLineStyle) => onDraft({ ...draft, styles: { ...draft.styles, [line]: { ...draft.styles?.[line], ...patch } } });
+  return <form className={`welcome-edit-form compact-edit ${className}`} onSubmit={(event) => { event.preventDefault(); onSave(); }} onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}>
+    {lines.map(([line, label], index) => { const style = draft.styles?.[line]; return <div key={line} className="welcome-edit-row">
+      <input autoFocus={index === 0} value={draft[line]} placeholder={`${label} (vuoto = nascosto)`} aria-label={label} maxLength={line === "subtitle" ? 220 : 80} onChange={(event) => onDraft({ ...draft, [line]: event.target.value })} />
+      <input type="number" className="welcome-edit-size" min={8} max={96} value={style?.size ?? ""} placeholder="px" title={`Dimensione ${label.toLowerCase()} (vuoto = automatica)`} aria-label={`Dimensione ${label}`} onChange={(event) => setStyle(line, { size: event.target.value ? Math.min(96, Math.max(8, Number(event.target.value))) : undefined })} />
+      <button type="button" className={`welcome-edit-bold${style?.bold ? " active" : ""}`} aria-pressed={Boolean(style?.bold)} title={`Grassetto ${label.toLowerCase()}`} onClick={() => setStyle(line, { bold: !style?.bold })}>B</button>
+    </div>; })}
     <div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={onCancel}>Annulla</button><button type="submit" className="primary-action">Salva</button></div>
   </form>;
 }
-
-type WelcomeCardText = { title: string; accent: string; subtitle: string };
+type OutputFile = { name: string; url: string; size: number; updatedAt: number; image: boolean; thumb?: string; excerpt?: string };
+const emptyOutputFiles = { images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [] };
+const outputFolderLabel = { images: "Immagini generate", ocr: "OCR", yolo: "YOLO", compactChat: "Chat compatte", analyze: "Analyze", audio: "Audio" } as const;
 type CardEditProps = { editing: boolean; draft: WelcomeCardText; onDraft: (draft: WelcomeCardText) => void; onEdit: () => void; onCancel: () => void; onSave: () => void };
 
-/** Card di benvenuto comune a tutti gli strumenti: kicker, titolo con accento, riga di pulsanti. */
-function ToolWelcomeCard({ className, kicker, text, status, actions, children, editSubtitle = true, editing, draft, onDraft, onEdit, onCancel, onSave }: CardEditProps & { className?: string; kicker: string; text: WelcomeCardText; status?: ReactNode; actions?: ReactNode; children?: ReactNode; editSubtitle?: boolean }) {
+/** Titolo, accento e descrizione: le righe vuote non vengono stampate. */
+function WelcomeCardLines({ text, model, divided = false }: { text: WelcomeCardText; model?: string; divided?: boolean }) {
+  // card strumenti: la riga del titolo è separata da una linea dal testo sotto
+  return <>
+    {(text.title || text.accent) && <h1>{text.title && <span className={divided ? "welcome-title-line" : undefined} style={lineStyle(text, "title")}><span>{text.title}{model && <span className="welcome-model"> · {model}</span>}</span></span>}{text.title && text.accent && !divided && <br />}{text.accent && <em style={lineStyle(text, "accent")}>{text.accent}</em>}</h1>}
+    {text.subtitle && <p style={lineStyle(text, "subtitle")}>{text.subtitle}</p>}
+  </>;
+}
+
+/** Card di benvenuto comune a tutti gli strumenti: titolo · modello, accento, riga di pulsanti, stato sotto. */
+function ToolWelcomeCard({ className, model, text, status, actions, children, editSubtitle = true, editing, draft, onDraft, onEdit, onCancel, onSave }: CardEditProps & { className?: string; model: string; text: WelcomeCardText; status?: ReactNode; actions?: ReactNode; children?: ReactNode; editSubtitle?: boolean }) {
   return <div className={`special-welcome-card${className ? ` ${className}` : ""}`}>
     <button type="button" className="welcome-edit-button" onClick={onEdit} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>
-    <span className="welcome-kicker">{kicker}</span>
-    {status}
-    {editing ? <form className="welcome-edit-form" onSubmit={(event) => { event.preventDefault(); onSave(); }} onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}>
-      <label>Titolo<input autoFocus value={draft.title} maxLength={80} onChange={(event) => onDraft({ ...draft, title: event.target.value })} /></label>
-      <label>Accento<input value={draft.accent} maxLength={80} onChange={(event) => onDraft({ ...draft, accent: event.target.value })} /></label>
-      {editSubtitle && <label>Descrizione<input value={draft.subtitle} maxLength={160} onChange={(event) => onDraft({ ...draft, subtitle: event.target.value })} /></label>}
-      <div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={onCancel}>Annulla</button><button type="submit" className="primary-action">Salva</button></div>
-    </form> : <>
-      <h1>{text.title}<br /><em>{text.accent}</em></h1>
-      {text.subtitle && <p>{text.subtitle}</p>}
-    </>}
+    {editing ? <WelcomeEditForm draft={draft} onDraft={onDraft} onCancel={onCancel} onSave={onSave} lines={editSubtitle ? undefined : [["title", "Titolo"], ["accent", "Accento"]]} /> : <WelcomeCardLines text={text} model={model} divided />}
     {actions && <div className="welcome-tool-actions">{actions}</div>}
     {children}
+    {status}
   </div>;
 }
 
@@ -190,8 +211,27 @@ const ANALYZE_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 const ANALYZE_ATTACHMENTS_SIZE = 50 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
 type Theme = "cosmic" | "normal" | "aurora";
-type YoloTask = "detect" | "segment" | "classify" | "pose" | "obb";
+type YoloTask = "detect" | "bbox" | "segment" | "classify" | "pose";
 type SpecialMode = "normal" | "ocr" | "yolo" | "analyze" | "image" | "convert";
+const specialModes: SpecialMode[] = ["normal", "ocr", "yolo", "analyze", "image", "convert"];
+/** Strumento di una chat: campo salvato, poi titolo standard, poi contenuto (chat vecchie o rinominate). */
+function conversationMode(conversation?: Conversation): SpecialMode {
+  if (!conversation) return "normal";
+  if (specialModes.includes(conversation.mode as SpecialMode)) return conversation.mode as SpecialMode;
+  const title = conversation.title;
+  if (/^OCR \d+$/i.test(title)) return "ocr";
+  if (/^YOLO \d+$/i.test(title)) return "yolo";
+  if (/^(?:Analyze|Analizza IMG) \d+$/i.test(title)) return "analyze";
+  if (/^Image \d+$/i.test(title)) return "image";
+  if (/^Converti \d+$/i.test(title)) return "convert";
+  const firstUser = conversation.messages.find((message) => message.role === "user")?.content ?? "";
+  if (firstUser === "Esegui OCR sugli allegati.") return "ocr";
+  if (firstUser === "Analizza gli elementi nelle immagini con YOLO.") return "yolo";
+  if (conversation.messages.some((message) => message.generatedImage)) return "image";
+  if (conversation.messages.some((message) => message.generatedFile)) return "convert";
+  if (conversation.messages.some((message) => message.logs?.some((line) => line.includes("Analisi completata")))) return "analyze";
+  return "normal";
+}
 type AudioWelcomeMode = "none" | "transcribe" | "record";
 type ImageServiceStatus = { status: "checking" | "stopped" | "ready" | "error"; ready: boolean; message: string };
 type ActiveOperation = { label: string; detail: string; startedAt: number };
@@ -331,19 +371,19 @@ export default function App() {
   const [researchResult, setResearchResult] = useState<{ label: string; article: string; sources: Array<{ id: number; title: string; url: string; description: string }> } | null>(null);
   const [researchPage, setResearchPage] = useState(0);
   const [researchFullscreen, setResearchFullscreen] = useState(false);
-  const [outputFolder, setOutputFolder] = useState<"images" | "ocr" | "yolo" | "compactChat" | null>(null);
-  const [outputDelete, setOutputDelete] = useState<{ folder: "Image" | "OCR" | "YOLO" | "Compatta_chat"; name: string } | null>(null);
+  const [outputFolder, setOutputFolder] = useState<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio" | null>(null);
+  const [outputDelete, setOutputDelete] = useState<{ folder: "Image" | "OCR" | "YOLO" | "Compatta_chat" | "Analyze" | "Audio"; name: string } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{ id: string; title: string } | null>(null);
-  const [outputFiles, setOutputFiles] = useState<{ images: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; ocr: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; yolo: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }>; compactChat: Array<{ name: string; url: string; size: number; updatedAt: number; image: boolean }> }>({ images: [], ocr: [], yolo: [], compactChat: [] });
+  const [outputFiles, setOutputFiles] = useState<Record<"images" | "ocr" | "yolo" | "compactChat" | "analyze" | "audio", OutputFile[]>>(emptyOutputFiles);
   const [compactingChat, setCompactingChat] = useState(false);
   // Chat compatta aperta nel lettore dell'archivio.
-  const [compactOpen, setCompactOpen] = useState<string | null>(null);
+  const [compactOpen, setCompactOpen] = useState<{ folder: "Compatta_chat" | "Analyze" | "Audio"; name: string } | null>(null);
   const [settings, setSettings] = useState<ChatSettings>(loadSettings);
   const [ollamaProfiles, setOllamaProfiles] = useState<Record<string, OllamaProfile>>(() => loadOllamaProfiles());
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [diagnosticReportMessageId, setDiagnosticReportMessageId] = useState("");
   const [diagnosticReportCopied, setDiagnosticReportCopied] = useState(false);
-  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap", boolean>>>>({});
+  const [openMessagePanels, setOpenMessagePanels] = useState<Record<string, Partial<Record<"brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "logs", boolean>>>>({});
   const [shapLoading, setShapLoading] = useState("");
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -358,32 +398,51 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => { const saved = localStorage.getItem("andreagpt-theme"); return saved === "normal" || saved === "aurora" ? saved : "cosmic"; });
   const [historyCollapsed, setHistoryCollapsed] = useState(() => localStorage.getItem("andreagpt-history-collapsed") === "true");
   const [modelsCollapsed, setModelsCollapsed] = useState(() => localStorage.getItem("andreagpt-models-collapsed") === "true");
-  const [welcomeTitle, setWelcomeTitle] = useState(() => localStorage.getItem("andreagpt-welcome-title") || "Ciao Cetriolo,");
-  const [welcomeAccent, setWelcomeAccent] = useState(() => localStorage.getItem("andreagpt-welcome-accent") || "oggi che facciamo?");
-  const [welcomeSubtitle, setWelcomeSubtitle] = useState(() => localStorage.getItem("andreagpt-welcome-subtitle") || "Scrivi un messaggio oppure scegli uno strumento dalla barra in alto.");
-  const [welcomeEditing, setWelcomeEditing] = useState(false);
-  const [welcomeDraft, setWelcomeDraft] = useState({ title: "", accent: "", subtitle: "" });
   const DEFAULT_CARD_TEXTS: Record<string, WelcomeCardText> = {
-    analyze: { title: "Analyze", accent: "un’immagine.", subtitle: "Il primo avvio scarica e carica il modello: lo stato e il tempo trascorso restano sempre visibili." },
-    ocr: { title: "Pronto per", accent: "leggere i tuoi file.", subtitle: "Allega una o più immagini o PDF. Il testo verrà estratto localmente e salvato nella cartella OCR." },
-    yolo: { title: "Capisco gli", accent: "elementi nell’immagine.", subtitle: "Scegli il task e allega una o più immagini." },
-    image: { title: "Descrivila.", accent: "Io la creo.", subtitle: "" },
-    convert: { title: "Trasforma i tuoi", accent: "documenti.", subtitle: "" },
-    transcribe: { title: "Trascrivi audio", accent: "TRASCRIVI AUDIO", subtitle: "" },
-    record: { title: "Registra audio", accent: "REGISTRA AUDIO", subtitle: "" },
+    // Home: i vecchi testi salvati separatamente fanno da punto di partenza.
+    home: { title: localStorage.getItem("andreagpt-welcome-title") ?? "Ciao Cetriolo,", accent: localStorage.getItem("andreagpt-welcome-accent") ?? "oggi che facciamo?", subtitle: localStorage.getItem("andreagpt-welcome-subtitle") ?? "Chatta con il modello locale" },
+    analyze: { title: "Analyze", accent: "Analizza qualsiasi immagine", subtitle: "Descrive oggetti, persone e sfondo." },
+    ocr: { title: "OCR", accent: "Estrae il testo da immagini e PDF", subtitle: "Il testo viene salvato nella cartella OCR." },
+    yolo: { title: "YOLO", accent: "Computer vision sulle immagini", subtitle: "Detection, bounding box, segmentazione, classificazione, pose." },
+    image: { title: "Image", accent: "Descrivila, io la creo", subtitle: "" },
+    convert: { title: "Conversione", accent: "Converte i tuoi documenti", subtitle: "" },
+    transcribe: { title: "Trascrivi audio", accent: "", subtitle: "" },
+    record: { title: "Registra audio", accent: "", subtitle: "" },
+  };
+  // Testi predefiniti precedenti: se salvati invariati vengono sostituiti dai nuovi (migrazione una tantum).
+  const OLD_CARD_TEXTS: Record<string, Partial<WelcomeCardText>> = {
+    analyze: { accent: "un’immagine.", subtitle: "Il primo avvio scarica e carica il modello: lo stato e il tempo trascorso restano sempre visibili." },
+    ocr: { accent: "leggere i tuoi file.", subtitle: "Allega una o più immagini o PDF. Il testo verrà estratto localmente e salvato nella cartella OCR." },
+    yolo: { accent: "elementi nell’immagine.", subtitle: "Scegli il task e allega una o più immagini." },
+    image: { accent: "Io la creo." },
+    convert: { accent: "documenti." },
+    transcribe: { accent: "TRASCRIVI AUDIO" },
+    record: { accent: "REGISTRA AUDIO" },
   };
   const [cardTexts, setCardTexts] = useState<Record<string, WelcomeCardText>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("andreagpt-welcome-cards") || "{}") as Record<string, Partial<WelcomeCardText>>;
+      // Una tantum: la seconda riga ora segue lo stile della descrizione, via grassetto e dimensione salvati prima.
+      const resetAccent = localStorage.getItem("andreagpt-accent-style-reset") !== "1";
+      // Una tantum: il titolo diventa il nome dello strumento (il modello è aggiunto accanto).
+      const resetTitles = localStorage.getItem("andreagpt-card-titles-v2") !== "1";
       const merged: Record<string, WelcomeCardText> = {};
       for (const [key, defaults] of Object.entries(DEFAULT_CARD_TEXTS)) {
-        merged[key] = { title: saved[key]?.title || defaults.title, accent: saved[key]?.accent || defaults.accent, subtitle: saved[key]?.subtitle ?? defaults.subtitle };
+        const styles = saved[key]?.styles;
+        const old = resetTitles && key !== "home" ? OLD_CARD_TEXTS[key] : undefined;
+        const pick = (line: "accent" | "subtitle") => old && (saved[key]?.[line] === undefined || saved[key]?.[line] === old[line]) ? defaults[line] : saved[key]?.[line] ?? defaults[line];
+        merged[key] = { title: old ? defaults.title : saved[key]?.title ?? defaults.title, accent: pick("accent"), subtitle: pick("subtitle"), styles: resetAccent && styles ? { ...styles, accent: undefined } : styles };
+      }
+      if (resetAccent || resetTitles) {
+        localStorage.setItem("andreagpt-welcome-cards", JSON.stringify(merged));
+        localStorage.setItem("andreagpt-accent-style-reset", "1");
+        localStorage.setItem("andreagpt-card-titles-v2", "1");
       }
       return merged;
     } catch { return DEFAULT_CARD_TEXTS; }
   });
   const [editingCard, setEditingCard] = useState<string | null>(null);
-  const [cardDraft, setCardDraft] = useState({ title: "", accent: "", subtitle: "" });
+  const [cardDraft, setCardDraft] = useState<WelcomeCardText>({ title: "", accent: "", subtitle: "" });
   function startCardEdit(id: string) {
     const current = cardTexts[id] ?? DEFAULT_CARD_TEXTS[id];
     if (!current) return;
@@ -391,12 +450,9 @@ export default function App() {
     setEditingCard(id);
   }
   function saveCardEdit(id: string) {
-    const defaults = DEFAULT_CARD_TEXTS[id];
-    if (!defaults) { setEditingCard(null); return; }
-    const title = cardDraft.title.trim() || defaults.title;
-    const accent = cardDraft.accent.trim() || defaults.accent;
-    const subtitle = cardDraft.subtitle.trim() || defaults.subtitle;
-    setCardTexts((current) => ({ ...current, [id]: { title, accent, subtitle } }));
+    if (!DEFAULT_CARD_TEXTS[id]) { setEditingCard(null); return; }
+    // Salva esattamente ciò che è scritto: una riga cancellata resta cancellata.
+    setCardTexts((current) => ({ ...current, [id]: { title: cardDraft.title.trim(), accent: cardDraft.accent.trim(), subtitle: cardDraft.subtitle.trim(), styles: cardDraft.styles } }));
     setEditingCard(null);
   }
   function cardEditProps(id: string): CardEditProps {
@@ -499,7 +555,9 @@ export default function App() {
         return;
       }
       setMessages((current) => current.map((message) => message.id === audioMessageId ? { ...message, content: transcript, audio: { status: "complete", fileName: file.name } } : message));
-      if (audioSummaryRef.current) void summarizeTranscript(transcript, conversationId);
+      const note = `# ${file.name}\n\n## Trascrizione\n\n${transcript}\n`;
+      const saved: { name?: string } = await fetch("/api/output/Audio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: file.name, content: note }) }).then(response => response.ok ? response.json() as Promise<{ name?: string }> : {}).catch(() => ({} as { name?: string }));
+      if (audioSummaryRef.current) void summarizeTranscript(transcript, conversationId, saved.name ? { name: saved.name, note } : undefined);
     } catch (caught) {
       const message = userErrorMessage(caught, "Trascrizione fallita.");
       setMessages((current) => current.map((item) => item.id === audioMessageId ? { ...item, content: message, audio: { status: "error", fileName: file.name } } : item));
@@ -509,7 +567,7 @@ export default function App() {
   }
 
   /** Riassunto e punti d'azione della trascrizione, in streaming in un nuovo messaggio. */
-  async function summarizeTranscript(transcript: string, conversationId: string) {
+  async function summarizeTranscript(transcript: string, conversationId: string, output?: { name: string; note: string }) {
     if (!selectedModel) { setError("Riassunto: nessun modello selezionato."); return; }
     const assistantId = createId();
     setMessages((current) => [...current, { id: assistantId, role: "assistant", content: "", modelId: selectedModel.id, modelName: selectedModel.name, modelProvider: selectedModel.provider }]);
@@ -517,6 +575,7 @@ export default function App() {
     abortRef.current = controller;
     setLoading(true);
     const streamBatch = createStreamBatch((content) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content } : message)));
+    let summary = "";
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
@@ -557,10 +616,12 @@ export default function App() {
           try { event = JSON.parse(data); } catch { continue; }
           if (event.error) throw new Error(event.error);
           const token = event.choices?.[0]?.delta?.content ?? "";
-          if (token) streamBatch.append(token);
+          if (token) { streamBatch.append(token); summary += token; }
         }
         if (done) break;
       }
+      // Il riassunto finisce nella stessa nota di OUTPUT/Audio.
+      if (output && summary.trim()) void fetch(`/api/output/Audio/${encodeURIComponent(output.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: `${output.note}\n${summary.trim()}\n` }) }).catch(() => undefined);
     } catch (caught) {
       if ((caught as Error).name !== "AbortError") setError(userErrorMessage(caught, "Riassunto non riuscito."));
     } finally {
@@ -573,7 +634,7 @@ export default function App() {
   function openOutputFolder(folder: "images" | "ocr" | "yolo" | null) {
     setOutputFolder(folder);
     setOutputOpen(true);
-    void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles({ images: [], ocr: [], yolo: [], compactChat: [] }));
+    void fetch("/api/output").then(response => response.json()).then(data => setOutputFiles(data)).catch(() => setOutputFiles(emptyOutputFiles));
   }
 
   async function toggleRecording() {
@@ -660,10 +721,11 @@ export default function App() {
     : defaultOllamaProfile(selectedModel);
   const activeConversationTitle = conversations.find((conversation) => conversation.id === activeConversationId)?.title ?? "";
   const imageConversation = specialMode === "image" || /^Image \d+$/i.test(activeConversationTitle);
+  const activeConversationMode = conversationMode(conversations.find((conversation) => conversation.id === activeConversationId));
+  // Anche dopo un ricaricamento la chat riapre il suo strumento (YOLO, OCR, Analyze…).
   useEffect(() => {
-    if (/^Image \d+$/i.test(activeConversationTitle)) setSpecialMode("image");
-    else if (/^(?:Analyze|Analizza IMG) \d+$/i.test(activeConversationTitle)) setSpecialMode("analyze");
-  }, [activeConversationTitle]);
+    if (activeConversationMode !== "normal") setSpecialMode(activeConversationMode);
+  }, [activeConversationId, activeConversationMode]);
 
   useEffect(() => {
     if (!imageConversation || !messages.some(message => message.role === "assistant" && !message.generatedImage && /ComfyUI|generando|generazione/i.test(message.content))) return;
@@ -768,7 +830,7 @@ export default function App() {
     }
   }
 
-  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image" | "shap") {
+  function toggleMessagePanel(messageId: string, panel: "brain" | "web" | "metrics" | "diagnostics" | "image" | "shap" | "logs") {
     setOpenMessagePanels((current) => ({
       ...current,
       [messageId]: { brain: false, web: false, metrics: false, diagnostics: false, ...current[messageId], [panel]: !current[messageId]?.[panel] },
@@ -847,9 +909,8 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!loading) persistMessages("andreagpt-messages", messages);
-  }, [messages, loading]);
+  // La chat attiva sta già dentro "andreagpt-conversations": la vecchia copia separata occupava solo spazio.
+  useEffect(() => { try { localStorage.removeItem("andreagpt-messages"); } catch { /* sessione privata */ } }, []);
 
   useEffect(() => {
     setMessages((current) => removeUnwantedAudioMessages(current));
@@ -889,7 +950,7 @@ export default function App() {
       const title = existing?.customTitle
         ? existing.title
         : createConversationTitleFromMessages(messages);
-      const conversation: Conversation = { id: activeConversationId, title, customTitle: existing?.customTitle, brainPrivate: existing?.brainPrivate || messages.some((m) => m.brainPrivate), messages, modelId: selectedModelId, updatedAt: Date.now() };
+      const conversation: Conversation = { id: activeConversationId, title, customTitle: existing?.customTitle, mode: existing?.mode, brainPrivate: existing?.brainPrivate || messages.some((m) => m.brainPrivate), messages, modelId: selectedModelId, updatedAt: Date.now() };
       const exists = Boolean(existing);
       return exists
         ? current.map((item) => item.id === activeConversationId ? conversation : item)
@@ -897,19 +958,54 @@ export default function App() {
     });
   }, [activeConversationId, messages, selectedModelId, loading]);
 
+  // Ogni avvio apre una scheda nuova e le vecchie restano aperte con la loro lista in memoria:
+  // la scheda più recente vince, le altre smettono di scrivere e si ricaricano appena libere.
+  const staleTabRef = useRef(false);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
   useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("andreagpt-tabs");
+    channel.onmessage = (event) => {
+      if (event.data !== "nuova-scheda") return;
+      staleTabRef.current = true;
+      if (!loadingRef.current) reloadStaleTab();
+    };
+    // Una scheda ricaricata perché vecchia non si annuncia: altrimenti le schede si ricaricherebbero a vicenda.
+    let reloadedAsStale = false;
+    try { reloadedAsStale = sessionStorage.getItem(STALE_RELOAD_KEY) === "1"; sessionStorage.removeItem(STALE_RELOAD_KEY); } catch { /* sessione privata */ }
+    if (!reloadedAsStale) channel.postMessage("nuova-scheda");
+    return () => channel.close();
+  }, []);
+  useEffect(() => {
+    if (!staleTabRef.current || loading) return;
+    // La risposta appena finita va salvata, ma solo le chat più aggiornate qui che nel browser.
+    try {
+      const stored = JSON.parse(localStorage.getItem("andreagpt-conversations") ?? "[]") as Conversation[];
+      const newer = conversations.filter((mine) => !stored.some((other) => other.id === mine.id && other.updatedAt >= mine.updatedAt));
+      if (newer.length) persistConversations([...newer, ...stored.filter((other) => !newer.some((mine) => mine.id === other.id))]);
+    } catch { /* memoria piena: si ricarica comunque */ }
+    reloadStaleTab();
+  }, [loading]);
+
+  useEffect(() => {
+    if (staleTabRef.current) return;
     try { persistConversations(conversations); } catch { /* quota piena: resta lo stato in memoria */ }
   }, [conversations]);
 
-  // Una cancellazione fatta in un'altra scheda vale subito anche qui.
+  // Una cancellazione fatta in un'altra scheda, o salvata sul server, vale subito anche qui.
   useEffect(() => {
-    function onStorage(event: StorageEvent) {
-      if (event.key !== DELETED_CONVERSATIONS_KEY) return;
+    function dropDeleted() {
       const deleted = loadDeletedConversationIds();
       setConversations((current) => current.some((conversation) => deleted.has(conversation.id)) ? current.filter((conversation) => !deleted.has(conversation.id)) : current);
       if (deleted.has(activeConversationIdRef.current)) { setActiveConversationId(""); setMessages([]); setSpecialMode("normal"); }
     }
+    function onStorage(event: StorageEvent) {
+      if (event.key === DELETED_CONVERSATIONS_KEY) dropDeleted();
+    }
     window.addEventListener("storage", onStorage);
+    // Il localStorage può tornare indietro se Chrome si chiude male: l'elenco del server è quello che conta.
+    void syncDeletedConversations().then((changed) => { if (changed) dropDeleted(); });
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
@@ -964,11 +1060,8 @@ export default function App() {
   }, [customInstructions]);
 
   useEffect(() => {
-    localStorage.setItem("andreagpt-welcome-title", welcomeTitle);
-    localStorage.setItem("andreagpt-welcome-accent", welcomeAccent);
-    localStorage.setItem("andreagpt-welcome-subtitle", welcomeSubtitle);
     try { localStorage.setItem("andreagpt-welcome-cards", JSON.stringify(cardTexts)); } catch { /* quota superata: resta lo stato in memoria */ }
-  }, [welcomeTitle, welcomeAccent, welcomeSubtitle, cardTexts]);
+  }, [cardTexts]);
 
   useEffect(() => {
     localStorage.setItem("andreagpt-image-settings", JSON.stringify(imageSettings));
@@ -1104,7 +1197,7 @@ export default function App() {
     setAttachments([]);
     setError("");
     setAudioWelcomeMode("none");
-    setSpecialMode(/^OCR \d+$/i.test(conversation.title) ? "ocr" : /^YOLO \d+$/i.test(conversation.title) ? "yolo" : /^(?:Analyze|Analizza IMG) \d+$/i.test(conversation.title) ? "analyze" : /^Image \d+$/i.test(conversation.title) ? "image" : /^Converti \d+$/i.test(conversation.title) ? "convert" : "normal");
+    setSpecialMode(conversationMode(conversation));
     if (models.some((model) => model.id === conversation.modelId)) setSelectedModelId(conversation.modelId);
     setSidebarOpen(false);
   }
@@ -1114,8 +1207,10 @@ export default function App() {
     const remaining = conversations.filter((conversation) => conversation.id !== id);
     // Remove the record immediately so a refresh cannot resurrect a deleted chat
     // while React is still committing the state update.
+    let saved = false;
+    try { persistConversations(remaining); saved = true; } catch { /* sotto: si riprova dopo aver registrato l'ID */ }
     rememberDeletedConversation(id);
-    try { persistConversations(remaining); } catch { /* il filtro sugli ID cancellati vale comunque al prossimo avvio */ }
+    if (!saved) try { persistConversations(remaining); } catch { /* resta il filtro sugli ID cancellati */ }
     setConversations(remaining);
     if (id === activeConversationId) {
       const next = remaining[0];
@@ -1125,7 +1220,7 @@ export default function App() {
       setBrainEnabled(Boolean(next?.brainPrivate));
       setActiveConversationId(next?.id ?? "");
       setMessages(next?.messages ?? []);
-      setSpecialMode(next?.title.match(/^OCR \d+$/i) ? "ocr" : next?.title.match(/^YOLO \d+$/i) ? "yolo" : next?.title.match(/^(?:Analyze|Analizza IMG) \d+$/i) ? "analyze" : next?.title.match(/^Image \d+$/i) ? "image" : next?.title.match(/^Converti \d+$/i) ? "convert" : "normal");
+      setSpecialMode(conversationMode(next));
       setAttachments([]);
       if (next && models.some((model) => model.id === next.modelId)) setSelectedModelId(next.modelId);
     }
@@ -1188,6 +1283,16 @@ export default function App() {
 
   async function sendMessage(text = input) {
     const content = text.trim();
+    // Skill \chat: ristampa la card di benvenuto dello strumento attivo sotto i risultati, senza cancellarli.
+    if (/^[\\/]chat$/i.test(content) && !attachments.length) {
+      setInput("");
+      // La card è quella della chat in cui ti trovi, non dell'ultimo strumento cliccato.
+      const activeChat = conversations.find((conversation) => conversation.id === activeConversationId);
+      const chatMode = activeChat ? conversationMode(activeChat) : specialMode;
+      const cardMode = chatMode !== "normal" ? chatMode : audioWelcomeMode !== "none" ? audioWelcomeMode : messages.some((message) => message.audio) ? "transcribe" : "normal";
+      if (messages.length) { stickToBottomRef.current = true; setMessages((current) => [...current, { id: createId(), role: "assistant", content: "", welcomeCard: cardMode }]); }
+      return;
+    }
     if ((!content && !attachments.length) || loading || (specialMode === "normal" && !selectedModel)) return;
     if (specialMode === "ocr") { await processOcrBatch(); return; }
     if (specialMode === "yolo") { await processYoloBatch(); return; }
@@ -1405,7 +1510,7 @@ export default function App() {
     const id = createId();
     const title = `${prefix} ${nextNumber}`;
     setActiveConversationId(id);
-    setConversations((current) => [{ id, title, customTitle: true, messages: [], modelId: selectedModelId, updatedAt: Date.now() }, ...current]);
+    setConversations((current) => [{ id, title, customTitle: true, mode, messages: [], modelId: selectedModelId, updatedAt: Date.now() }, ...current]);
     // Precarica Qwen3-VL in background mentre l'utente allega le immagini.
     if (mode === "analyze") void fetch("/api/analyze-warmup", { method: "POST" }).catch(() => undefined);
     focusComposerAfterNavigation();
@@ -1458,12 +1563,16 @@ export default function App() {
     setAttachments([]); setInput(""); setError(""); setLoading(true);
     try {
       const results: string[] = [];
+      const images: { url: string; name: string }[] = [];
+      const files: { url: string; name: string }[] = [];
       for (const attachment of pending) {
         const response = await fetch("/api/yolo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, task: yoloTask, data: attachment.dataUrl }) });
-        const result = await response.json() as { text?: string; error?: string };
+        const result = await response.json() as { text?: string; error?: string; image?: string; files?: { url: string; name: string }[] };
         if (!response.ok) throw new Error(result.error || `YOLO non riuscito per ${attachment.name}.`);
         results.push(`### ${attachment.name}\n${result.text || "Nessun elemento rilevato."}`);
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
+        if (result.image) images.push({ url: result.image, name: attachment.name });
+        if (result.files) files.push(...result.files);
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), resultImages: images.length ? [...images] : undefined, resultFiles: files.length ? [...files] : undefined } : message));
       }
     } catch (caught) { setMessages((current) => current.filter((message) => message.id !== assistantId)); setError(userErrorMessage(caught, "Analisi YOLO non riuscita.")); }
     finally { setLoading(false); }
@@ -1492,6 +1601,7 @@ export default function App() {
         id: conversationId,
         title,
         customTitle: existing?.customTitle,
+        mode: existing?.mode,
         brainPrivate: existing?.brainPrivate,
         messages: nextMessages,
         modelId: selectedModelId,
@@ -1513,6 +1623,7 @@ export default function App() {
     };
     try {
       const results: string[] = [];
+      const logs: string[] = [];
       for (const [index, attachment] of pending.entries()) {
         const imageStarted = performance.now();
         if (activeConversationIdRef.current === conversationId) {
@@ -1522,12 +1633,13 @@ export default function App() {
         const response = await fetch("/api/analyze-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: attachment.name, type: attachment.type, prompt: question, data: attachment.dataUrl }), signal: controller.signal });
         const result = await readJsonResponse<{ text?: string; error?: string; resized?: { width: number; height: number }; model?: string; device?: string }>(response);
         if (!response.ok) throw new Error(result.error || `Analisi non riuscita per ${attachment.name}.`);
-        const sizeNote = result.resized ? `\n\n_Input ridimensionato a ${result.resized.width}×${result.resized.height} per il modello._` : "";
+        const prefix = pending.length > 1 ? `${attachment.name} · ` : "";
         const elapsed = Math.max(1, Math.round((performance.now() - imageStarted) / 1000));
         const elapsedLabel = `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, "0")}s`;
-        const infoNote = `\n\n> Analisi completata · tempo: ${elapsedLabel} · modello: ${result.model || "Qwen3-VL"}${result.device ? ` · dispositivo: ${result.device}` : ""}`;
-        results.push(`### ${attachment.name}\n${result.text || "Nessuna descrizione restituita."}${sizeNote}${infoNote}`);
-        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n") } : message));
+        if (result.resized) logs.push(`${prefix}Input ridimensionato a ${result.resized.width}×${result.resized.height} per il modello.`);
+        logs.push(`${prefix}Analisi completata · tempo: ${elapsedLabel} · modello: ${result.model || "Qwen3-VL"}${result.device ? ` · dispositivo: ${result.device}` : ""}`);
+        results.push(`### ${attachment.name}\n${result.text || "Nessuna descrizione restituita."}`);
+        updateTargetMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: results.join("\n\n"), logs: [...logs] } : message));
       }
     } catch (caught) {
       const aborted = caught instanceof Error && caught.name === "AbortError";
@@ -1595,6 +1707,29 @@ export default function App() {
 
   if (new URLSearchParams(window.location.search).get("embeddingSpace") === "1") return <Suspense fallback={<div className="thinking">Caricamento spazio 3D…</div>}><EmbeddingSpace standalone /></Suspense>;
   if (new URLSearchParams(window.location.search).get("brainGraph") === "1") return <Suspense fallback={<div className="thinking">Caricamento grafo…</div>}><BrainGraph standalone /></Suspense>;
+
+  // Card di benvenuto dello strumento attivo: home vuota e skill \chat.
+  const renderWelcome = (specialMode: SpecialMode, audioWelcomeMode: AudioWelcomeMode) => (
+            <div className={`welcome${specialMode !== "normal" || audioWelcomeMode !== "none" ? " welcome-plain" : " home-welcome"}${audioWelcomeMode !== "none" ? " audio-mode-welcome" : ""}`}>
+              {audioWelcomeMode === "transcribe" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("transcribe")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "transcribe" ? <AudioCardEditForm {...cardEditProps("transcribe")} /> : <AudioWelcomeCard variant="transcribe" recording={recording} transcribing={transcribing} title={cardTexts.transcribe.title} titleStyle={lineStyle(cardTexts.transcribe, "title")} model="Whisper locale"
+                actions={<><button type="button" className="special-upload-button" onClick={() => audioInputRef.current?.click()} disabled={transcribing}><AudioLines size={17} /> Carica audio</button>{summaryToggle}</>} />}</div>}
+              {audioWelcomeMode === "record" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("record")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "record" ? <AudioCardEditForm {...cardEditProps("record")} /> : <AudioWelcomeCard variant="record" recording={recording} transcribing={transcribing} title={cardTexts.record.title} titleStyle={lineStyle(cardTexts.record, "title")} model="Whisper locale"
+                actions={<><button type="button" className={`special-upload-button${recording ? " recording" : ""}`} onClick={() => void toggleRecording()} disabled={transcribing}><Mic size={17} /> {recording ? "Termina" : "Registra"}</button>{recording && <span className="welcome-timer" role="timer" aria-label="Durata registrazione">{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</span>}{summaryToggle}</>} />}</div>}
+              {specialMode === "analyze" && <ToolWelcomeCard className="analyze-welcome" model="Qwen3-VL locale" text={cardTexts.analyze} {...cardEditProps("analyze")}
+                actions={<button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button>} />}
+              {specialMode === "ocr" && <ToolWelcomeCard model="docTR locale" text={cardTexts.ocr} {...cardEditProps("ocr")}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
+              {specialMode === "yolo" && <ToolWelcomeCard model="YOLO11 locale" text={cardTexts.yolo} {...cardEditProps("yolo")}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select><button type="button" className="welcome-chip" onClick={() => openOutputFolder("yolo")}><Folder size={16} /> Apri risultati</button></>} />}
+              {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" model="Pandoc + LibreOffice" text={cardTexts.convert} {...cardEditProps("convert")}>
+                <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
+              </ToolWelcomeCard>}
+              {specialMode === "image" && <ToolWelcomeCard className="image-welcome" model={imageModel === "viggle" ? "Viggle Turbo" : "Qwen-Image 2.1"} text={{ ...cardTexts.image, subtitle: "" }} editSubtitle={false} {...cardEditProps("image")}
+                status={<div className="image-status-row"><div className={`image-service-status ${imageService.status}`}><span className="status-dot" />{imageService.message}</div><div className="image-preset-row"><span>{imageSettings.width}×{imageSettings.height}</span><span>{imageModel === "viggle" ? 6 : imageSettings.steps} step</span><span>Seed {imageSettings.seed}</span></div></div>}
+                actions={<div className="image-model-row" role="radiogroup" aria-label="Modello di generazione"><button type="button" role="radio" aria-checked={imageModel === "qwen"} className={imageModel === "qwen" ? "active" : ""} onClick={() => setImageModel("qwen")} title="Qwen-Image 2.1: qualità massima, ~25 passi"><strong>Qwen-Image 2.1</strong><small>Qualità · {imageSettings.steps} passi</small></button><button type="button" role="radio" aria-checked={imageModel === "viggle"} className={imageModel === "viggle" ? "active" : ""} onClick={() => setImageModel("viggle")} title="Viggle Turbo v0.2.1: distillato a 6 passi, circa 6 volte più veloce"><strong>Viggle Turbo</strong><small>Veloce · 6 passi fissi</small></button></div>} />}
+              {specialMode === "normal" && audioWelcomeMode === "none" && <><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("home")} title="Modifica testo di benvenuto" aria-label="Modifica testo di benvenuto"><Pencil size={15} /></button><span className="welcome-kicker">ANDREAGPT</span>{editingCard === "home" ? <WelcomeEditForm {...cardEditProps("home")} /> : <><WelcomeCardLines text={cardTexts.home} /><img className="welcome-cetriolo" src="/mascotte-welcome.png" alt="Mascotte AndreaGPT" /></>}</>}
+             </div>
+  );
 
   return (
     <div ref={appShellRef} className="app-shell" data-theme={theme === "aurora" ? "normal" : theme} data-palette={theme}>
@@ -1733,41 +1868,26 @@ export default function App() {
         <section ref={conversationRef} onScroll={handleConversationScroll} className={`conversation ${messages.length ? "has-messages" : ""}${!messages.length && specialMode === "normal" ? " home-empty" : ""}`}>
           {!messages.length ? (
             <div className="welcome-stage">
-            <div className={`welcome${specialMode !== "normal" || audioWelcomeMode !== "none" ? " welcome-plain" : " home-welcome"}${audioWelcomeMode !== "none" ? " audio-mode-welcome" : ""}`}>
-              {audioWelcomeMode === "transcribe" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("transcribe")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "transcribe" ? <AudioCardEditForm {...cardEditProps("transcribe")} /> : <AudioWelcomeCard variant="transcribe" recording={recording} transcribing={transcribing} title={cardTexts.transcribe.title} kicker={cardTexts.transcribe.accent}
-                actions={<><button type="button" className="special-upload-button" onClick={() => audioInputRef.current?.click()} disabled={transcribing}><AudioLines size={17} /> Carica audio</button>{summaryToggle}</>} />}</div>}
-              {audioWelcomeMode === "record" && <div className="audio-mode-card"><button type="button" className="welcome-edit-button" onClick={() => startCardEdit("record")} title="Modifica testo della card" aria-label="Modifica testo della card"><Pencil size={15} /></button>{editingCard === "record" ? <AudioCardEditForm {...cardEditProps("record")} /> : <AudioWelcomeCard variant="record" recording={recording} transcribing={transcribing} title={cardTexts.record.title} kicker={cardTexts.record.accent}
-                actions={<><button type="button" className={`special-upload-button${recording ? " recording" : ""}`} onClick={() => void toggleRecording()} disabled={transcribing}><Mic size={17} /> {recording ? "Termina" : "Registra"}</button>{recording && <span className="welcome-timer" role="timer" aria-label="Durata registrazione">{Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</span>}{summaryToggle}</>} />}</div>}
-              {specialMode === "analyze" && <ToolWelcomeCard className="analyze-welcome" kicker="QWEN3-VL LOCALE" text={cardTexts.analyze} {...cardEditProps("analyze")}
-                actions={<button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button>} />}
-              {specialMode === "ocr" && <ToolWelcomeCard kicker="OCR LOCALE" text={cardTexts.ocr} {...cardEditProps("ocr")}
-                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
-              {specialMode === "yolo" && <ToolWelcomeCard kicker="YOLO VISION" text={cardTexts.yolo} {...cardEditProps("yolo")}
-                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option><option value="obb">Detection orientata</option></select><button type="button" className="welcome-chip" onClick={() => openOutputFolder("yolo")}><Folder size={16} /> Apri risultati</button></>} />}
-              {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" kicker="CONVERSIONE LOCALE" text={cardTexts.convert} {...cardEditProps("convert")}>
-                <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
-              </ToolWelcomeCard>}
-              {specialMode === "image" && <ToolWelcomeCard className="image-welcome" kicker="QWEN IMAGE 2.1" text={{ ...cardTexts.image, subtitle: "" }} editSubtitle={false} {...cardEditProps("image")}
-                status={<div className="image-status-row"><div className={`image-service-status ${imageService.status}`}><span className="status-dot" />{imageService.message}</div><div className="image-preset-row"><span>{imageSettings.width}×{imageSettings.height}</span><span>{imageModel === "viggle" ? 6 : imageSettings.steps} step</span><span>Seed {imageSettings.seed}</span></div></div>}
-                actions={<div className="image-model-row" role="radiogroup" aria-label="Modello di generazione"><button type="button" role="radio" aria-checked={imageModel === "qwen"} className={imageModel === "qwen" ? "active" : ""} onClick={() => setImageModel("qwen")} title="Qwen-Image 2.1: qualità massima, ~25 passi"><strong>Qwen-Image 2.1</strong><small>Qualità · {imageSettings.steps} passi</small></button><button type="button" role="radio" aria-checked={imageModel === "viggle"} className={imageModel === "viggle" ? "active" : ""} onClick={() => setImageModel("viggle")} title="Viggle Turbo v0.2.1: distillato a 6 passi, circa 6 volte più veloce"><strong>Viggle Turbo</strong><small>Veloce · 6 passi fissi</small></button></div>} />}
-              {specialMode === "normal" && audioWelcomeMode === "none" && <><button type="button" className="welcome-edit-button" onClick={() => { setWelcomeDraft({ title: welcomeTitle, accent: welcomeAccent, subtitle: welcomeSubtitle }); setWelcomeEditing(true); }} title="Modifica testo di benvenuto" aria-label="Modifica testo di benvenuto"><Pencil size={15} /></button><span className="welcome-kicker">ANDREAGPT</span>{welcomeEditing ? <div className="welcome-edit-form"><label>Titolo<input value={welcomeDraft.title} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, title: event.target.value }))} /></label><label>Accento<input value={welcomeDraft.accent} maxLength={80} onChange={(event) => setWelcomeDraft((current) => ({ ...current, accent: event.target.value }))} /></label><label>Descrizione<textarea value={welcomeDraft.subtitle} maxLength={220} rows={2} onChange={(event) => setWelcomeDraft((current) => ({ ...current, subtitle: event.target.value }))} /></label><div className="welcome-edit-actions"><button type="button" className="secondary-action" onClick={() => setWelcomeEditing(false)}>Annulla</button><button type="button" className="primary-action" onClick={() => { const title = welcomeDraft.title.trim() || welcomeTitle; const accent = welcomeDraft.accent.trim() || welcomeAccent; const subtitle = welcomeDraft.subtitle.trim() || welcomeSubtitle; setWelcomeTitle(title); setWelcomeAccent(accent); setWelcomeSubtitle(subtitle); setWelcomeEditing(false); }}>Salva</button></div></div> : <><h1>{welcomeTitle} <em>{welcomeAccent}</em></h1><img className="welcome-cetriolo" src="/mascotte-Photoroom.png" alt="Mascotte AndreaGPT" /><p>{welcomeSubtitle}</p></>}</>}
-             </div>
+            {renderWelcome(specialMode, audioWelcomeMode)}
              </div>
            ) : (
             <div className="message-list">
-              {messages.map((message, messageIndex) => (
+              {messages.map((message, messageIndex) => message.welcomeCard ? <div key={message.id} className="welcome-stage message-welcome-card">{message.welcomeCard === "transcribe" || message.welcomeCard === "record" ? renderWelcome("normal", message.welcomeCard) : renderWelcome(specialModes.includes(message.welcomeCard as SpecialMode) ? message.welcomeCard as SpecialMode : "normal", "none")}</div> : (
                 <article key={message.id} className={`message ${message.role}`}>
                   <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo-128.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
                     <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
                     {message.generatedImage && <a className="generated-image" href={message.generatedImage.url} download={message.generatedImage.name} title="Scarica immagine"><img src={message.generatedImage.url} alt={message.content || "Immagine generata"} /></a>}
-                    {message.generatedFile && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
+                    {message.generatedFile?.data && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
                     {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.resultImages?.length ? <ResultImages images={message.resultImages} /> : null}
+                    {message.resultFiles?.length ? <div className="result-files">{message.resultFiles.map((file) => <a key={file.url} className="generated-file-download" href={file.url} download={file.name}><Download size={16} /> {file.name.split(".").pop()?.toUpperCase()}</a>)}</div> : null}
                     {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.role === "assistant" && message.brainSources?.length ? <><AffinityScore message={message} /></> : null}</div>
                     {diagnosticsEnabled && message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
                     {diagnosticsEnabled && message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
+                    {message.logs?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.logs)} onClick={() => toggleMessagePanel(message.id, "logs")}>{openMessagePanels[message.id]?.logs ? "▼" : "▶"} Logs</button> : null}
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
                     {diagnosticsEnabled && message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
                     {diagnosticsEnabled && message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
@@ -1775,6 +1895,7 @@ export default function App() {
                     {diagnosticsEnabled && openMessagePanels[message.id]?.shap && (message.shap ? <ShapPanel shap={message.shap} /> : <div className="citation-panel"><p>{shapLoading === message.id ? "Calcolo SHAP: un embedding per ogni combinazione di parole…" : "SHAP non disponibile."}</p></div>)}
                     {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><strong>[{source.id}] {source.source}</strong><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
                     {diagnosticsEnabled && message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
+                    {message.logs?.length && openMessagePanels[message.id]?.logs ? <div className="citation-panel message-logs">{message.logs.map((line, index) => <p key={index}>{line}</p>)}</div> : null}
                     {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details"><p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p></div>}
                     {diagnosticsEnabled && message.metrics && openMessagePanels[message.id]?.metrics && <div className="citation-panel metrics-citations"><p>
                       {message.metrics.retrievalMs !== undefined && <>Ricerca: {(message.metrics.retrievalMs / 1000).toFixed(2)} s · </>}
@@ -1819,6 +1940,12 @@ export default function App() {
                 value={input}
                 onChange={(event) => updateChatInput(event.target.value, (event.nativeEvent as InputEvent).isComposing)}
                 onCompositionEnd={(event) => updateChatInput(event.currentTarget.value)}
+                onPaste={(event) => {
+                  const files = Array.from(event.clipboardData.files);
+                  if (!files.length) return;
+                  event.preventDefault();
+                  void addAttachments(files);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
@@ -1830,7 +1957,7 @@ export default function App() {
                 rows={1}
               />
               {mentionActive && mentionSuggestions.length > 0 && <div className="mention-suggestions">{mentionSuggestions.map(path => <button type="button" key={path} onClick={() => chooseMention(path)}><span>@</span>{path}</button>)}</div>}
-              {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={(!input.trim() && !attachments.length) || (specialMode === "normal" && !selectedModel) || (specialMode === "image" && !imageService.ready)} aria-label="Invia"><Send size={18} /></button>}
+              {loading ? <button className="send-button stop" onClick={stopGeneration} aria-label="Ferma generazione"><Square size={15} fill="currentColor" /></button> : <button className="send-button" onClick={() => void sendMessage()} disabled={!/^[\\/]chat$/i.test(input.trim()) && ((!input.trim() && !attachments.length) || (specialMode === "normal" && !selectedModel) || (specialMode === "image" && !imageService.ready))} aria-label="Invia"><Send size={18} /></button>}
             </div>
           </div>
         </footer>
@@ -1863,9 +1990,9 @@ export default function App() {
 
       {candidatureOpen && <Modal title="Candidature" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
-      {outputOpen && !compactOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolder === "images" ? "Immagini generate" : outputFolder === "compactChat" ? "Chat compatte" : outputFolder.toUpperCase()}</h3><div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen(file.name)}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div></section>}</div></Modal>}
-      {outputOpen && compactOpen && <Modal title="Chat compatta" className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro la chat…</div>}><BrainDocumentReader key={compactOpen} source={`OUTPUT/Compatta_chat/${compactOpen}`} url={`/api/output/Compatta_chat/${encodeURIComponent(compactOpen)}/content`} backLabel="Torna alle chat" onBack={() => setCompactOpen(null)} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/Compatta_chat/${encodeURIComponent(compactOpen)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: "Compatta_chat", name: compactOpen })} /></Suspense></Modal>}
-      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); if (folder === "Compatta_chat") setCompactOpen(current => current === name ? null : current); }); }}>Elimina</button></div></Modal>}
+      {outputOpen && !compactOpen && <Modal title="Output" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["yolo", "YOLO", Eye], ["analyze", "Analyze", ScanEye], ["audio", "Audio", AudioLines], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolderLabel[outputFolder]}</h3>{outputFolder === "analyze" || outputFolder === "audio" ? <div className="output-results">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => { const folder = outputFolder === "analyze" ? "Analyze" as const : "Audio" as const; return <div key={file.name} className="output-result"><button type="button" className="output-result-open" onClick={() => setCompactOpen({ folder, name: file.name })}>{file.thumb ? <img src={file.thumb} alt="" /> : outputFolder === "audio" ? <span className="output-file-icon"><AudioLines size={22} /></span> : null}<span><strong>{file.name.replace(/\.md$/i, "").replace(/^[\dTZ-]+-(?=.)/, "")}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder, name: file.name })}>Elimina</button></div>; }) : <p>Nessun risultato.</p>}</div> : <div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen({ folder: "Compatta_chat", name: file.name })}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div>}</section>}</div></Modal>}
+      {outputOpen && compactOpen && <Modal title={compactOpen.folder === "Compatta_chat" ? "Chat compatta" : compactOpen.folder} className="brain-archive-modal" wide onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }}><Suspense fallback={<div className="thinking">Apro il file…</div>}><BrainDocumentReader key={`${compactOpen.folder}/${compactOpen.name}`} source={`OUTPUT/${compactOpen.folder}/${compactOpen.name}`} url={`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`} backLabel="Torna ai risultati" onBack={() => setCompactOpen(null)} onClose={() => { setCompactOpen(null); setOutputOpen(false); setOutputFolder(null); }} onSave={async content => { const response = await fetch(`/api/output/${compactOpen.folder}/${encodeURIComponent(compactOpen.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }); if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Salvataggio non riuscito."); }} onDelete={() => setOutputDelete({ folder: compactOpen.folder, name: compactOpen.name })} /></Suspense></Modal>}
+      {outputDelete && <Modal title="Conferma eliminazione" compact onClose={() => setOutputDelete(null)}><p>Eliminare definitivamente <strong>{outputDelete.name}</strong>?</p><div className="dialog-actions"><button className="secondary-action" onClick={() => setOutputDelete(null)}>Annulla</button><button className="danger-action" onClick={() => { const { folder, name } = outputDelete; void fetch(`/api/output/${folder}/${encodeURIComponent(name)}`, { method: "DELETE" }).then(() => fetch("/api/output")).then(response => response.json()).then(data => { setOutputFiles(data); setOutputDelete(null); setCompactOpen(current => current?.folder === folder && current.name === name ? null : current); }); }}>Elimina</button></div></Modal>}
       {researchOpen && <Modal
         className={researchFullscreen ? "research-modal-fullscreen" : researchResult || researchLoading ? "research-modal" : "research-initial"}
         compact={!researchResult && !researchLoading && !researchFullscreen}
@@ -1970,18 +2097,46 @@ export default function App() {
   );
 }
 
-function AttachmentList({ attachments, removable = false, onRemove }: { attachments: ChatAttachment[]; removable?: boolean; onRemove?: (id: string) => void }) {
-  return <div className={`attachment-list ${removable ? "pending" : "sent"}`}>
-    {attachments.map((attachment) => (
-      <div className={`attachment-card ${attachment.kind}`} key={attachment.id} title={`${attachment.name} · ${formatFileSize(attachment.size)}`}>
-        {attachment.kind === "image" && attachment.dataUrl
-          ? <img src={attachment.dataUrl} alt={attachment.name} />
-          : <span className="attachment-icon">{attachment.kind === "image" ? <Image size={19} /> : <FileText size={19} />}</span>}
-        <span className="attachment-copy"><strong>{attachment.name}</strong><small>{attachment.kind === "image" ? "Immagine" : attachment.kind === "pdf" ? "PDF" : "Documento"} · {formatFileSize(attachment.size)}</small></span>
-        {removable && <button onClick={() => onRemove?.(attachment.id)} aria-label={`Rimuovi ${attachment.name}`}><X size={14} /></button>}
-      </div>
-    ))}
+function ResultImages({ images }: { images: { url: string; name: string }[] }) {
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  return <div className="result-images">
+    {images.map((image) => <button type="button" key={image.url} onClick={() => setPreview(image)} title={image.name}><img src={image.url} alt={image.name} /></button>)}
+    {preview && <ImageLightbox src={preview.url} name={preview.name} onClose={() => setPreview(null)} />}
   </div>;
+}
+
+function AttachmentList({ attachments, removable = false, onRemove }: { attachments: ChatAttachment[]; removable?: boolean; onRemove?: (id: string) => void }) {
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  return <div className={`attachment-list ${removable ? "pending" : "sent"}`}>
+    {attachments.map((attachment) => {
+      const viewable = attachment.kind === "image" && Boolean(attachment.dataUrl);
+      return (
+        <div className={`attachment-card ${attachment.kind} ${viewable ? "viewable" : ""}`} key={attachment.id} title={`${attachment.name} · ${formatFileSize(attachment.size)}`} onClick={viewable ? () => setPreview(attachment) : undefined}>
+          {viewable
+            ? <img src={attachment.dataUrl} alt={attachment.name} />
+            : <span className="attachment-icon">{attachment.kind === "image" ? <Image size={19} /> : <FileText size={19} />}</span>}
+          <span className="attachment-copy"><strong>{attachment.name}</strong><small>{attachment.kind === "image" ? "Immagine" : attachment.kind === "pdf" ? "PDF" : "Documento"} · {formatFileSize(attachment.size)}</small></span>
+          {removable && <button onClick={(event) => { event.stopPropagation(); onRemove?.(attachment.id); }} aria-label={`Rimuovi ${attachment.name}`}><X size={14} /></button>}
+        </div>
+      );
+    })}
+    {preview && <ImageLightbox src={preview.dataUrl!} name={preview.name} onClose={() => setPreview(null)} />}
+  </div>;
+}
+
+function ImageLightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  // portal dentro .app-shell per ereditare il tema; evita ancestor con backdrop-filter che rompono position:fixed
+  return createPortal(
+    <Modal title={name} className="image-viewer-modal" onClose={onClose}>
+      <img src={src} alt={name} />
+    </Modal>,
+    document.querySelector(".app-shell") ?? document.body,
+  );
 }
 
 async function readAttachment(file: File): Promise<ChatAttachment> {
@@ -2101,6 +2256,12 @@ function loadMessages(): ChatMessage[] {
 }
 
 const DELETED_CONVERSATIONS_KEY = "andreagpt-deleted-conversations";
+const STALE_RELOAD_KEY = "andreagpt-stale-reload";
+
+function reloadStaleTab() {
+  try { sessionStorage.setItem(STALE_RELOAD_KEY, "1"); } catch { /* sessione privata */ }
+  location.reload();
+}
 
 /** ID cancellati: filtrati a ogni lettura e scrittura, così una scheda vecchia non può farli ricomparire. */
 function loadDeletedConversationIds() {
@@ -2112,9 +2273,40 @@ function loadDeletedConversationIds() {
   }
 }
 
+function sendDeletedConversations(ids: string[]) {
+  // keepalive: la richiesta parte anche se la pagina viene chiusa subito dopo il clic.
+  return fetch("/api/conversations/deleted", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) });
+}
+
+/** Unisce gli ID cancellati del server e del browser; true se il browser ne ha ricevuti di nuovi. */
+async function syncDeletedConversations() {
+  try {
+    const { ids } = await fetch("/api/conversations/deleted").then((response) => response.json() as Promise<{ ids: string[] }>);
+    const server = new Set(ids);
+    const local = loadDeletedConversationIds();
+    const missingOnServer = [...local].filter((id) => !server.has(id));
+    if (missingOnServer.length) void sendDeletedConversations(missingOnServer.slice(-1000)).catch(() => undefined);
+    const missingLocally = ids.filter((id) => !local.has(id));
+    if (!missingLocally.length) return false;
+    try { localStorage.setItem(DELETED_CONVERSATIONS_KEY, JSON.stringify([...local, ...missingLocally].slice(-5000))); } catch { /* memoria piena: il filtro in memoria basta per questa sessione */ }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function rememberDeletedConversation(id: string) {
-  const deleted = [...loadDeletedConversationIds(), id].slice(-1000);
-  try { localStorage.setItem(DELETED_CONVERSATIONS_KEY, JSON.stringify(deleted)); } catch { /* sessione privata */ }
+  void sendDeletedConversations([id]).catch(() => undefined);
+  const deleted = JSON.stringify([...loadDeletedConversationIds(), id].slice(-5000));
+  try { localStorage.setItem(DELETED_CONVERSATIONS_KEY, deleted); return; } catch { /* memoria piena: sotto si libera spazio */ }
+  // La cancellazione deve restare salvata anche a memoria piena: via la copia vecchia e gli allegati pesanti.
+  try { localStorage.removeItem("andreagpt-messages"); } catch { /* ignora */ }
+  try { localStorage.setItem(DELETED_CONVERSATIONS_KEY, deleted); return; } catch { /* ancora piena */ }
+  try {
+    const stored = JSON.parse(localStorage.getItem("andreagpt-conversations") ?? "[]") as Conversation[];
+    localStorage.setItem("andreagpt-conversations", JSON.stringify(stored.filter((conversation) => conversation.id !== id).map((conversation) => ({ ...conversation, messages: withoutHeavyPayloads(conversation.messages) }))));
+    localStorage.setItem(DELETED_CONVERSATIONS_KEY, deleted);
+  } catch { /* sessione privata */ }
 }
 
 function loadConversations(): Conversation[] {
@@ -2173,26 +2365,24 @@ function createConversationTitleFromMessages(messages: ChatMessage[]) {
   return firstUserMessage?.attachments?.[0]?.name.slice(0, 60) || "Nuova conversazione";
 }
 
-function persistMessages(key: string, messages: ChatMessage[]) {
-  try {
-    localStorage.setItem(key, JSON.stringify(messages));
-  } catch {
-    localStorage.setItem(key, JSON.stringify(withoutAttachmentPayloads(messages)));
-  }
-}
-
 function persistConversations(allConversations: Conversation[]) {
   const deleted = loadDeletedConversationIds();
   const conversations = allConversations.filter((conversation) => !deleted.has(conversation.id));
   try {
     localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations));
-  } catch {
-    const lightweight = conversations.map((conversation) => ({
-      ...conversation,
-      messages: withoutAttachmentPayloads(conversation.messages),
-    }));
-    localStorage.setItem("andreagpt-conversations", JSON.stringify(lightweight));
-  }
+    return;
+  } catch { /* memoria piena: sotto le versioni leggere */ }
+  try { localStorage.removeItem("andreagpt-messages"); } catch { /* ignora */ }
+  try {
+    localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations.map((conversation) => ({ ...conversation, messages: withoutAttachmentPayloads(conversation.messages) }))));
+    return;
+  } catch { /* ancora piena */ }
+  localStorage.setItem("andreagpt-conversations", JSON.stringify(conversations.map((conversation) => ({ ...conversation, messages: withoutHeavyPayloads(conversation.messages) }))));
+}
+
+/** Ultima riserva: testo dei messaggi sì, allegati e file convertiti no. */
+function withoutHeavyPayloads(messages: ChatMessage[]) {
+  return withoutAttachmentPayloads(messages).map(({ generatedFile, ...message }) => generatedFile ? { ...message, generatedFile: { ...generatedFile, data: "" } } : message);
 }
 
 function withoutAttachmentPayloads(messages: ChatMessage[]) {

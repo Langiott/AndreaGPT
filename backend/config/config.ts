@@ -46,6 +46,7 @@ export const settings = {
   localRouterEnabled: process.env.LOCAL_ROUTER_ENABLED === "1",
   lanAccessEnabled: process.env.LAN_ACCESS === "1",
   searxngBaseUrl: (process.env.SEARXNG_URL || "http://127.0.0.1:8080").replace(/\/$/, ""),
+  scraplingBaseUrl: (process.env.SCRAPLING_URL || "http://127.0.0.1:8090").replace(/\/$/, ""),
   ollamaBase: localOllamaUrl(process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434"),
 };
 
