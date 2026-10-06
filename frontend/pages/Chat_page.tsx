@@ -30,7 +30,7 @@ import {
   Mic,
   Minimize,
   MessageSquarePlus,
-  Briefcase,
+  Bookmark,
   FileText,
   Folder,
   Globe2,
@@ -81,7 +81,7 @@ const BrainPanel = lazy(() => import("../components/BrainPanel").then(module => 
 const BrainDocumentReader = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainDocumentReader })));
 const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => ({ default: module.BrainGraph })));
 const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
-const CandidaturePanel = lazy(() => import("../components/CandidaturePanel").then(module => ({ default: module.CandidaturePanel })));
+const SocialPanel = lazy(() => import("../components/SocialPanel").then(module => ({ default: module.SocialPanel })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
 // Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
 const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.MarkdownMessage })));
@@ -346,7 +346,7 @@ export default function App() {
   const [brainPaths, setBrainPaths] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
-  const [candidatureOpen, setCandidatureOpen] = useState(false);
+  const [socialOpen, setSocialOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
   const [embeddingOpen, setEmbeddingOpen] = useState(false);
   const appearance = useAppearance();
@@ -1904,7 +1904,7 @@ export default function App() {
         <div className="sidebar-footer">
           {modelsCollapsed && <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />}
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
-          <button className="sidebar-action" onClick={() => setCandidatureOpen(true)}><Briefcase size={17} /> Candidature</button>
+          <button className="sidebar-action" onClick={() => setSocialOpen(true)}><Bookmark size={17} /> Social</button>
           <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
           <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
@@ -2109,7 +2109,7 @@ export default function App() {
         </Modal>
       )}
 
-      {candidatureOpen && <Modal title="Candidature" className="fit-modal" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
+      {socialOpen && <Modal title="Social" className="fit-modal" wide onClose={() => setSocialOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><SocialPanel /></Suspense></Modal>}
       {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
       {outputOpen && !compactOpen && <Modal title="Output" className="output-modal fit-modal" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["news", "News", Newspaper], ["analyze", "Analyze", ScanEye], ["audio", "Audio", AudioLines], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolderLabel[outputFolder]}</h3>{outputFolder === "news" ? <div className="output-results">{researchLoading && <div className="output-result"><button type="button" className="output-result-open" onClick={() => { setOutputOpen(false); setOutputFolder(null); setResearchOpen(true); }}><span className="output-file-icon"><span className="operation-pulse" /></span><span><strong>In corso · {formatElapsed(researchSeconds)}</strong><small>{researchProgress ? `${researchProgress.done}/${researchProgress.total} articoli` : "Ricerca fonti…"}</small><em>{researchResult?.label || "—"}</em></span></button></div>}{outputFiles.news.length ? outputFiles.news.map(file => <div key={file.name} className="output-result"><button type="button" className="output-result-open" disabled={researchLoading} onClick={() => void openSavedEdition(file.name)}><span className="output-file-icon"><Newspaper size={22} /></span><span><strong>{({ ai: "AI News", papers: "Paper scientifici", science: "Scienza e Curiosità" } as Record<string, string>)[file.name.match(/-news-(\w+)\.md$/)?.[1] ?? ""] ?? file.name}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt?.replace(/^.*?Data:\s*\S+\s*/, "") || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder: "News", name: file.name })}>Elimina</button></div>) : !researchLoading && <p>Nessun risultato.</p>}</div> : outputFolder === "analyze" || outputFolder === "audio" ? <div className="output-results">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => { const folder = outputFolder === "analyze" ? "Analyze" as const : "Audio" as const; return <div key={file.name} className="output-result"><button type="button" className="output-result-open" onClick={() => setCompactOpen({ folder, name: file.name })}>{file.thumb ? <img src={file.thumb} alt="" /> : outputFolder === "audio" ? <span className="output-file-icon"><AudioLines size={22} /></span> : null}<span><strong>{file.name.replace(/\.md$/i, "").replace(/^[\dTZ-]+-(?=.)/, "")}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder, name: file.name })}>Elimina</button></div>; }) : <p>Nessun risultato.</p>}</div> : <div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen({ folder: "Compatta_chat", name: file.name })}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div>}</section>}</div></Modal>}

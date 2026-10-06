@@ -10,16 +10,18 @@ from faster_whisper import WhisperModel
 _models = {}
 
 
-def transcribe(source, model_name, language):
+def transcribe(source, model_name, language, retry=True):
     """Trascrive un file audio e restituisce testo, lingua e durata."""
     if model_name not in _models:
-        _models[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=max(2, os.cpu_count() or 2))
+        _models[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=min(8, max(2, os.cpu_count() or 2)))  # oltre 8 i thread si contendono i core assegnati a Docker
     model = _models[model_name]
+    language = None if language == "auto" else language  # "auto": Whisper riconosce la lingua (reel in inglese)
     segments, info = model.transcribe(source, language=language, vad_filter=True, beam_size=5)
     text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
     # AAC/registrazioni con volume basso possono essere scartate dal VAD.
     # Ripetiamo senza VAD solo quando il primo passaggio è davvero vuoto.
-    if not text:
+    # retry=False (reel Instagram): audio di sola musica resta vuoto, senza il secondo passaggio lento.
+    if not text and retry:
         segments, info = model.transcribe(source, language=language, vad_filter=False, beam_size=5)
         text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
     return {"text": text, "language": info.language, "duration": info.duration}
@@ -36,7 +38,7 @@ def main():
     if args.serve:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from json_serve import serve
-        serve(lambda request: transcribe(request["input"], request.get("model") or args.model, request.get("language") or args.language))
+        serve(lambda request: transcribe(request["input"], request.get("model") or args.model, request.get("language") or args.language, request.get("retry", True)))
         return
     if not args.input:
         parser.error("--input richiesto")

@@ -31,6 +31,7 @@ import { activateMainboardMonitoring, beginMainboardActivity, clearMainboardHist
 import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
 import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
+import { createSocial } from "./jobs/social";
 import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
 import { branchContext, rememberBranchContext, toTraceTokens, type OllamaLogprob } from "./model/token_trace";
 import { sourceFallback, sourceTitle, writeEdition, type NewsArticle, type OllamaChat } from "./news/news_edition";
@@ -181,6 +182,21 @@ const candidature = createCandidature({
     const pdfSource = sources.find(id => id.toLowerCase().endsWith(".pdf"));
     const pdf = pdfSource ? { name: path.basename(pdfSource), data: await fs.readFile(path.join(brainRoot, pdfSource)) } : undefined;
     return { text: content, pdf };
+  },
+});
+
+// Social: post Instagram salvati e con mi piace, trascritti (Whisper) e riassunti (Ollama).
+const whisperRuntime = process.env.WHISPER_PYTHON?.trim() || "/opt/doctr/bin/python";
+const social = createSocial({
+  dataDir: path.join(toolsRoot, "social"),
+  mediaDir: path.join(outputRoot, "Instagram"),
+  mediaUrl: "/outputs/Instagram",
+  python: process.env.WHISPER_PYTHON?.trim() || "python",
+  fetchScript: path.join(path.dirname(audioScript), "..", "jobs", "instagram_fetch.py"),
+  ollamaUrl: ollamaBase,
+  async transcribe(file) {
+    const result = await withHeavySlot(() => toolWorker(whisperRuntime, audioScript, 30 * 60_000).request<{ text?: string }>({ input: file, model: process.env.WHISPER_MODEL || "small", language: "auto", retry: false }));
+    return result.text?.trim() || "";
   },
 });
 
@@ -369,7 +385,7 @@ app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.j
 app.use(express.json({ limit: "60mb" }));
 app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false, index: false, maxAge: 0 }));
 // Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
-for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
+for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News", "Instagram"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
 app.use("/outputs", (_request, response) => { response.status(404).end(); });
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
@@ -851,6 +867,13 @@ app.get("/api/brain/document", async (request, response) => {
   catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Documento Brain non disponibile." }); }
 });
 
+app.put("/api/brain/document", async (request, response) => {
+  const parsed = z.object({ source: z.string().min(1).max(700), content: z.string().max(50_000_000) }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
+  try { response.json(await (await brainModule()).saveBrainDocument(parsed.data.source, parsed.data.content)); }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
+});
+
 app.delete("/api/brain/source", async (request, response) => {
   const parsed = z.object({ source: z.string().min(1).max(700) }).strict().safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "Fonte Brain non valida." }); return; }
@@ -1003,6 +1026,20 @@ for (const action of ["index", "import"] as const) {
     } catch (error) { response.status(503).json({ error: error instanceof Error ? error.message : "Errore Brain: verificare indice ed embedding Ollama." }); }
   });
 }
+
+app.get("/api/social", async (_request, response) => {
+  try { response.json(await social.elenco()); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Elenco non disponibile." }); }
+});
+app.post("/api/social/sincronizza", (_request, response) => { social.sincronizza(); response.json({ avviata: true }); });
+app.post("/api/social/:id/riassunto", async (request, response) => {
+  try { response.json(await social.rigenera(request.params.id)); }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : "Riassunto non riuscito." }); }
+});
+app.delete("/api/social/:id", async (request, response) => {
+  try { await social.elimina(request.params.id); response.json({ ok: true }); }
+  catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Post non trovato." }); }
+});
 
 app.post("/api/candidature/import", async (request, response) => {
   const parsed = z.object({ offers: z.array(z.record(z.string(), z.unknown())).max(5000) }).safeParse(request.body);

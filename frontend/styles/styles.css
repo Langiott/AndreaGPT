@@ -718,6 +718,10 @@ button { color: inherit; }
 .brain-document-back:hover { border-color: var(--lime); background: rgba(var(--glow), .16); transform: translateX(-2px); }
 .brain-document-back:focus-visible, .brain-document-actions button:focus-visible, .brain-document-error button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
 .brain-document-reader { position: relative; }
+/* Documento aperto dall'Archivio: il lettore riempie la finestra, così scorre il suo corpo (altrimenti la rotella resta bloccata). */
+.modal-body:has(> .brain-panel > .brain-document-reader) { display: flex; flex-direction: column; overflow: hidden; }
+.modal-body > .brain-panel:has(> .brain-document-reader) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.brain-panel > .brain-document-reader { flex: 1 1 auto; height: auto; }
 .brain-document-actions button.is-active { border-color: var(--lime); background: rgba(var(--glow), .2); }
 .brain-document-actions button:disabled { opacity: .45; cursor: default; }
 .brain-document-actions button.brain-document-delete:hover { border-color: rgba(241,99,80,.6); color: #f16350; }
@@ -2561,3 +2565,39 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 /* Caricamento: niente margine per i pulsanti (non ci sono) e immagine larga quanto il riquadro. */
 .main-panel .message-content:has(> .pending-work) > .message-meta { padding-right: 0; }
 .pending-work.has-image .scan-grid { width: 140px; height: 140px; aspect-ratio: 1; flex: none; }
+/* Diagrammi Mermaid nei documenti: centrati, scorrono in orizzontale se più larghi della finestra. */
+.mermaid-diagram { margin: 16px 0; padding: 14px; overflow-x: auto; text-align: center; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-diagram.is-loading { font-size: 12px; color: var(--muted); }
+/* Social: post Instagram con riassunto. */
+.social-panel { display: grid; gap: 12px; }
+.social-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.social-list { max-height: 64vh; }
+.social-thumb { flex: 0 0 44px; width: 44px; height: 44px; border-radius: 7px; object-fit: cover; background: var(--line); }
+.social-gallery { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.social-gallery img { display: block; height: 150px; width: auto; max-width: 240px; border-radius: 8px; object-fit: cover; }
+.social-summary { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.social-summary p { margin: 0 0 8px; }
+.social-summary ul, .social-summary ol { margin: 0 0 8px; padding-left: 20px; }
+.social-text > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.social-text p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.spin { animation: social-spin 1s linear infinite; }
+@keyframes social-spin { to { transform: rotate(360deg); } }
+@media (max-width: 850px) { .social-list { max-height: none; } .social-gallery img { height: 120px; } }
+.social-key { font-family: ui-monospace, Consolas, monospace; letter-spacing: .5px; }
+.social-key > span { filter: blur(2.5px); user-select: none; }
+.social-bar .cand-actions button.go, .social-bar .cand-actions button.go:hover:not(:disabled) { color: #fff; }
+.social-progress { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.social-progress-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.social-progress-head span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.social-progress-bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.social-progress-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--lime); transition: width .4s ease; }
+.social-progress-bar.is-indeterminate > span { width: 35%; animation: social-slide 1.2s ease-in-out infinite; }
+@keyframes social-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.social-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 11px; }
+.social-steps li { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; padding: 0 6px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); white-space: nowrap; }
+.social-steps li.done { color: var(--lime); border-color: var(--lime); }
+.social-steps li.now { color: inherit; border-color: currentColor; font-weight: 700; }
+.social-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: social-pulse 1s ease-in-out infinite; }
+@keyframes social-pulse { 50% { opacity: .25; } }
+@media (max-width: 480px) { .social-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

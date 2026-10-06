@@ -125,6 +125,7 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       CANDIDATURE_MODEL: ${CANDIDATURE_MODEL:-qwen2.5-coder:7b}
       CANDIDATURE_SOGLIA: ${CANDIDATURE_SOGLIA:-0.62}
+      INSTAGRAM_SESSIONID: ${INSTAGRAM_SESSIONID:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
