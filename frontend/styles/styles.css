@@ -2576,6 +2576,9 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .social-thumb { flex: 0 0 44px; width: 44px; height: 44px; border-radius: 7px; object-fit: cover; background: var(--line); }
 .social-gallery { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
 .social-gallery img { display: block; height: 150px; width: auto; max-width: 240px; border-radius: 8px; object-fit: cover; }
+.social-content { display: grid; gap: 10px; }
+.social-content.single { grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 14px; }
+.social-content.single .social-gallery { overflow: visible; padding: 0; }
 .social-summary { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .social-summary p { margin: 0 0 8px; }
 .social-summary ul, .social-summary ol { margin: 0 0 8px; padding-left: 20px; }
@@ -2583,10 +2586,14 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .social-text p { margin: 6px 0 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .spin { animation: social-spin 1s linear infinite; }
 @keyframes social-spin { to { transform: rotate(360deg); } }
-@media (max-width: 850px) { .social-list { max-height: none; } .social-gallery img { height: 120px; } }
+@media (max-width: 850px) { .social-list { max-height: none; } .social-gallery img { height: 120px; } .social-content.single .social-gallery img { width: 110px; height: auto; } }
 .social-key { font-family: ui-monospace, Consolas, monospace; letter-spacing: .5px; }
 .social-key > span { filter: blur(2.5px); user-select: none; }
 .social-bar .cand-actions button.go, .social-bar .cand-actions button.go:hover:not(:disabled) { color: #fff; }
+.social-opzioni { flex-wrap: wrap; align-items: center; gap: 12px; }
+.social-check { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.social-check input[type="checkbox"] { margin: 0; accent-color: var(--text, #111); }
+.social-max { width: 48px; padding: 4px 6px; font: inherit; font-size: 13px; text-align: center; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
 .social-progress { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .social-progress-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
 .social-progress-head span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

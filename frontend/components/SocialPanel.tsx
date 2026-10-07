@@ -6,11 +6,17 @@ import { userErrorMessage } from "../utils/errors";
 type Fonte = "saved" | "liked";
 interface Post { id: string; url: string; author: string; caption: string; takenAt?: string; sources: Fonte[]; images: string[]; transcript?: string; summary?: string; error?: string }
 type Passo = "lista" | "media" | "trascrizione" | "riassunto" | "salvataggio" | "";
-interface Stato { running: boolean; passo: Passo; corrente: string; fatti: number; totale: number; utente: string; ultimo: string; errori: string[]; sessione: boolean; sessioneFine: string; modello: string }
+interface Stato { running: boolean; passo: Passo; corrente: string; fatti: number; totale: number; utente: string; ultimo: string; errori: string[]; sessione: boolean; sessioneFine: string; modello: string; limite: number }
+type Scelta = "liked" | "saved" | "entrambi";
+const SCELTE: Array<{ key: Scelta; label: string; fonti: Fonte[] }> = [{ key: "liked", label: "Mi piace", fonti: ["liked"] }, { key: "saved", label: "Salvati", fonti: ["saved"] }, { key: "entrambi", label: "Entrambi", fonti: ["saved", "liked"] }];
+const leggi = (key: string) => { try { return localStorage.getItem(key) || ""; } catch { return ""; } };
+const scrivi = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* storage non disponibile */ } };
 
 const PASSI: Array<{ key: Passo; label: string }> = [{ key: "media", label: "Estrai video" }, { key: "trascrizione", label: "Testo video" }, { key: "riassunto", label: "Riassunto" }, { key: "salvataggio", label: "Invio" }];
 
-const TABS: Array<{ key: "tutti" | Fonte; label: string }> = [{ key: "tutti", label: "Tutti" }, { key: "saved", label: "Salvati" }, { key: "liked", label: "Mi piace" }];
+type Tab = "tutti" | "entrambi" | Fonte;
+const TABS: Array<{ key: Tab; label: string }> = [{ key: "tutti", label: "Tutti" }, { key: "saved", label: "Salvati" }, { key: "liked", label: "Mi piace" }, { key: "entrambi", label: "Entrambi" }];
+const inTab = (post: Post, tab: Tab) => tab === "tutti" || (tab === "entrambi" ? post.sources.includes("saved") && post.sources.includes("liked") : post.sources.includes(tab));
 
 async function api<T>(url: string, init?: { method?: string; body?: unknown }): Promise<T> {
   const response = await fetch(url, { method: init?.method || "GET", headers: init?.body === undefined ? undefined : { "Content-Type": "application/json" }, body: init?.body === undefined ? undefined : JSON.stringify(init.body) });
@@ -26,10 +32,12 @@ const titolo = (post: Post) => (post.summary?.match(/In breve:\**\s*(.+)/)?.[1] 
 export function SocialPanel() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [stato, setStato] = useState<Stato>();
-  const [tab, setTab] = useState<"tutti" | Fonte>("tutti");
+  const [tab, setTab] = useState<Tab>("tutti");
   const [aperto, setAperto] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
+  const [scelta, setScelta] = useState<Scelta>(() => (SCELTE.find(item => item.key === leggi("social.fonti"))?.key ?? "entrambi"));
+  const [limite, setLimite] = useState(() => leggi("social.limite"));
 
   const ricarica = useCallback(async () => {
     try { const result = await api<{ posts: Post[]; stato: Stato }>("/api/social"); setPosts(result.posts); setStato(result.stato); }
@@ -50,12 +58,14 @@ export function SocialPanel() {
     finally { setBusy(undefined); }
   }
 
-  const sincronizza = () => esegui("sync", () => api("/api/social/sincronizza", { method: "POST", body: {} }));
+  const sincronizza = () => esegui("sync", () => api("/api/social/sincronizza", { method: "POST", body: { fonti: SCELTE.find(item => item.key === scelta)?.fonti, limite: Number(limite) || undefined } }));
+  const scegli = (key: Scelta) => { setScelta(key); scrivi("social.fonti", key); };
+  const cambiaLimite = (value: string) => { const pulito = value.replace(/\D/g, "").slice(0, 3); setLimite(pulito); scrivi("social.limite", pulito); };
   const rigenera = (post: Post) => esegui(post.id, () => api(`/api/social/${post.id}/riassunto`, { method: "POST", body: {} }));
   const elimina = (post: Post) => esegui(post.id, () => api(`/api/social/${post.id}`, { method: "DELETE" }));
 
-  const visibili = tab === "tutti" ? posts : posts.filter(post => post.sources.includes(tab));
-  const conteggio = (key: "tutti" | Fonte) => key === "tutti" ? posts.length : posts.filter(post => post.sources.includes(key)).length;
+  const visibili = posts.filter(post => inTab(post, tab));
+  const conteggio = (key: Tab) => posts.filter(post => inTab(post, key)).length;
 
   return (
     <div className="social-panel">
@@ -65,7 +75,9 @@ export function SocialPanel() {
           {stato?.sessione && <span className="social-key" title="INSTAGRAM_SESSIONID"><span aria-hidden="true">••••••••••••</span>{stato.sessioneFine}</span>}
           {stato?.ultimo && <span>Ultimo {new Date(stato.ultimo).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>}
         </div>
-        <div className="cand-actions">
+        <div className="cand-actions social-opzioni">
+          {SCELTE.map(item => <label key={item.key} className="social-check"><input type="checkbox" checked={scelta === item.key} disabled={stato?.running} onChange={() => scegli(item.key)} />{item.label}</label>)}
+          <label className="social-check">Max<input type="text" inputMode="numeric" className="social-max" value={limite} placeholder={String(stato?.limite ?? 30)} disabled={stato?.running} onChange={event => cambiaLimite(event.target.value)} /></label>
           <button type="button" className="go" onClick={sincronizza} disabled={!!busy || !stato?.sessione || stato.running}><RefreshCw size={15} className={stato?.running ? "spin" : undefined} /> Sincronizza</button>
         </div>
       </div>
@@ -90,8 +102,10 @@ export function SocialPanel() {
               {open && (
                 <div className="cand-body">
                   {post.error && <p className="cand-error">{post.error}</p>}
-                  {post.images.length > 0 && <div className="social-gallery">{post.images.map(src => <a key={src} href={src} target="_blank" rel="noreferrer"><img src={src} alt="" loading="lazy" /></a>)}</div>}
-                  {post.summary && <div className="social-summary"><MarkdownMessage content={post.summary} privateMode={false} /></div>}
+                  <div className={`social-content${post.images.length === 1 ? " single" : ""}`}>
+                    {post.images.length > 0 && <div className="social-gallery">{post.images.map(src => <a key={src} href={src} target="_blank" rel="noreferrer"><img src={src} alt="" loading="lazy" /></a>)}</div>}
+                    {post.summary && <div className="social-summary"><MarkdownMessage content={post.summary} privateMode={false} /></div>}
+                  </div>
                   <div className="cand-actions">
                     <a href={post.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /> Instagram</a>
                     <button type="button" disabled={!!busy} onClick={() => rigenera(post)}><Wand2 size={14} /> {busy === post.id ? "…" : "Rigenera"}</button>
@@ -111,7 +125,7 @@ export function SocialPanel() {
 
 /** Barra generale (post finiti / totale) e i quattro passi del post in lavorazione. */
 function Avanzamento({ stato }: { stato: Stato }) {
-  if (stato.passo === "lista" || !stato.totale) return <div className="social-progress"><div className="social-progress-head"><strong>Leggo salvati e mi piace…</strong></div><div className="social-progress-bar is-indeterminate"><span /></div></div>;
+  if (stato.passo === "lista" || !stato.totale) return <div className="social-progress"><div className="social-progress-head"><strong>Leggo i post…</strong></div><div className="social-progress-bar is-indeterminate"><span /></div></div>;
   const attuale = PASSI.findIndex(item => item.key === stato.passo);
   return (
     <div className="social-progress">

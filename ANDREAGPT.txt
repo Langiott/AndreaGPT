@@ -16,7 +16,7 @@ git push -u origin stabile
 
 git add -A
 git status
-git commit -m "Aggiorna 05/10  PM "
+git commit -m "Aggiorna 07/10  PM "
 git push origin stabile
 
 --------------------------------------------------------------------------------

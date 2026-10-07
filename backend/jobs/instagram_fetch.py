@@ -26,6 +26,8 @@ HEADERS = {
 }
 MAX_IMAGES = 10
 MAX_VIDEOS = 3
+# In modalità "entrambi" i post validi possono essere rari: oltre queste pagine di salvati ci si ferma.
+MAX_PAGES_BOTH = 25
 
 
 def parse_cookie(raw):
@@ -104,17 +106,21 @@ def fetch(request):
 
     known = set(request.get("known") or [])
     limit = int(request.get("limit") or 30)
+    # "both": solo i post salvati a cui hai anche messo mi piace; si scorre il feed dei salvati.
+    both = bool(request.get("both"))
+    sources = ["saved"] if both else request.get("sources") or list(FEEDS)
     posts, errors, by_code = [], [], {}
-    for source in request.get("sources") or list(FEEDS):
-        params, count = {}, 0
+    for source in sources:
+        params, count, pages = {}, 0, 0
         try:
-            while count < limit:
+            while count < limit and (not both or pages < MAX_PAGES_BOTH):
                 data = client.get(FEEDS[source], params, app=source == "liked")
+                pages += 1
                 stop = False
                 for item in data.get("items") or []:
                     media = media_of(item)
                     code = media.get("code")
-                    if not code:
+                    if not code or (both and not media.get("has_liked")):
                         continue
                     if code in known:
                         stop = True  # i feed vanno dal più recente: da qui in giù è già stato letto
@@ -130,7 +136,7 @@ def fetch(request):
                         "author": (media.get("user") or {}).get("username", ""),
                         "caption": ((media.get("caption") or {}).get("text") or "").strip(),
                         "takenAt": media.get("taken_at"),
-                        "sources": [source],
+                        "sources": ["saved", "liked"] if both else [source],
                         "images": images,
                         "videos": videos,
                     }

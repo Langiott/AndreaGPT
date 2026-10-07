@@ -1031,7 +1031,7 @@ app.get("/api/social", async (_request, response) => {
   try { response.json(await social.elenco()); }
   catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Elenco non disponibile." }); }
 });
-app.post("/api/social/sincronizza", (_request, response) => { social.sincronizza(); response.json({ avviata: true }); });
+app.post("/api/social/sincronizza", (request, response) => { social.sincronizza(request.body ?? {}); response.json({ avviata: true }); });
 app.post("/api/social/:id/riassunto", async (request, response) => {
   try { response.json(await social.rigenera(request.params.id)); }
   catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : "Riassunto non riuscito." }); }

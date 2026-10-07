@@ -138,12 +138,12 @@ export function createSocial(options: SocialOptions) {
     await salva();
   }
 
-  async function esegui() {
+  async function esegui(fonti: Fonte[], max: number) {
     const lista = await carica();
     Object.assign(stato, { errori: [], fatti: 0, totale: 0, passo: "lista", corrente: "" });
     const sessione = cookie();
     if (!sessione) throw new Error("INSTAGRAM_SESSIONID mancante nel file .env.");
-    const result = await scarica({ cookie: sessione, sources: ["saved", "liked"], limit: limite, known: lista.map(post => post.id) });
+    const result = await scarica({ cookie: sessione, sources: fonti, both: fonti.length === 2, limit: max, known: lista.map(post => post.id) });
     if (result.error) throw new Error(result.error);
     stato.utente = result.user || "";
     stato.errori = result.errors ?? [];
@@ -158,11 +158,13 @@ export function createSocial(options: SocialOptions) {
   }
 
   return {
-    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), sessioneFine: cookie().slice(-4), modello: model } }; },
-    sincronizza() {
+    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), sessioneFine: cookie().slice(-4), modello: model, limite } }; },
+    sincronizza(scelta: { fonti?: unknown; limite?: unknown } = {}) {
       if (stato.running) return;
+      const fonti = Array.isArray(scelta.fonti) ? scelta.fonti.filter((item): item is Fonte => item === "saved" || item === "liked") : [];
+      const max = Math.min(Math.max(Math.floor(Number(scelta.limite)) || limite, 1), 500);
       stato.running = true;
-      void esegui()
+      void esegui(fonti.length ? fonti : ["saved", "liked"], max)
         .catch(error => { stato.errori = [error instanceof Error ? error.message : String(error), ...stato.errori]; })
         .finally(() => { Object.assign(stato, { running: false, passo: "", corrente: "" }); });
     },
