@@ -7,6 +7,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import { MarkdownPre } from "./MermaidDiagram";
 
 function normalizeMathMarkdown(markdown: string) {
   // remark-math gestisce già `$...$` e `$$...$$`. Convertiamo soltanto le
@@ -44,7 +45,7 @@ function normalizeMathMarkdown(markdown: string) {
 }
 
 export const MarkdownMessage = memo(function MarkdownMessage({ content, privateMode }: { content: string; privateMode: boolean }) {
-  const components = privateMode ? { img: ({ alt }: { alt?: string }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : undefined;
+  const components = privateMode ? { pre: MarkdownPre, img: ({ alt }: { alt?: string }) => <span>[Immagine esterna bloccata: {alt || "immagine"}]</span> } : { pre: MarkdownPre };
   return <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]} components={components}>{normalizeMathMarkdown(content)}</ReactMarkdown>;
 });
 

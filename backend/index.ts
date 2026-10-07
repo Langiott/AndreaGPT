@@ -19,6 +19,7 @@ import { assessCitations, assessOutputLanguage, createDiagnosticTrace } from "./
 import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "../frontend/config/language";
 import { compactEvidence } from "./grounding/evidence";
 import { extractSearchQuery } from "./search/search_query";
+import { fuseRankings, planWebSearch, relaxWebPlan, selectRelevant, type PlanModel, type WebPlan } from "./search/web_plan";
 import { isSmallTalk } from "./retrieval/evidence_policy";
 import { JsonLineWorker } from "./utils/json_line_worker";
 import { GROUP_METHODS } from "./brain/embedding_ml";
@@ -30,7 +31,10 @@ import { activateMainboardMonitoring, beginMainboardActivity, clearMainboardHist
 import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
 import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
+import { createSocial } from "./jobs/social";
 import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
+import { branchContext, rememberBranchContext, toTraceTokens, type OllamaLogprob } from "./model/token_trace";
+import { sourceFallback, sourceTitle, writeEdition, type NewsArticle, type OllamaChat } from "./news/news_edition";
 
 const app = express();
 const execFileAsync = promisify(execFile);
@@ -46,7 +50,7 @@ async function withHeavySlot<T>(task: () => Promise<T>): Promise<T> {
   try { return await task(); } finally { const next = heavyQueue.shift(); if (next) next(); else heavyRunning--; }
 }
 const { outputRoot, ocrInputRoot, ocrOutputRoot, yoloOutputRoot, imageOutputRoot, doctrScript, yoloScript, qwenVisionScript, audioScript, toolsRoot } = paths;
-const { port, apiBase, apiKey, openRouterKey, perplexityKey, firecrawlKey, openRouterBase, localRouterThreshold, localRouterEnabled, lanAccessEnabled, searxngBaseUrl, ollamaBase } = settings;
+const { port, apiBase, apiKey, openRouterKey, perplexityKey, firecrawlKey, openRouterBase, localRouterThreshold, localRouterEnabled, lanAccessEnabled, searxngBaseUrl, scraplingBaseUrl, ollamaBase } = settings;
 // Il router automatico è opt-in: Web OFF e Brain OFF devono restare OFF.
 const supportedChatModels = [
   "minimaxai/minimax-m3",
@@ -106,7 +110,8 @@ function qualityResearchFallback(sources: ResearchSource[]) {
   return `> Edizione verificabile costruita esclusivamente dalle schede delle fonti disponibili.\n\n${articles}`;
 }
 
-function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date) {
+/** true/false se la data è ricavabile, null se la fonte non ne dà indizi. */
+function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date): boolean | null {
   const published = source.excerpt.match(/\[Pubblicato:\s*(\d{4}-\d{2}-\d{2})/iu)?.[1];
   if (published) return new Date(`${published}T00:00:00Z`) >= cutoff;
   const relative = source.excerpt.match(/\b(\d+)\s+(ora|ore|giorno|giorni|settimana|settimane)\s+fa\b/iu);
@@ -119,7 +124,7 @@ function sourceIsFresh(source: { url: string; excerpt: string }, cutoff: Date) {
   const arxiv = source.url.match(/arxiv\.org\/(?:abs|html|pdf)\/(\d{2})(\d{2})\.\d+/iu);
   if (arxiv) return Number(`20${arxiv[1]}${arxiv[2]}`) >= Number(`${cutoff.getUTCFullYear()}${String(cutoff.getUTCMonth() + 1).padStart(2, "0")}`);
   const years = [...source.url.matchAll(/(?:^|\D)(20\d{2})(?:\D|$)/gu)].map(match => Number(match[1]));
-  return years.length > 0 && Math.max(...years) >= cutoff.getUTCFullYear();
+  return years.length > 0 ? Math.max(...years) >= cutoff.getUTCFullYear() : null;
 }
 
 function finalizeResearchArticle(article: string, label: string, sources: ResearchSource[]) {
@@ -130,14 +135,8 @@ function finalizeResearchArticle(article: string, label: string, sources: Resear
   const headings = sanitized.match(/^##\s+.+$/gmu) ?? [];
   const sections = headings.length;
   const citations = new Set([...sanitized.matchAll(/\[(\d+)\]/gu)].map(match => Number(match[1])).filter(id => sources.some(source => source.id === id)));
-  const mismatchedHeading = headings.some(heading => {
-    const id = Number(heading.match(/\[(\d+)\]/u)?.[1]);
-    const source = sources.find(item => item.id === id);
-    if (!source) return true;
-    const sourceTerms = new Set((source.title.toLocaleLowerCase("it-IT").match(/[\p{L}\p{N}]{4,}/gu) ?? []).filter(term => !["with", "from", "that", "della", "delle", "degli", "sulla", "nelle"].includes(term)));
-    const headingTerms = heading.toLocaleLowerCase("it-IT").match(/[\p{L}\p{N}]{4,}/gu) ?? [];
-    return !headingTerms.some(term => sourceTerms.has(term));
-  });
+  // Basta che ogni titolo citi una fonte esistente: i titoli tradotti non condividono parole con l'originale inglese.
+  const mismatchedHeading = headings.some(heading => !sources.some(source => source.id === Number(heading.match(/\[(\d+)\]/u)?.[1])));
   if (!sanitized || leaksInstructions || refusal || mismatchedHeading || sections < Math.min(3, sources.length) || citations.size < Math.min(2, sources.length)) {
     return { article: qualityResearchFallback(sources), fallback: true };
   }
@@ -183,6 +182,21 @@ const candidature = createCandidature({
     const pdfSource = sources.find(id => id.toLowerCase().endsWith(".pdf"));
     const pdf = pdfSource ? { name: path.basename(pdfSource), data: await fs.readFile(path.join(brainRoot, pdfSource)) } : undefined;
     return { text: content, pdf };
+  },
+});
+
+// Social: post Instagram salvati e con mi piace, trascritti (Whisper) e riassunti (Ollama).
+const whisperRuntime = process.env.WHISPER_PYTHON?.trim() || "/opt/doctr/bin/python";
+const social = createSocial({
+  dataDir: path.join(toolsRoot, "social"),
+  mediaDir: path.join(outputRoot, "Instagram"),
+  mediaUrl: "/outputs/Instagram",
+  python: process.env.WHISPER_PYTHON?.trim() || "python",
+  fetchScript: path.join(path.dirname(audioScript), "..", "jobs", "instagram_fetch.py"),
+  ollamaUrl: ollamaBase,
+  async transcribe(file) {
+    const result = await withHeavySlot(() => toolWorker(whisperRuntime, audioScript, 30 * 60_000).request<{ text?: string }>({ input: file, model: process.env.WHISPER_MODEL || "small", language: "auto", retry: false }));
+    return result.text?.trim() || "";
   },
 });
 
@@ -244,7 +258,9 @@ app.use((request, response, next) => {
     if (origin && ![`http://${request.headers.host}`, `https://${request.headers.host}`, "http://localhost:5173", "http://127.0.0.1:5173"].includes(origin)) {
       response.status(403).json({ error: "Origine non autorizzata." }); return;
     }
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !request.is("application/json")) {
+    // Le DELETE senza body (es. /api/output/:folder/:name) non hanno Content-Type: request.is() restituisce null.
+    const bodylessDelete = request.method === "DELETE" && request.is("application/json") === null;
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !bodylessDelete && !request.is("application/json")) {
       response.status(415).json({ error: "Richiesto application/json." }); return;
     }
     if (!allowedHost(host) || (origin && (!allowedHost(new URL(origin).hostname) || !/^https?:$/.test(new URL(origin).protocol))) || request.headers["sec-fetch-site"] === "cross-site") {
@@ -257,13 +273,33 @@ app.use((request, response, next) => {
 app.use(cors({ origin: process.env.NODE_ENV === "production" ? false : /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/ }));
 // Registrata dopo il middleware: origine, host e limite richieste valgono anche per News.
 // Sta prima del parser JSON globale, così il limite di 1 MB resta valido.
-const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]) });
+const NEWS_MAX_SOURCES = 12;
+const NEWS_TOPICS = {
+  ai: ["new large language model method paper", "AI interpretability robustness evaluation benchmark preprint", "AI lab research announcement new model release", "efficient inference training optimization machine learning paper"],
+  papers: ["machine learning paper experiments benchmark ablation", "computer science preprint new method quantitative results", "biology medicine study peer reviewed results", "physics materials research paper measurement"],
+  science: ["scientific discovery new study results", "space astronomy mission discovery", "medicine biology breakthrough study", "climate earth physics research finding"],
+} as const;
+const researchSchema = z.object({ type: z.enum(["ai", "papers", "science"]), job: z.string().regex(/^[\w-]{1,64}$/).optional() });
+// Le edizioni non dipendono dalla connessione: chiudere la finestra non le ferma, solo "Interrompi" (DELETE) lo fa.
+const newsJobs = new Map<string, AbortController>();
+async function saveNewsEdition(type: string, label: string, article: string, sources: ResearchSource[]) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = article.replace(new RegExp(`^\\s*#\\s+${escapedLabel}\\s*`, "iu"), "").trim();
+  if (!body) return;
+  const sourceText = sources.map(source => `[${source.id}] ${source.title}\n${source.url}`).join("\n\n");
+  const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}-news-${type}.md`;
+  try {
+    await fs.mkdir(path.join(outputRoot, "News"), { recursive: true });
+    await fs.writeFile(path.join(outputRoot, "News", filename), `# ${label}\n\nData: ${new Date().toLocaleDateString("it-IT")}\n\n${body}\n\n## Fonti consultate\n\n${sourceText}\n`, "utf8");
+  } catch (error) { console.warn(`News: salvataggio non riuscito: ${error instanceof Error ? error.message : error}`); }
+}
+app.delete("/api/research/:job", (request, response) => { newsJobs.get(request.params.job)?.abort(); response.json({ ok: true }); });
 app.post("/api/research", express.json({ limit: "1mb" }), async (request, response) => {
   const parsed = researchSchema.safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "Tipo di ricerca non valido." }); return; }
   const clientAbort = new AbortController();
-  request.once("aborted", () => clientAbort.abort());
-  response.once("close", () => { if (!response.writableEnded) clientAbort.abort(); });
+  const jobId = parsed.data.job ?? randomUUID();
+  newsJobs.set(jobId, clientAbort);
   const operationSignal = (timeoutMs: number) => AbortSignal.any([clientAbort.signal, AbortSignal.timeout(timeoutMs)]);
   const presets = {
     ai: { label: "AI News", query: "latest technical AI research new method explainability interpretability robustness evaluation benchmark architecture optimization ablation preprint paper", domains: ["arxiv.org", "openreview.net", "aclanthology.org", "paperswithcode.com", "nature.com", "science.org", "ieee.org", "acm.org", "research.google", "deepmind.google", "ai.meta.com", "microsoft.com/en-us/research"], sources: ["news"] },
@@ -275,24 +311,44 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
   const curatedQuery = `${presets.query} ${freshness} (${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
   try {
     if (!perplexityKey || !firecrawlKey) {
-      const rawSources = JSON.parse(await searchWeb(curatedQuery, operationSignal(45_000))) as Array<{ source: number; title: string; url: string; excerpt: string }>;
+      // Più ricerche tematiche in parallelo: una sola query curata restituiva 1-2 fonti dopo il filtro di freschezza.
+      const siteFilter = `(${presets.domains.map(domain => `site:${domain}`).join(" OR ")})`;
+      const found = await Promise.allSettled(NEWS_TOPICS[parsed.data.type].map(topic => searchWeb(`${topic} ${freshness} ${siteFilter}`, operationSignal(45_000))));
+      if (clientAbort.signal.aborted) throw new Error("Operazione annullata.");
+      const rawSources = found.flatMap(result => result.status === "fulfilled" ? JSON.parse(result.value) as Array<{ title: string; url: string; excerpt: string }> : []);
       const cutoff = new Date(Date.now() - (parsed.data.type === "papers" ? 35 : 14) * 24 * 60 * 60_000);
-      const localSources = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, ""), source])).values()].filter(source => sourceIsFresh(source, cutoff)).slice(0, 6).map((source, index) => ({ ...source, source: index + 1 }));
+      const unique = [...new Map(rawSources.map(source => [source.url.replace(/[#?].*$/, "").replace(/\/$/, ""), source])).values()];
+      const dated = unique.map(source => ({ source, fresh: sourceIsFresh(source, cutoff) })).filter(item => item.fresh !== false);
+      // Prima le fonti con data recente verificata, poi quelle senza indizi di data; quelle vecchie sono escluse.
+      const localSources: ResearchSource[] = [...dated.filter(item => item.fresh), ...dated.filter(item => item.fresh === null)]
+        .slice(0, NEWS_MAX_SOURCES).map(({ source }, index) => ({ id: index + 1, title: sourceTitle(source.title), url: source.url, description: source.excerpt }));
       if (!localSources.length) throw new Error("Nessuna fonte pertinente trovata. Verifica SearXNG o la connessione Web e riprova.");
-      const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}" usando solo queste fonti locali. Seleziona 4-6 notizie pertinenti. Ogni articolo deve avere titolo informativo, perché conta, problema, metodo/contributo, dati o benchmark, metriche, confronto, risultato, limiti, stato di revisione/preprint e conclusione pratica. Evita titoli vaghi e riassunti di una sola frase. Se un dato manca scrivi "non specificato"; non inventare. Cita solo con [N].\n\n${localSources.map(source => `[${source.source}] ${source.title}\n${source.url}\n${source.excerpt}`).join("\n\n")}`;
-      const normalizedSources = localSources.map(source => ({ id: source.source, title: source.title, url: source.url, description: source.excerpt }));
-      try {
-        const local = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL, stream: false, think: false, keep_alive: "15m", options: { temperature: 0.15, num_ctx: 4096, num_predict: 1200 }, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Non inventare fonti o dati." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi. Mantieni l’intera edizione sotto 1200 token.` }] }), signal: operationSignal(90_000) });
-        if (!local.ok) throw new Error(`Ollama HTTP ${local.status}`);
-        const localData = await local.json() as { message?: { content?: string } };
-        const finalized = finalizeResearchArticle(localData.message?.content || "", presets.label, normalizedSources);
-        response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
-      } catch (error) {
-        if (clientAbort.signal.aborted) throw error;
-        const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore locale non disponibile";
-        console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
-        response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
+      const model = process.env.NEWS_OLLAMA_MODEL || OLLAMA_MODEL;
+      const chat: OllamaChat = (body, signal) => upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      const editionSignal = operationSignal(8 * 60_000);
+      if (/application\/x-ndjson/i.test(request.headers.accept ?? "")) {
+        // Streaming: il giornale si riempie un articolo alla volta invece di attendere l'intera edizione.
+        response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        const send = (event: object) => { if (!response.writableEnded && !response.destroyed) response.write(`${JSON.stringify(event)}\n`); };
+        send({ type: "meta", label: presets.label, sources: localSources });
+        const written: NewsArticle[] = [];
+        try {
+          await writeEdition(chat, model, localSources, editionSignal, article => { written.push(article); send({ type: "article", ...article }); });
+          send({ type: "done" });
+        } catch {
+          if (!clientAbort.signal.aborted) send({ type: "error", error: "Tempo massimo superato: edizione parziale." });
+        }
+        if (!clientAbort.signal.aborted) await saveNewsEdition(parsed.data.type, presets.label, written.map(article => article.markdown).join("\n\n"), localSources);
+        if (!response.destroyed) response.end();
+        return;
       }
+      const articles = new Map<number, NewsArticle>();
+      try { await writeEdition(chat, model, localSources, editionSignal, article => articles.set(article.id, article)); }
+      catch (error) { if (clientAbort.signal.aborted) throw error; }
+      const ordered = localSources.map(source => articles.get(source.id) ?? sourceFallback(source));
+      await saveNewsEdition(parsed.data.type, presets.label, ordered.map(article => article.markdown).join("\n\n"), localSources);
+      response.json({ type: parsed.data.type, label: presets.label, article: ordered.map(article => article.markdown).join("\n\n"), sources: localSources, fallback: ordered.every(article => article.fallback) });
       return;
     }
     const search = await upstreamFetch("https://api.firecrawl.dev/v2/search", { method: "POST", headers: { Authorization: `Bearer ${firecrawlKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ query: curatedQuery, limit: 12, ...(presets.sources ? { sources: presets.sources } : {}), ...(presets.categories ? { categories: presets.categories } : {}), scrapeOptions: { formats: ["markdown"] } }), signal: operationSignal(45_000) });
@@ -301,18 +357,20 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
     const raw = Array.isArray(searchData.data) ? searchData.data : searchData.data?.web ?? [];
     const sources = raw.filter(item => item.url).slice(0, 24).map((item, index) => ({ id: index + 1, title: item.title || item.url!, url: item.url!, description: item.description || "", content: item.markdown?.slice(0, 3000) || "" }));
     if (!sources.length) throw new Error("Firecrawl non ha restituito fonti utilizzabili.");
-    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 4-6 notizie pertinenti. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
+    const prompt = `Crea un'edizione sostanziosa in italiano intitolata "${presets.label}". Data: ${new Date().toLocaleDateString("it-IT")}. Seleziona 8-12 notizie pertinenti. Titoli e testo sempre in italiano, anche se la fonte è in inglese. Per ogni articolo scrivi titolo, perché conta, problema, metodo/contributo, setup, dati/metriche, confronto, risultato, limiti, stato di revisione e conclusione pratica. Se un elemento non è disponibile scrivi "non specificato". Non inventare. Cita solo con [N].\n\nFONTI:\n${sources.map(source => `[${source.id}] ${source.title}\nURL: ${source.url}\n${source.content || source.description}`).join("\n\n")}`;
     const normalizedSources = sources.map(({ id, title, url, description }) => ({ id, title, url, description }));
     try {
-      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 1800, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
+      const completion = await upstreamFetch("https://api.perplexity.ai/chat/completions", { method: "POST", headers: { Authorization: `Bearer ${perplexityKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "sonar-pro", temperature: 0.15, max_tokens: 4000, messages: [{ role: "system", content: "Sei un redattore scientifico rigoroso. Distingui fatti, interpretazioni e limiti." }, { role: "user", content: `${prompt}\n\nREGOLE EDITORIALI: scrivi al massimo un articolo per ogni fonte realmente pertinente; non duplicare né ampliare artificialmente il numero di notizie; non iniziare con \"Ecco un giornale\"; usa titoli ## compatti e paragrafi fluidi.` }] }), signal: operationSignal(90_000) });
       if (!completion.ok) throw new Error(`Perplexity HTTP ${completion.status}`);
       const completionData = await completion.json() as { choices?: Array<{ message?: { content?: string } }> };
       const finalized = finalizeResearchArticle(completionData.choices?.[0]?.message?.content || "", presets.label, normalizedSources);
+      await saveNewsEdition(parsed.data.type, presets.label, finalized.article, normalizedSources);
       response.json({ type: parsed.data.type, label: presets.label, article: finalized.article, sources: normalizedSources, fallback: finalized.fallback });
     } catch (error) {
       if (clientAbort.signal.aborted) throw error;
       const reason = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message)) ? "tempo massimo di 90 secondi superato" : "redattore cloud non disponibile";
       console.warn(`News: ${reason}; restituisco l'edizione rapida.`);
+      await saveNewsEdition(parsed.data.type, presets.label, qualityResearchFallback(normalizedSources), normalizedSources);
       response.json({ type: parsed.data.type, label: presets.label, article: qualityResearchFallback(normalizedSources), sources: normalizedSources, fallback: true });
     }
   } catch (error) {
@@ -320,14 +378,14 @@ app.post("/api/research", express.json({ limit: "1mb" }), async (request, respon
     const message = error instanceof Error ? error.message : "Ricerca non riuscita.";
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || /timed?\s*out|timeout/i.test(error.message));
     response.status(timedOut ? 504 : 502).json({ error: timedOut ? "News ha superato il tempo massimo. Verifica Ollama e riprova con il modello già caricato." : message });
-  }
+  } finally { newsJobs.delete(jobId); }
 });
 app.use("/api/brain/upload", express.json({ limit: "270mb" }));
 app.use(["/api/convert", "/api/convert/zip", "/api/audio/transcribe"], express.json({ limit: "140mb" }));
 app.use(express.json({ limit: "60mb" }));
 app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false, index: false, maxAge: 0 }));
 // Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
-for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
+for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News", "Instagram"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
 app.use("/outputs", (_request, response) => { response.status(404).end(); });
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
@@ -338,8 +396,23 @@ app.get("/api/output", async (_request, response) => {
       return { category, name: entry.name, url: `/outputs/${folder}/${encodeURIComponent(entry.name)}`, size: stat.size, updatedAt: stat.mtimeMs, image: /\.(png|jpe?g|webp|gif)$/i.test(entry.name) };
     }));
   };
-  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte") }); }
-  catch { response.json({ images: [], ocr: [], yolo: [] }); }
+  const excerpt = (text: string) => text.replace(/^#.*$/gm, "").replace(/[#*_>`]/g, "").replace(/\s+/g, " ").trim().slice(0, 260);
+  // Analyze: una voce per analisi (testo .md + immagine con lo stesso nome), con anteprima del testo.
+  const analyze = async () => {
+    const files = await collect("Analyze", "Analyze");
+    return Promise.all(files.filter(file => /\.md$/i.test(file.name)).map(async note => {
+      const stem = note.name.slice(0, -3);
+      const picture = files.find(file => file.image && file.name.slice(0, file.name.lastIndexOf(".")) === stem);
+      return { ...note, thumb: picture?.url, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Analyze", note.name), "utf8").catch(() => "")) };
+    }));
+  };
+  const news = async () => Promise.all((await collect("News", "News")).filter(file => /\.md$/i.test(file.name)).map(async file => (
+    { ...file, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "News", file.name), "utf8").catch(() => "")) })));
+  const audio = async () => Promise.all((await collect("Audio", "Audio")).filter(file => /\.md$/i.test(file.name)).map(async file => (
+    { ...file, excerpt: excerpt(await fs.readFile(path.join(outputRoot, "Audio", file.name), "utf8").catch(() => "")) })));
+  const newest = <T extends { updatedAt: number }>(items: T[]) => items.sort((a, b) => b.updatedAt - a.updatedAt);
+  try { response.json({ images: await collect("Image", "Immagini generate"), ocr: await collect("OCR", "OCR"), yolo: await collect("YOLO", "YOLO"), compactChat: await collect("Compatta_chat", "Chat compatte"), analyze: newest(await analyze()), audio: newest(await audio()), news: newest(await news()) }); }
+  catch { response.json({ images: [], ocr: [], yolo: [], compactChat: [], analyze: [], audio: [], news: [] }); }
 });
 
 app.post("/api/chat/compact", async (request, response) => {
@@ -375,25 +448,46 @@ app.post("/api/chat/compact", async (request, response) => {
   */
 });
 app.delete("/api/output/:folder/:name", async (request, response) => {
-  if (!["Image", "OCR", "YOLO", "Compatta_chat"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
+  if (!["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News"].includes(request.params.folder)) { response.status(400).json({ error: "Cartella non valida." }); return; }
   const target = path.resolve(outputRoot, request.params.folder, request.params.name);
   const root = path.resolve(outputRoot, request.params.folder);
   if (!target.startsWith(`${root}${path.sep}`)) { response.status(400).json({ error: "File non valido." }); return; }
-  try { await fs.rm(target); response.json({ ok: true }); } catch { response.status(404).json({ error: "File non trovato." }); }
+  try {
+    await fs.rm(target);
+    // Analyze: insieme al testo va via anche l'immagine con lo stesso nome.
+    if (request.params.folder === "Analyze" && /\.md$/i.test(target)) {
+      const stem = path.basename(target, ".md");
+      for (const entry of await fs.readdir(root).catch(() => [] as string[])) if (entry.slice(0, entry.lastIndexOf(".")) === stem) await fs.rm(path.join(root, entry), { force: true });
+    }
+    response.json({ ok: true });
+  } catch { response.status(404).json({ error: "File non trovato." }); }
 });
-/** Chat compatte: lettura e modifica del Markdown salvato in OUTPUT/Compatta_chat. */
-function compactChatPath(name: string) {
-  const root = path.resolve(outputRoot, "Compatta_chat"), target = path.resolve(root, name);
+/** Markdown in OUTPUT (chat compatte, analisi, trascrizioni): lettura e modifica. */
+function outputMarkdownPath(folder: string, name: string) {
+  if (!["Compatta_chat", "Analyze", "Audio", "News"].includes(folder)) return null;
+  const root = path.resolve(outputRoot, folder), target = path.resolve(root, name);
   return target.startsWith(`${root}${path.sep}`) && /\.md$/i.test(target) ? target : null;
 }
-app.get("/api/output/Compatta_chat/:name/content", async (request, response) => {
-  const target = compactChatPath(request.params.name);
+app.get("/api/output/:folder/:name/content", async (request, response) => {
+  const target = outputMarkdownPath(request.params.folder, request.params.name);
   if (!target) { response.status(400).json({ error: "File non valido." }); return; }
-  try { response.json({ source: `OUTPUT/Compatta_chat/${request.params.name}`, name: request.params.name, extension: ".md", content: await fs.readFile(target, "utf8") }); }
+  try { response.json({ source: `OUTPUT/${request.params.folder}/${request.params.name}`, name: request.params.name, extension: ".md", content: await fs.readFile(target, "utf8") }); }
   catch { response.status(404).json({ error: "File non trovato." }); }
 });
-app.put("/api/output/Compatta_chat/:name/content", async (request, response) => {
-  const target = compactChatPath(request.params.name);
+/** Trascrizioni (carica audio o registra): una nota .md per audio in OUTPUT/Audio. */
+app.post("/api/output/Audio", async (request, response) => {
+  const parsed = z.object({ name: z.string().min(1).max(180), content: z.string().min(1).max(5_000_000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Trascrizione non valida." }); return; }
+  const stem = path.basename(parsed.data.name, path.extname(parsed.data.name)).replace(/[^a-z0-9._-]+/gi, "_").slice(0, 100) || "audio";
+  const filename = `${new Date().toISOString().replace(/[:.]/g, "-")}-${stem}.md`;
+  try {
+    await fs.mkdir(path.join(outputRoot, "Audio"), { recursive: true });
+    await fs.writeFile(path.join(outputRoot, "Audio", filename), parsed.data.content, "utf8");
+    response.json({ ok: true, name: filename });
+  } catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
+});
+app.put("/api/output/:folder/:name/content", async (request, response) => {
+  const target = outputMarkdownPath(request.params.folder, request.params.name);
   const parsed = z.object({ content: z.string().max(5_000_000) }).safeParse(request.body);
   if (!target || !parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
   try { await fs.access(target); await fs.writeFile(target, parsed.data.content, "utf8"); response.json({ ok: true }); }
@@ -623,7 +717,7 @@ async function tesseractText(inputPath: string, outputPath: string, outputBase: 
   return text;
 }
 
-const yoloSchema = z.object({ name: z.string().min(1).max(180), type: z.string().max(100).optional(), task: z.enum(["detect", "segment", "classify", "pose", "obb"]).default("detect"), data: z.string().startsWith("data:image/").max(16_000_000) }).strict();
+const yoloSchema = z.object({ name: z.string().min(1).max(180), type: z.string().max(100).optional(), task: z.enum(["detect", "bbox", "segment", "classify", "pose"]).default("detect"), data: z.string().startsWith("data:image/").max(16_000_000) }).strict();
 app.post("/api/yolo", async (request, response) => {
   const parsed = yoloSchema.safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "YOLO non valido: carica una sola immagine." }); return; }
@@ -637,18 +731,27 @@ app.post("/api/yolo", async (request, response) => {
     const base64 = parsed.data.data.slice(parsed.data.data.indexOf(",") + 1);
     await fs.writeFile(inputPath, Buffer.from(base64, "base64"));
     const executable = process.env.YOLO_PATH || "yolo";
-    const models = { detect: "yolo11n.pt", segment: "yolo11n-seg.pt", classify: "yolo11n-cls.pt", pose: "yolo11n-pose.pt", obb: "yolo11n-obb.pt" };
+    const models = { detect: "yolo11n.pt", bbox: "yolo11n.pt", segment: "yolo11n-seg.pt", classify: "yolo11n-cls.pt", pose: "yolo11n-pose.pt" };
     const model = process.env.YOLO_MODEL || models[parsed.data.task];
-    const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
     let output: string;
+    let image: string | undefined;
+    let files: { url: string; name: string }[] | undefined;
+    let cutout: string | undefined;
+    let plain: string | undefined;
     if (process.env.YOLO_PATH) {
+      const args = [parsed.data.task, "predict", `model=${model}`, `source=${inputPath}`, "save=False", "verbose=False"];
       const result = await withHeavySlot(() => execFileAsync(executable, args, { windowsHide: true, timeout: 10 * 60_000, maxBuffer: 2_000_000 }));
       output = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
     } else {
-      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string }>({ task: parsed.data.task, model, source: inputPath }));
-      output = result.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8).join("\n");
+      const annotated = path.join(yoloOutputRoot, `yolo-${job}-${parsed.data.task}.jpg`);
+      const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ text: string; image?: string; plain?: string; cutout?: string; files?: string[] }>({ task: parsed.data.task, model, source: inputPath, annotated }));
+      output = result.text.trim();
+      if (result.image) image = `/outputs/YOLO/${encodeURIComponent(path.basename(result.image))}`;
+      if (result.plain) plain = `/outputs/YOLO/${encodeURIComponent(path.basename(result.plain))}`;
+      if (result.cutout) cutout = `/outputs/YOLO/${encodeURIComponent(path.basename(result.cutout))}`;
+      files = result.files?.map((file) => ({ url: `/outputs/YOLO/${encodeURIComponent(path.basename(file))}`, name: path.basename(file) }));
     }
-    response.json({ text: output || "YOLO non ha restituito rilevamenti.", output: path.relative(process.cwd(), inputPath) });
+    response.json({ text: output || "YOLO non ha restituito rilevamenti.", image, plain, cutout, files, output: path.relative(process.cwd(), inputPath) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Errore YOLO.";
     if (/ENOENT|not found|is not recognized|No module named/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics) oppure imposta YOLO_PATH." });
@@ -661,6 +764,7 @@ const analyzeImageSchema = z.object({
   type: z.string().max(100).optional(),
   prompt: z.string().trim().max(4000).default("Descrivi dettagliatamente questa immagine in italiano. Elenca oggetti, posizione, testo visibile e dettagli incerti."),
   data: z.string().startsWith("data:image/").max(45_000_000),
+  maxTokens: z.number().int().min(32).max(1024).optional(),
 }).strict();
 
 // Precarica il modello vision in background mentre l'utente allega le immagini:
@@ -688,8 +792,19 @@ app.post("/api/analyze-image", async (request, response) => {
   try {
     await fs.mkdir(analysisRoot, { recursive: true });
     await fs.writeFile(inputPath, Buffer.from(parsed.data.data.slice(parsed.data.data.indexOf(",") + 1), "base64"));
-    const parsedResult = await visionWorker.request<{ text?: string; resized?: { width: number; height: number }; model?: string; device?: string }>({ input: inputPath, prompt: parsed.data.prompt, max_pixels: Number(process.env.VISION_MAX_PIXELS) || 262144, max_tokens: Number(process.env.VISION_MAX_TOKENS) || 256 }, controller.signal);
-    response.json({ text: parsedResult.text || "Nessuna descrizione restituita.", resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
+    const parsedResult = await visionWorker.request<{ text?: string; resized?: { width: number; height: number }; model?: string; device?: string }>({ input: inputPath, prompt: parsed.data.prompt, max_pixels: Number(process.env.VISION_MAX_PIXELS) || 262144, max_tokens: parsed.data.maxTokens ?? (Number(process.env.VISION_MAX_TOKENS) || 1024) }, controller.signal);
+    // Una descrizione d'immagine non è codice: il modello a volte apre ``` senza chiuderlo e tutto il resto diventa un blocco codice.
+    const text = (parsedResult.text || "").replace(/^[ \t]*```[\w-]*[ \t]*$/gm, "").replace(/\n{3,}/g, "\n\n").trim() || "Nessuna descrizione restituita.";
+    let savedName: string | undefined;
+    // Risultato in OUTPUT/Analyze: immagine + testo con lo stesso nome.
+    try {
+      const savedRoot = path.join(outputRoot, "Analyze"), stem = path.basename(inputPath, extension);
+      await fs.mkdir(savedRoot, { recursive: true });
+      await fs.copyFile(inputPath, path.join(savedRoot, `${stem}${extension}`));
+      await fs.writeFile(path.join(savedRoot, `${stem}.md`), `# ${parsed.data.name}\n\n${text}\n`, "utf8");
+      savedName = `${stem}.md`;
+    } catch { /* il salvataggio non deve far fallire l'analisi */ }
+    response.json({ text, output: savedName, resized: parsedResult.resized, model: parsedResult.model || process.env.VISION_MODEL || "Qwen/Qwen3-VL-2B-Instruct", device: parsedResult.device });
   } catch (error) {
     if (controller.signal.aborted || response.headersSent) return;
     const message = error instanceof Error ? error.message : "Errore Qwen3-VL.";
@@ -750,6 +865,13 @@ app.get("/api/brain/document", async (request, response) => {
   if (!parsed.success) { response.status(400).json({ error: "Documento Brain non valido." }); return; }
   try { response.json(await (await brainModule()).getBrainDocument(parsed.data.source)); }
   catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Documento Brain non disponibile." }); }
+});
+
+app.put("/api/brain/document", async (request, response) => {
+  const parsed = z.object({ source: z.string().min(1).max(700), content: z.string().max(50_000_000) }).strict().safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
+  try { response.json(await (await brainModule()).saveBrainDocument(parsed.data.source, parsed.data.content)); }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
 });
 
 app.delete("/api/brain/source", async (request, response) => {
@@ -905,6 +1027,20 @@ for (const action of ["index", "import"] as const) {
   });
 }
 
+app.get("/api/social", async (_request, response) => {
+  try { response.json(await social.elenco()); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Elenco non disponibile." }); }
+});
+app.post("/api/social/sincronizza", (request, response) => { social.sincronizza(request.body ?? {}); response.json({ avviata: true }); });
+app.post("/api/social/:id/riassunto", async (request, response) => {
+  try { response.json(await social.rigenera(request.params.id)); }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : "Riassunto non riuscito." }); }
+});
+app.delete("/api/social/:id", async (request, response) => {
+  try { await social.elimina(request.params.id); response.json({ ok: true }); }
+  catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Post non trovato." }); }
+});
+
 app.post("/api/candidature/import", async (request, response) => {
   const parsed = z.object({ offers: z.array(z.record(z.string(), z.unknown())).max(5000) }).safeParse(request.body);
   if (!parsed.success) { response.status(400).json({ error: "Offerte non valide." }); return; }
@@ -944,6 +1080,39 @@ app.patch("/api/candidature/:id", async (request, response) => {
   if (!parsed.success) { response.status(400).json({ error: "Aggiornamento non valido." }); return; }
   try { response.json(await candidature.aggiorna(request.params.id, parsed.data)); }
   catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Offerta non trovata." }); }
+});
+
+// Le chat vivono nel localStorage del browser, che Chrome scrive su disco in ritardo: se il browser si chiude
+// male una cancellazione si perde. L'elenco degli ID cancellati sta quindi anche qui, scritto subito su disco.
+const deletedConversationsFile = path.join(paths.toolsRoot, "deleted-conversations.json");
+let deletedConversationsWrite: Promise<void> = Promise.resolve();
+
+async function readDeletedConversations(): Promise<string[]> {
+  try {
+    const saved = JSON.parse(await fs.readFile(deletedConversationsFile, "utf8"));
+    return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+app.get("/api/conversations/deleted", async (_request, response) => {
+  response.json({ ids: await readDeletedConversations() });
+});
+
+app.post("/api/conversations/deleted", async (request, response) => {
+  const parsed = z.object({ ids: z.array(z.string().min(1).max(100)).min(1).max(1000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "ID non validi." }); return; }
+  // Scritture in fila e file sostituito con rename: due cancellazioni ravvicinate non si sovrascrivono.
+  const write = deletedConversationsWrite.then(async () => {
+    const ids = [...new Set([...await readDeletedConversations(), ...parsed.data.ids])].slice(-5000);
+    await fs.mkdir(path.dirname(deletedConversationsFile), { recursive: true });
+    await fs.writeFile(`${deletedConversationsFile}.tmp`, JSON.stringify(ids));
+    await fs.rename(`${deletedConversationsFile}.tmp`, deletedConversationsFile);
+  });
+  deletedConversationsWrite = write.catch(() => undefined);
+  try { await write; response.json({ ok: true }); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Salvataggio non riuscito." }); }
 });
 
 app.get("/api/health", async (_request, response) => {
@@ -1079,6 +1248,28 @@ const chatSchema = z.object({
   webSearch: z.boolean().default(false),
   // Diagnostica spenta: niente log, tempi, controlli post-risposta e router di suggerimento.
   diagnostics: z.boolean().default(true),
+});
+
+const TOP_LOGPROBS = 5;
+// maxTokens piccolo = completamento di una parola alternativa (anteprima), assente = ramo completo
+const branchSchema = z.object({ id: z.string().uuid(), prefix: z.string().min(1).max(200_000), maxTokens: z.number().int().min(1).max(16).optional() }).strict();
+/** Biforcazione: il modello riprende la risposta da un prefisso (fino al token scelto) con lo stesso contesto. */
+app.post("/api/branch", async (request, response) => {
+  const parsed = branchSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Biforcazione non valida." }); return; }
+  const context = branchContext(parsed.data.id);
+  if (!context) { response.status(410).json({ error: "Contesto della risposta scaduto: rigenera la risposta per biforcarla." }); return; }
+  try {
+    const upstream = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", redirect: "error", headers: { "Content-Type": "application/json" },
+      // messaggio assistant finale = prefisso da continuare; temperatura 0 per il proseguimento più probabile
+      body: JSON.stringify({ model: context.model, stream: false, think: false, keep_alive: "30m", logprobs: true, top_logprobs: TOP_LOGPROBS, options: { ...context.options, temperature: 0, ...(parsed.data.maxTokens ? { num_predict: parsed.data.maxTokens } : {}) }, messages: [...context.messages, { role: "assistant", content: parsed.data.prefix }] }),
+      signal: AbortSignal.timeout(10 * 60_000) });
+    const result = await upstream.json() as { message?: { content?: string }; logprobs?: OllamaLogprob[]; error?: string };
+    if (!upstream.ok || result.error) { response.status(502).json({ error: `Biforcazione non riuscita: ${(result.error || `HTTP ${upstream.status}`).slice(0, 300)}` }); return; }
+    response.json({ text: result.message?.content ?? "", tokens: toTraceTokens(result.logprobs ?? []) });
+  } catch (error) {
+    response.status(502).json({ error: `Biforcazione non riuscita: ${error instanceof Error ? error.message.slice(0, 300) : "errore Ollama"}` });
+  }
 });
 
 app.post("/api/chat", async (request, response) => {
@@ -1262,7 +1453,13 @@ app.post("/api/chat", async (request, response) => {
         // il testo delle fonti entra nello stesso context della cronologia:
         // manteniamo le fonti complete nella UI, ma passiamo a Ollama una
         // versione compatta e prevedibile del contesto.
-        const searchContext = compactWebContext(await searchWeb(query, controller.signal, (event) => trace.add(event)));
+        // Lo stesso modello della chat traduce la domanda in query/categoria/periodo per SearXNG.
+        const planModel: PlanModel = usesOllama
+          ? { kind: "ollama", base: ollamaBase, model: parsed.data.model }
+          : { kind: "openai", base: usesOpenRouter ? openRouterBase : apiBase, model: parsed.data.model, apiKey: selectedApiKey ?? "" };
+        const plan = await planWebSearch(query, planModel, controller.signal);
+        trace.add({ stage: "searchx", status: "ok", message: "Piano di ricerca generato.", details: { queries: plan.queries.join(" | "), language: plan.language, category: plan.category, timeRange: plan.timeRange || "none" } });
+        const searchContext = compactWebContext(await searchWeb(query, controller.signal, (event) => trace.add(event), plan, (candidates) => selectRelevant(query, candidates, planModel, controller.signal)), usesOllama && effectiveNumCtx < 8192 ? 700 : WEB_EXCERPT_CHARS);
         webSourcesForResponse = JSON.parse(searchContext) as WebSource[];
         if (mainboardTracking) reportSources = webSourcesForResponse.map(source => ({ type: "web", label: `[${source.source}] ${source.title}`, url: source.url }));
         upstreamMessages = [
@@ -1333,6 +1530,13 @@ app.post("/api/chat", async (request, response) => {
     }
     metrics.promptBuildMs = performance.now() - promptStarted;
     if (controller.signal.aborted) return;
+    const ollamaOptions = { num_ctx: effectiveNumCtx, num_predict: parsed.data.maxTokens,
+      temperature: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 0 : effectiveBrain || parsed.data.model === OLLAMA_MODEL ? 0.2 : parsed.data.temperature,
+      top_p: parsed.data.model === OLLAMA_MODEL ? 0.8 : undefined,
+      repeat_penalty: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 1 : 1.2,
+    };
+    // Con la diagnostica attiva Ollama restituisce anche le probabilità dei token (stesso stream, nessuna generazione in più).
+    const traceTokens = usesOllama && diagnostics;
     const upstream = await upstreamFetch(usesOllama ? `${ollamaBase}/api/chat` : `${usesOpenRouter ? openRouterBase : apiBase}/chat/completions`, {
       dispatcher: usesOllama ? ollamaTransport : cloudTransport,
       method: "POST",
@@ -1348,11 +1552,8 @@ app.post("/api/chat", async (request, response) => {
         temperature: parsed.data.temperature,
         max_tokens: parsed.data.maxTokens,
         stream: true,
-        ...(usesOllama ? { think: false, keep_alive: "30m", options: { num_ctx: effectiveNumCtx, num_predict: parsed.data.maxTokens,
-          temperature: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 0 : effectiveBrain || parsed.data.model === OLLAMA_MODEL ? 0.2 : parsed.data.temperature,
-          top_p: parsed.data.model === OLLAMA_MODEL ? 0.8 : undefined,
-          repeat_penalty: effectiveBrain && process.env.RAG_OPTIMIZE !== "0" ? 1 : 1.2,
-        } } : {}),
+        ...(usesOllama ? { think: false, keep_alive: "30m", options: ollamaOptions } : {}),
+        ...(traceTokens ? { logprobs: true, top_logprobs: TOP_LOGPROBS } : {}),
       }),
       signal: controller.signal,
       redirect: usesOllama ? "error" : "follow",
@@ -1396,6 +1597,7 @@ app.post("/api/chat", async (request, response) => {
     const decoder = new TextDecoder();
     let buffer = "";
     let generatedText = "";
+    const logprobs: OllamaLogprob[] = [];
     while (true) {
       const { done, value } = await reader.read();
       if (usesOllama) {
@@ -1409,6 +1611,7 @@ app.post("/api/chat", async (request, response) => {
           if (event.error) throw new Error(event.error);
           if (event.message?.content && metrics.firstTokenMs === undefined) metrics.firstTokenMs = Math.round(performance.now() - started);
           if (event.message?.content) generatedText += event.message.content;
+          if (traceTokens && Array.isArray(event.logprobs)) logprobs.push(...event.logprobs);
           if (event.done) {
             for (const [key, value] of Object.entries(event)) {
               if (typeof value === "number" && /^(?:load_duration|prompt_eval_duration|eval_duration|prompt_eval_count|eval_count)$/.test(key)) metrics[key] = value;
@@ -1453,6 +1656,10 @@ app.post("/api/chat", async (request, response) => {
     }
     if (diagnostics) response.write(`data: ${JSON.stringify({ metrics })}\n\n`);
     if (diagnostics) response.write(`data: ${JSON.stringify({ diagnostics: { requestId: trace.requestId, events: trace.events } })}\n\n`);
+    if (logprobs.length) {
+      const id = rememberBranchContext({ model: parsed.data.model, messages: upstreamMessages, options: ollamaOptions, maxTokens: parsed.data.maxTokens });
+      response.write(`data: ${JSON.stringify({ tokenTrace: { id, tokens: toTraceTokens(logprobs) } })}\n\n`);
+    }
     if (usesOllama) response.write("data: [DONE]\n\n");
     response.end();
     traceOutcome = "ok";
@@ -1615,14 +1822,21 @@ function capitalize(value: string) {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
 
-async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: Parameters<ReturnType<typeof createDiagnosticTrace>["add"]>[0]) => void) {
-  const recentRequested = /\b(oggi|ora|attual(?:e|i)|recent(?:e|i)|ultim[aei]\s+(?:giorn[oi]|settimana|mese)|questa\s+settimana|breaking)\b/iu.test(query);
+// Senza piano (query curate della pagina News) la query va a SearXNG intatta, categoria generale.
+async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: Parameters<ReturnType<typeof createDiagnosticTrace>["add"]>[0]) => void, plan: WebPlan = { queries: [query], category: "general", timeRange: "", language: "it" }, keepRelevant: (candidates: WebSource[]) => Promise<WebSource[]> = async (candidates) => candidates) {
+  const recentRequested = Boolean(plan.timeRange);
   const specificLookup = /\b(?:cos['’]è|cosa\s+si\s+sa\s+di|parlami\s+di|chi\s+è|informazioni\s+su)\b/iu.test(query);
   // 1) Prova SearXNG (Docker) se risponde con risultati reali.
   try {
     const started = performance.now();
-    const sources = await searchViaSearxng(query, signal);
-    if (sources.length > 0) { diagnose?.({ stage: "searchx", status: "ok", message: "SearXNG ha restituito risultati utilizzabili.", durationMs: Math.round(performance.now() - started), details: { results: sources.length, fallback: false } }); return JSON.stringify(sources); }
+    // Si tengono solo i candidati pertinenti; se sono pochi si allarga il piano e si accumula (senza duplicati).
+    let sources: WebSource[] = [];
+    for (const step of relaxWebPlan(plan)) {
+      const found = (await searchViaSearxng(step, signal)).filter((item) => !sources.some((known) => known.url === item.url));
+      sources = [...sources, ...await keepRelevant(found)].slice(0, 6).map((item, index) => ({ ...item, source: index + 1 }));
+      if (sources.length >= 3) break;
+    }
+    if (sources.length > 0) { diagnose?.({ stage: "searchx", status: "ok", message: "SearXNG ha restituito risultati utilizzabili.", durationMs: Math.round(performance.now() - started), details: { results: sources.length, fallback: false } }); return JSON.stringify(await withPageText(sources, signal)); }
     diagnose?.({ stage: "searchx", status: "warning", message: "SearXNG raggiungibile ma senza risultati utilizzabili; attivato fallback.", durationMs: Math.round(performance.now() - started), details: { results: 0, fallback: true } });
     console.warn("SearXNG ha risposto senza risultati (motori non raggiungibili dal container?), uso fallback diretto.");
   } catch (error) {
@@ -1630,26 +1844,30 @@ async function searchWeb(query: string, signal: AbortSignal, diagnose?: (event: 
     console.warn("SearXNG non raggiungibile, uso fallback diretto:", error instanceof Error ? error.message : error);
   }
   // 2) Fallback diretto dall'host: non richiede Docker, usa il proxy di sistema.
-  const fallback = await searchDirect(query, signal);
+  const fallback = await searchDirect(plan.queries[0], signal);
   diagnose?.({ stage: "searchx", status: fallback.length ? "ok" : "error", message: fallback.length ? "Fallback Web completato." : "Anche il fallback Web non ha trovato risultati.", details: { results: fallback.length, fallback: true } });
   if (recentRequested && fallback.length === 0) throw new Error("Nessuna fonte recente con data verificabile trovata.");
   if (specificLookup && fallback.length === 0) return "[]";
   if (fallback.length === 0) throw new Error("Nessun risultato dalla ricerca diretta.");
-  return JSON.stringify(fallback);
+  return JSON.stringify(await withPageText(fallback, signal));
 }
 
-async function searchViaSearxng(query: string, signal: AbortSignal) {
+/** Cerca ogni variante di query in parallelo e fonde le classifiche (RRF). */
+async function searchViaSearxng(plan: WebPlan, signal: AbortSignal): Promise<WebSource[]> {
+  const rankings = await Promise.all(plan.queries.map((query) => searxngQuery(query, plan, signal)));
+  return fuseRankings(rankings, (result) => result.url.replace(/[#?].*$/, "").replace(/\/$/, ""))
+    .slice(0, 12)
+    .map((result, index) => ({ ...result, source: index + 1 }));
+}
+
+async function searxngQuery(query: string, plan: WebPlan, signal: AbortSignal): Promise<WebSource[]> {
   const url = new URL(`${searxngBaseUrl}/search`);
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
-  url.searchParams.set("language", "it-IT");
+  url.searchParams.set("language", plan.language);
   url.searchParams.set("safesearch", "1");
-  url.searchParams.set("categories", "general");
-  const lowerQuery = query.toLocaleLowerCase("it-IT");
-  const recentWindow = /\b(oggi|ora|attual(?:e|i)|recent(?:e|i)|ultim[aei]\s+(?:giorn[oi]|settimana|mese)|questa\s+settimana|breaking)\b/u.test(lowerQuery)
-    ? (/\b(oggi|ora|breaking)\b/u.test(lowerQuery) ? "day" : /\bsettimana|giorn/u.test(lowerQuery) ? "week" : "month")
-    : "";
-  if (recentWindow) url.searchParams.set("time_range", recentWindow);
+  url.searchParams.set("categories", plan.category);
+  if (plan.timeRange) url.searchParams.set("time_range", plan.timeRange);
 
   const searchResponse = await upstreamFetch(url, {
     dispatcher: cloudTransport,
@@ -1661,23 +1879,56 @@ async function searchViaSearxng(query: string, signal: AbortSignal) {
   if (Array.isArray(payload.unresponsive_engines) && payload.unresponsive_engines.length > 0) {
     console.warn("SearXNG motori non raggiungibili:", JSON.stringify(payload.unresponsive_engines).slice(0, 500));
   }
-  const recentOnly = Boolean(recentWindow);
-  const terms = webQueryTerms(query);
-  const results = (payload.results ?? [])
+  // L'ordine è quello di SearXNG: serve alla fusione. Molti motori (es. Bing News) non danno la data,
+  // il filtro temporale lo applica già time_range, quindi i risultati senza data non vengono scartati.
+  return (payload.results ?? [])
     .filter((result) => result.title && result.url && /^https?:\/\//i.test(result.url))
-    .filter((result) => !recentOnly || Boolean(result.publishedDate))
-    .filter((result) => !terms.length || terms.some((term) => `${result.title} ${result.content}`.toLocaleLowerCase("it-IT").includes(term)))
-    .slice(0, 6);
-  return results.map((result, index) => {
-    const title = result.title!.replace(/\s+/g, " ").trim().slice(0, 200);
-    const excerpt = (result.content || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500);
-    return { source: index + 1, title, url: result.url, excerpt: result.publishedDate ? `[Pubblicato: ${result.publishedDate}] ${excerpt}` : excerpt };
+    .slice(0, 15)
+    .map((result, index) => {
+      const title = result.title!.replace(/\s+/g, " ").trim().slice(0, 200);
+      const excerpt = (result.content || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500);
+      return { source: index + 1, title, url: result.url!, excerpt: result.publishedDate ? `[Pubblicato: ${result.publishedDate}] ${excerpt}` : excerpt };
+    });
+}
+
+/** Sostituisce gli snippet con il testo della pagina (una sola chiamata Scrapling sulle fonti finali). */
+async function withPageText(sources: WebSource[], signal: AbortSignal): Promise<WebSource[]> {
+  const pages = await extractPages(sources.map((source) => source.url), signal);
+  return sources.map((source) => {
+    const page = pages.get(source.url);
+    if (!page) return source;
+    const date = source.excerpt.match(/^\[Pubblicato: ([^\]]+)\]/)?.[1] ?? page.date;
+    return { ...source, excerpt: date ? `[Pubblicato: ${date}] ${page.text}` : page.text };
   });
+}
+
+const WEB_EXCERPT_CHARS = 1500;
+
+/** Testo completo delle pagine via servizio Scrapling; se non risponde restano gli snippet di SearXNG. */
+async function extractPages(urls: string[], signal: AbortSignal) {
+  const pages = new Map<string, { text: string; date?: string }>();
+  if (!urls.length) return pages;
+  try {
+    const response = await upstreamFetch(`${scraplingBaseUrl}/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls, max_chars: WEB_EXCERPT_CHARS }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    });
+    if (!response.ok) throw new Error(`Scrapling HTTP ${response.status}`);
+    for (const page of await response.json() as Array<{ url: string; ok: boolean; text?: string; date?: string | null }>) {
+      if (page.ok && page.text) pages.set(page.url, { text: page.text, date: page.date ?? undefined });
+    }
+  } catch (error) {
+    console.warn("Scrapling non disponibile, uso gli snippet:", error instanceof Error ? error.message : error);
+  }
+  return pages;
 }
 
 type WebSource = { source: number; title: string; url: string; excerpt: string };
 
-function compactWebContext(value: string) {
+// Con num_ctx 4096 sei estratti lunghi saturano il contesto locale: il chiamante sceglie quanto testo per fonte.
+function compactWebContext(value: string, excerptChars = WEB_EXCERPT_CHARS) {
   try {
     const sources = JSON.parse(value) as WebSource[];
     if (!Array.isArray(sources)) return value.slice(0, 8_000);
@@ -1685,7 +1936,7 @@ function compactWebContext(value: string) {
       source: index + 1,
       title: String(source.title || "").slice(0, 160),
       url: String(source.url || "").slice(0, 500),
-      excerpt: String(source.excerpt || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, 500),
+      excerpt: String(source.excerpt || "Nessun estratto disponibile").replace(/\s+/g, " ").trim().slice(0, excerptChars + 40),
     })));
   } catch {
     return value.slice(0, 8_000);

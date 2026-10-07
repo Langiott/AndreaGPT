@@ -661,6 +661,22 @@ export function createBrain(options: BrainOptions = {}) {
     }
   }
 
+  /** Sovrascrive un documento di testo dell'archivio (Markdown o .txt); l'indice si aggiorna alla prossima indicizzazione. */
+  async function saveBrainDocument(source: string, content: string) {
+    const normalized = source.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (!normalized || normalized.split("/").some(part => part === "." || part === "..") || normalized.includes(":")) throw new Error("Documento Brain non valido.");
+    if (![".md", ".markdown", ".txt"].includes(path.extname(normalized).toLowerCase())) throw new Error("Solo i documenti Markdown e di testo sono modificabili.");
+    if (Buffer.byteLength(content) > MAX_FILE) throw new Error("Documento troppo grande.");
+    const absolute = path.resolve(root, normalized);
+    if (!inside(root, absolute)) throw new Error("Percorso documento fuori dall'archivio Brain.");
+    await noLinks(absolute);
+    if (!(await fs.stat(absolute)).isFile()) throw new Error("Documento non trovato.");
+    const temporary = `${absolute}.${process.pid}.save.tmp`;
+    try { await fs.writeFile(temporary, content, { encoding: "utf8", flag: "wx" }); await fs.rename(temporary, absolute); }
+    finally { await fs.rm(temporary, { force: true }); }
+    return { ok: true };
+  }
+
   /** Rimuove una fonte dall'indice senza cancellare il file originale. */
   async function deleteBrainSource(source: string) {
     const normalized = source.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
@@ -1476,7 +1492,7 @@ export function createBrain(options: BrainOptions = {}) {
     await embedQuery("search_query: riscaldamento").catch(() => undefined);
   }
 
-  return { warmUp, getBrainStatus, getBrainDocument, diagnose, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
+  return { warmUp, getBrainStatus, getBrainDocument, saveBrainDocument, diagnose, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, suggestCorrection, importBrainRepository, rebuildTurboIndex, recordBrainFeedback,
     close: () => { turboWorker?.close(); rerankWorker?.close(); store.close(); } };
 }
 
@@ -1497,4 +1513,4 @@ function editDistance(a: string, b: string) {
 }
 
 const brain = createBrain();
-export const { getBrainStatus, getBrainDocument, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, importBrainRepository, rebuildTurboIndex, recordBrainFeedback } = brain;
+export const { getBrainStatus, getBrainDocument, saveBrainDocument, getBrainGraph, getEmbeddingMap, explainQuery, deleteBrainSource, assessSemanticSupport, indexBrain, searchBrain, importBrainRepository, rebuildTurboIndex, recordBrainFeedback } = brain;

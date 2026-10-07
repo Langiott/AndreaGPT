@@ -1,0 +1,93 @@
+<mxfile host="app.diagrams.net" version="24.7.17">
+  <diagram name="Embedding e reranker">
+    <mxGraphModel dx="1300" dy="760" grid="1" gridSize="10" page="1" pageWidth="1300" pageHeight="760" background="#ffffff">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b&gt;AndreaGPT · Embedding, reranker e metriche&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size: 14px&quot;&gt;nomic-embed-text cerca i candidati, il cross-encoder li riordina, le metriche misurano ricerca e risposta&lt;/font&gt;" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#1e293b;strokeColor=#1e293b;fontColor=#ffffff;fontSize=22;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1220" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="laneDoc" value="1 · Documento → vettore (indicizzazione)" style="swimlane;html=1;rounded=1;arcSize=6;startSize=34;fillColor=#2e7d4f;swimlaneFillColor=#eef8f1;strokeColor=#2e7d4f;fontColor=#ffffff;fontSize=15;fontStyle=1;align=left;spacingLeft=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="1220" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="d1" value="&lt;b&gt;Chunk&lt;/b&gt;&lt;br&gt;~1200 caratteri&lt;br&gt;overlap 180" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneDoc">
+          <mxGeometry x="20" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2" value="&lt;b&gt;Prefisso&lt;/b&gt;&lt;br&gt;search_document:&lt;br&gt;percorso + sezione" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneDoc">
+          <mxGeometry x="260" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="d3" value="&lt;b&gt;NomicBERT&lt;/b&gt;&lt;br&gt;token t1…tn → h1…hn&lt;br&gt;self-attention" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneDoc">
+          <mxGeometry x="500" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="d4" value="&lt;b&gt;Mean pooling&lt;/b&gt;&lt;br&gt;E = (1/n) Σ hᵢ" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneDoc">
+          <mxGeometry x="740" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="d5" value="&lt;b&gt;Indice&lt;/b&gt;&lt;br&gt;vettore 768-d&lt;br&gt;SQLite · TurboVec" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;size=12;fillColor=#ffffff;strokeColor=#2e7d4f;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneDoc">
+          <mxGeometry x="990" y="44" width="200" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d4f;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneDoc" source="d1" target="d2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="ed2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d4f;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneDoc" source="d2" target="d3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="ed3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d4f;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneDoc" source="d3" target="d4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="ed4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2e7d4f;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneDoc" source="d4" target="d5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="laneQ" value="2 · Domanda → candidati → riordino (ricerca)" style="swimlane;html=1;rounded=1;arcSize=6;startSize=34;fillColor=#1d4ed8;swimlaneFillColor=#eef3fd;strokeColor=#1d4ed8;fontColor=#ffffff;fontSize=15;fontStyle=1;align=left;spacingLeft=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="330" width="1220" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="q1" value="&lt;b&gt;Domanda&lt;/b&gt;&lt;br&gt;search_query:" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+          <mxGeometry x="20" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="q2" value="&lt;b&gt;Bi-encoder&lt;/b&gt;&lt;br&gt;cos(Q,C) = Q·C / ‖Q‖‖C‖&lt;br&gt;+ FTS5 lessicale" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+          <mxGeometry x="260" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="q3" value="&lt;b&gt;Top-20 candidati&lt;/b&gt;&lt;br&gt;veloce, vettori&lt;br&gt;calcolati a priori" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+          <mxGeometry x="500" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="q4" value="&lt;b&gt;Reranking&lt;/b&gt;&lt;br&gt;cross-encoder mmarco&lt;br&gt;[domanda + brano] → voto 0–1&lt;br&gt;riordina i 20" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#c2410c;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+          <mxGeometry x="740" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="q5" value="&lt;b&gt;Estratti nel prompt&lt;/b&gt;&lt;br&gt;pochi brani con&lt;br&gt;citazione → LLM" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneQ">
+          <mxGeometry x="990" y="54" width="200" height="96" as="geometry"/>
+        </mxCell>
+        <mxCell id="pass1" value="1° passaggio · veloce, trova i candidati" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontStyle=3;fontColor=#1d4ed8;" vertex="1" parent="laneQ">
+          <mxGeometry x="380" y="34" width="340" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="pass2" value="2° passaggio · preciso, cambia solo l'ordine" style="text;html=1;align=center;verticalAlign=middle;fontSize=12;fontStyle=3;fontColor=#c2410c;" vertex="1" parent="laneQ">
+          <mxGeometry x="720" y="34" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="eq1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q1" target="q2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="eq2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q2" target="q3"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="eq3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q3" target="q4"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="eq4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#1d4ed8;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="laneQ" source="q4" target="q5"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="eIdx" value="vettori dei chunk" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#64748b;strokeWidth=2;dashed=1;endArrow=block;endFill=1;fontSize=12;fontColor=#475569;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="d5" target="q2">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1130" y="310"/><mxPoint x="400" y="310"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="laneM" value="3 · Metriche — retrieval (la ricerca trova le fonti?) e semantiche (la risposta le rispetta?)" style="swimlane;html=1;rounded=1;arcSize=6;startSize=34;fillColor=#7c3aed;swimlaneFillColor=#f5f0fe;strokeColor=#7c3aed;fontColor=#ffffff;fontSize=15;fontStyle=1;align=left;spacingLeft=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="530" width="1220" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="m1" value="&lt;b&gt;Recall@5&lt;/b&gt;&lt;br&gt;fonte giusta&lt;br&gt;nei primi 5" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="20" y="54" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m2" value="&lt;b&gt;MRR · Hit@1&lt;/b&gt;&lt;br&gt;1 / posizione della&lt;br&gt;prima fonte giusta" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="220" y="54" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m3" value="&lt;b&gt;nDCG@5 · Copertura&lt;/b&gt;&lt;br&gt;ordine pesato ·&lt;br&gt;temi trovati / attesi" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="420" y="54" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m4" value="&lt;b&gt;Affinità&lt;/b&gt;&lt;br&gt;cos(risposta, fonti)&lt;br&gt;≥ 0,75 forte · &amp;lt; 0,65 debole" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7c3aed;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="640" y="54" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m5" value="&lt;b&gt;Groundedness&lt;/b&gt;&lt;br&gt;frasi sostenute /&lt;br&gt;tutte le frasi" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7c3aed;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="840" y="54" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="m6" value="&lt;b&gt;Faithfulness&lt;/b&gt;&lt;br&gt;frasi sostenute /&lt;br&gt;frasi citate" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7c3aed;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneM">
+          <mxGeometry x="1030" y="54" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="mr" value="misurate offline su domande con fonte attesa (benchmark)" style="text;html=1;align=center;fontSize=13;fontColor=#1d4ed8;fontStyle=2;" vertex="1" parent="laneM">
+          <mxGeometry x="20" y="150" width="580" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="ms" value="calcolate a ogni risposta Brain, visibili in diagnostica" style="text;html=1;align=center;fontSize=13;fontColor=#7c3aed;fontStyle=2;" vertex="1" parent="laneM">
+          <mxGeometry x="640" y="150" width="560" height="30" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -13,6 +13,13 @@ export interface ChatAttachment {
 /** Spiegazione SHAP per parola, calcolata dal backend su richiesta. */
 export interface ShapResult { query: string; words: string[]; exact: boolean; evaluations: number; overall: number[]; coveredBy: number[]; findings: string[]; sources: Array<{ source: string; similarity: number; baseline: number; shares: number[]; present: boolean[] }> }
 
+/** Token generato: testo, probabilità della scelta, alternative [testo, probabilità]. */
+export type TraceToken = { t: string; p: number; alt: Array<[string, number]> };
+/** Probabilità dei token di una risposta; id = contesto lato server per le biforcazioni. */
+export type TokenTrace = { id: string; tokens: TraceToken[] };
+/** Ramo: risposta ripresa dal token `at` forzando `token`; `from`/`to` = parola scelta e parola alternativa. */
+export type TokenBranch = { at: number; from: string; to?: string; token: string; tokens: TraceToken[] };
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -28,12 +35,27 @@ export interface ChatMessage {
   feedback?: 1 | -1;
   sourceFeedback?: Record<string, 1 | -1>;
   shap?: ShapResult;
+  /** Solo in memoria: non salvati con la conversazione. */
+  tokenTrace?: TokenTrace;
+  tokenBranches?: TokenBranch[];
   metrics?: Record<string, number>;
   diagnostics?: DiagnosticTrace;
   diagnosticFeedback?: 1 | -1;
   generatedImage?: { url: string; name: string; width: number; height: number; seed: number; output: string; device?: string; model?: string };
   generatedFile?: { name: string; type: string; data: string };
+  /** Immagini prodotte da uno strumento (es. YOLO annotato), apribili a schermo intero. */
+  resultImages?: { url: string; name: string; plain?: string; cutout?: string }[];
+  /** File scaricabili prodotti da uno strumento (es. CSV/JSON dei bounding box). */
+  resultFiles?: { url: string; name: string }[];
+  /** Note salvate in OUTPUT (es. Analyze), apribili dal pulsante "Apri in Output". */
+  outputNotes?: { folder: "Analyze"; name: string }[];
   audio?: { status: "transcribing" | "complete" | "error"; fileName: string };
+  /** Lavoro in corso mostrato nel messaggio stesso (titolo + tempo che scorre). */
+  pending?: { title: string; detail?: string; startedAt: number; image?: string };
+  /** Righe tecniche (tempi, modello, dispositivo) mostrate solo dal pulsante Logs. */
+  logs?: string[];
+  /** Messaggio-segnaposto creato da \chat: card di benvenuto dello strumento della chat (ocr, yolo, transcribe…). */
+  welcomeCard?: string;
 }
 
 export interface DiagnosticEvent {
@@ -58,6 +80,8 @@ export interface Conversation {
   id: string;
   title: string;
   customTitle?: boolean;
+  /** Strumento della chat (yolo, ocr, analyze…): resta valido anche se la chat viene rinominata. */
+  mode?: string;
   brainPrivate?: boolean;
   messages: ChatMessage[];
   modelId: string;
@@ -90,6 +114,7 @@ export interface ChatSettings {
   maxTokens: number;
   numCtx?: 4096 | 8192;
   ollamaMaxTokens?: 256 | 512 | 1024 | 2048 | 4096;
+  visionMaxTokens?: 256 | 512 | 1024;
 }
 
 export interface BrainCitation {

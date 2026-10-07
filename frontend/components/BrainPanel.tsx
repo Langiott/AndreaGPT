@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, MoreHorizontal, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { BRAIN_UPLOAD_PRESETS, brainUploadPreset } from "../config/brain_upload_limits";
+import { findPassage, plainWords } from "../utils/cite_focus";
+import { MarkdownPre } from "./MermaidDiagram";
 
 interface BrainStatus {
   sources?: Array<{ id: string; chunks?: number }>;
@@ -49,13 +51,45 @@ function normalizeHeadingText(text: string) {
   return text.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toLocaleLowerCase("it-IT");
 }
 
+type HastNode = { type: string; position?: { start: { line: number } }; properties?: Record<string, unknown>; children?: HastNode[] };
+
+// Ogni elemento renderizzato porta la riga del sorgente (data-line): serve a passare tra lettura e modifica senza perdere il punto.
+function rehypeSourceLines() {
+  const mark = (node: HastNode) => {
+    if (node.type === "element" && node.position) node.properties = { ...node.properties, dataLine: node.position.start.line };
+    node.children?.forEach(mark);
+  };
+  return (tree: HastNode) => mark(tree);
+}
+
+/** Distanza in px dall'alto del contenuto della textarea all'inizio di ciascuna riga richiesta (tiene conto degli a capo automatici). */
+function textareaLineTops(editor: HTMLTextAreaElement, lines: number[]) {
+  // Copia della textarea stessa (stessa classe, larghezza e barra di scorrimento): gli a capo sono identici.
+  const probe = editor.cloneNode() as HTMLTextAreaElement;
+  Object.assign(probe.style, { position: "absolute", visibility: "hidden", top: "0", left: "0", width: `${editor.offsetWidth}px`, height: "0", minHeight: "0", overflowY: "scroll" });
+  (editor.parentElement ?? document.body).append(probe);
+  const style = getComputedStyle(probe);
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const source = editor.value.split("\n");
+  const tops = lines.map(line => {
+    if (line <= 1) return parseFloat(style.paddingTop);
+    probe.value = source.slice(0, line - 1).join("\n");
+    return probe.scrollHeight - padding + parseFloat(style.paddingTop);
+  });
+  probe.remove();
+  return tops;
+}
+
 // Testo della voce di elenco senza i sotto-elenchi annidati.
 function ownListItemText(item: Element) {
   return [...item.childNodes].filter(node => !(node instanceof Element && (node.tagName === "UL" || node.tagName === "OL"))).map(node => node.textContent ?? "").join(" ");
 }
 
 /** Lettore Markdown dell'archivio. Con `url` legge altrove (es. OUTPUT); `onSave` e `onDelete` abilitano modifica ed eliminazione. */
-export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = "Torna all’archivio", onSave, onDelete }: { source: string; onBack: () => void; onClose?: () => void; url?: string; backLabel?: string; onSave?: (content: string) => Promise<void>; onDelete?: () => void }) {
+/** Tratto citato da aprire: righe del file originale ed estratto inviato al modello (riserva se le righe non si ritrovano). */
+export type DocumentFocus = { startLine: number; endLine: number; text?: string };
+
+export function BrainDocumentReader({ source, focus, onBack, onClose, url, backLabel = "Torna all’archivio", onSave, onDelete, image }: { source: string; focus?: DocumentFocus; onBack: () => void; onClose?: () => void; url?: string; backLabel?: string; image?: string; onSave?: (content: string) => Promise<void>; onDelete?: () => void }) {
   const [fileDocument, setFileDocument] = useState<BrainDocument | null>(null);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
@@ -71,6 +105,10 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
   const bodyRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  // Riga del sorgente in cima allo schermo e sua distanza dal bordo: passando tra lettura e modifica resta nello stesso punto.
+  const anchorRef = useRef<{ line: number; offset: number } | null>(null);
+  const viewing = draft === null;
 
   // Assegna un id ai titoli, costruisce l'indice e rende cliccabile l'indice testuale del documento.
   useEffect(() => {
@@ -97,7 +135,54 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
         });
       }
     }
-  }, [fileDocument]);
+    // Ritorno dalla modifica: il primo elemento della riga ricordata torna alla stessa altezza.
+    const anchor = anchorRef.current;
+    const body = bodyRef.current;
+    if (!viewing || !anchor || !body) return;
+    anchorRef.current = null;
+    const element = [...article.querySelectorAll<HTMLElement>("[data-line]")].find(item => Number(item.dataset.line) >= anchor.line);
+    if (element) body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - anchor.offset;
+  }, [fileDocument, viewing]);
+
+  // Entrata in modifica: la riga che era in cima alla lettura resta alla stessa altezza, con il cursore lì.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const body = bodyRef.current;
+    const anchor = anchorRef.current;
+    if (viewing || !editor || !body) return;
+    anchorRef.current = null;
+    if (!anchor) { editor.focus(); return; }
+    const offset = editor.value.split("\n").slice(0, anchor.line - 1).reduce((sum, text) => sum + text.length + 1, 0);
+    editor.setSelectionRange(offset, offset);
+    editor.focus({ preventScroll: true });
+    const [top] = textareaLineTops(editor, [anchor.line]);
+    editor.scrollTop = top - (body.getBoundingClientRect().top - editor.getBoundingClientRect().top) - anchor.offset;
+  }, [viewing]);
+
+  function startEdit() {
+    const article = articleRef.current;
+    const body = bodyRef.current;
+    if (!fileDocument) return;
+    if (article && body) {
+      const top = body.getBoundingClientRect().top;
+      const first = [...article.querySelectorAll<HTMLElement>("[data-line]")].find(item => item.getBoundingClientRect().top >= top - 2);
+      if (first) anchorRef.current = { line: Number(first.dataset.line), offset: first.getBoundingClientRect().top - top };
+    }
+    setDraft(fileDocument.content);
+  }
+
+  /** Prima di tornare in lettura ricorda la prima riga visibile nell'editor. */
+  function rememberEditorPosition() {
+    const editor = editorRef.current;
+    const body = bodyRef.current;
+    if (!editor || !body) return;
+    const count = editor.value.split("\n").length;
+    const visible = editor.scrollTop + Math.max(0, body.getBoundingClientRect().top - editor.getBoundingClientRect().top);
+    let low = 1, high = count;
+    while (low < high) { const middle = (low + high) >> 1; if (textareaLineTops(editor, [middle])[0] >= visible) high = middle; else low = middle + 1; }
+    const [top] = textareaLineTops(editor, [low]);
+    anchorRef.current = { line: low, offset: top - visible };
+  }
 
   // Evidenzia nella tendina la sezione attualmente visibile.
   useEffect(() => {
@@ -148,8 +233,35 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
 
   useEffect(() => () => {
     const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
-    highlights?.delete("brain-search"); highlights?.delete("brain-search-current");
+    highlights?.delete("brain-search"); highlights?.delete("brain-search-current"); highlights?.delete("brain-cite");
   }, []);
+
+  // Citazione: evidenzia il tratto citato e lo porta in vista (confronto per parole, il Markdown renderizzato non conserva le righe).
+  useEffect(() => {
+    const article = articleRef.current;
+    const body = bodyRef.current;
+    if (!focus || !article || !body || !fileDocument) return;
+    const words: string[] = [];
+    const spots: Array<{ node: Text; start: number; end: number }> = [];
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      if (node.parentElement?.closest(".katex")) continue;
+      for (const match of (node.textContent ?? "").matchAll(/[\p{L}\p{N}]+/gu)) {
+        words.push(match[0].toLocaleLowerCase("it-IT"));
+        spots.push({ node, start: match.index!, end: match.index! + match[0].length });
+      }
+    }
+    const lines = focus.startLine ? fileDocument.content.split(/\r?\n/).slice(focus.startLine - 1, focus.endLine).join("\n") : "";
+    const found = findPassage(words, plainWords(lines)) ?? (focus.text ? findPassage(words, plainWords(focus.text)) : null);
+    if (!found) return;
+    const range = document.createRange();
+    range.setStart(spots[found.start].node, spots[found.start].start);
+    range.setEnd(spots[found.end].node, spots[found.end].end);
+    const highlights = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights;
+    const HighlightClass = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+    if (highlights && HighlightClass) highlights.set("brain-cite", new HighlightClass(range));
+    body.scrollTo({ top: body.scrollTop + range.getBoundingClientRect().top - body.getBoundingClientRect().top - 80 });
+  }, [fileDocument, focus]);
 
   function stepMatch(direction: 1 | -1) {
     if (!matches.length) return;
@@ -194,6 +306,7 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
   async function save() {
     if (draft === null || !fileDocument || !onSave) return;
     setSaving(true); setError("");
+    rememberEditorPosition();
     try { await onSave(draft); setFileDocument({ ...fileDocument, content: draft }); setDraft(null); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Salvataggio non riuscito."); }
     finally { setSaving(false); }
@@ -225,7 +338,7 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
 
   return <section className="brain-document-reader" ref={readerRef}>
     <div className="brain-document-toolbar">
-      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel}><ArrowLeft size={16} /> <span>{backLabel}</span></button>
+      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel} aria-label={backLabel}><ArrowLeft size={17} /></button>
       <div className="brain-document-heading"><FileText size={16} /><strong title={fileDocument?.source ?? source}>{fileDocument?.name ?? source.split("/").at(-1)}</strong><small>{fileDocument?.extension.replace(".", "").toUpperCase() || "Documento"}</small></div>
       <div className="brain-document-actions">
         <div className="brain-document-search" role="search">
@@ -238,8 +351,8 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
         </div>
         <button type="button" className={outlineOpen ? "is-active" : undefined} disabled={!outline.length} onClick={() => setOutlineOpen(open => !open)} aria-expanded={outlineOpen} aria-label="Indice del documento" title="Indice"><ListTree size={16} /></button>
         {onSave && fileDocument && (draft === null
-          ? <button type="button" onClick={() => setDraft(fileDocument.content)} aria-label="Modifica" title="Modifica"><Pencil size={15} /></button>
-          : <><button type="button" className="is-active" disabled={saving} onClick={() => void save()} aria-label="Salva" title="Salva"><Save size={15} /></button><button type="button" disabled={saving} onClick={() => setDraft(null)} aria-label="Annulla modifiche" title="Annulla modifiche"><Undo2 size={15} /></button></>)}
+          ? <button type="button" onClick={startEdit} aria-label="Modifica" title="Modifica"><Pencil size={15} /></button>
+          : <><button type="button" className="is-active" disabled={saving} onClick={() => void save()} aria-label="Salva" title="Salva"><Save size={15} /></button><button type="button" disabled={saving} onClick={() => { rememberEditorPosition(); setDraft(null); }} aria-label="Annulla modifiche" title="Annulla modifiche"><Undo2 size={15} /></button></>)}
         {onDelete && <button type="button" className="brain-document-delete" onClick={onDelete} aria-label="Elimina definitivamente" title="Elimina definitivamente"><Trash2 size={15} /></button>}
         <button type="button" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Esci da schermo intero" : "Schermo intero"} title={fullscreen ? "Esci da schermo intero" : "Schermo intero"}>{fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
         {onClose && <button type="button" onClick={onClose} aria-label="Chiudi documento" title="Chiudi"><X size={17} /></button>}
@@ -249,11 +362,12 @@ export function BrainDocumentReader({ source, onBack, onClose, url, backLabel = 
       <div className="brain-document-outline-head"><strong>Indice</strong><button type="button" onClick={() => setOutlineOpen(false)} aria-label="Chiudi indice" title="Chiudi indice"><X size={14} /></button></div>
       <ol>{outline.map(item => <li key={item.id}><button type="button" className={item.id === activeHeading ? "is-active" : undefined} style={{ paddingLeft: 10 + item.level * 14 }} data-level={item.level} onClick={() => scrollToHeading(item.id)} title={item.text}>{item.text}</button></li>)}</ol>
     </nav>}
-    <div className="brain-document-body" ref={bodyRef}>
+    <div className={image ? "brain-document-body has-image" : "brain-document-body"} ref={bodyRef}>
+      {image && <a className="brain-document-image" href={image} target="_blank" rel="noreferrer" title="Apri immagine"><img src={image} alt="" /></a>}
       {error && draft === null ? <div className="brain-document-error" role="alert"><strong>Impossibile aprire il documento</strong><span>{error}</span><button type="button" onClick={onBack}>{backLabel}</button></div>
-        : draft !== null ? <>{error && <p className="error-banner" role="alert">{error}</p>}<textarea className="brain-document-editor" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} autoFocus aria-label="Testo Markdown" /></>
+        : draft !== null ? <>{error && <p className="error-banner" role="alert">{error}</p>}<textarea ref={editorRef} className="brain-document-editor" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} aria-label="Testo Markdown" /></>
         : !fileDocument ? <p className="brain-document-loading" role="status">Apro il documento…</p>
-          : <article className="brain-document-content" ref={articleRef} onClick={handleArticleClick}><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { errorColor: "inherit", throwOnError: false }]]}>{normalizeDocumentMath(fileDocument.content)}</ReactMarkdown></article>}
+          : <article className="brain-document-content" ref={articleRef} onClick={handleArticleClick}><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeSourceLines, [rehypeKatex, { errorColor: "inherit", throwOnError: false }]]} components={{ pre: MarkdownPre }}>{normalizeDocumentMath(fileDocument.content)}</ReactMarkdown></article>}
     </div>
   </section>;
 }
@@ -265,6 +379,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null); const [deleteBusy, setDeleteBusy] = useState(false);
   const [openDocument, setOpenDocument] = useState<string | null>(null);
   const [headerToolbarTarget, setHeaderToolbarTarget] = useState<HTMLElement | null>(null);
+  const toolbarMenu = useRef<HTMLDetailsElement>(null);
   const [presetId, setPresetId] = useState(() => { try { return brainUploadPreset(Number(localStorage.getItem("brain-upload-preset") ?? 20)).id; } catch { return 20; } });
   const preset = brainUploadPreset(presetId);
 
@@ -292,6 +407,12 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
   }, [status?.sources, query]);
   const warningCount = status?.errors?.length ?? 0;
   useEffect(() => { if (!warningCount) setDismissedWarnings(false); }, [warningCount]);
+  async function saveDocument(target: string, content: string) {
+    const response = await fetch("/api/brain/document", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: target, content }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Salvataggio non riuscito.");
+  }
+
   async function refresh() { const response = await fetch("/api/brain/status"); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Stato Brain non disponibile."); setStatus(data); }
   async function deleteSource() {
     if (!deleteTarget) return; setDeleteBusy(true); setError("");
@@ -307,10 +428,11 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
     catch (caught) { setError(caught instanceof Error ? caught.message : "Brain non disponibile."); } finally { setBusy(false); }
   }
 
-  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button>{onOpenEmbedding && <button type="button" disabled={busy || locked} onClick={onOpenEmbedding} title="Vedi gli embedding reali in 3D">EmbeddingSpace</button>}<label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></div>;
+  const toolbarActions = <><button type="button" disabled={busy || locked || status?.indexing} onClick={() => fileInput.current?.click()}><Upload size={15} />{uploading ? "Caricamento…" : "Carica"}</button><button type="button" onClick={() => void run("index")} disabled={busy || locked || status?.indexing}><RotateCcw size={15} />Ripristina indice</button><button type="button" disabled={busy || locked} onClick={onOpenGraph}>Micelio</button>{onOpenEmbedding && <button type="button" disabled={busy || locked} onClick={onOpenEmbedding} title="Vedi gli embedding reali in 3D">EmbeddingSpace</button>}<label className="brain-upload-preset"><select aria-label="Limite di caricamento" value={presetId} disabled={busy || locked || status?.indexing} onChange={event => { const id = brainUploadPreset(Number(event.target.value)).id; setPresetId(id); try { localStorage.setItem("brain-upload-preset", String(id)); } catch { /* sessione */ } }}>{BRAIN_UPLOAD_PRESETS.map(item => <option key={item.id} value={item.id}>{item.label} · {item.fileMiB} MiB/file · {item.totalMiB} MiB totali</option>)}</select></label></>;
+  const toolbar = <div className="brain-toolbar"><input ref={fileInput} type="file" multiple hidden onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void uploadFiles(files); }} /><div className="brain-toolbar-inline">{toolbarActions}</div><details className="brain-toolbar-menu" ref={toolbarMenu}><summary aria-label="Azioni Brain" title="Azioni"><MoreHorizontal size={17} /><span>Azioni</span><ChevronDown size={14} /></summary><div className="brain-toolbar-dropdown" onClick={event => { if ((event.target as HTMLElement).closest("button")) toolbarMenu.current?.removeAttribute("open"); }}>{toolbarActions}</div></details></div>;
 
   return <section className="brain-panel">
-    {openDocument ? <BrainDocumentReader source={openDocument} onBack={() => setOpenDocument(null)} onClose={onClose} /> : <>
+    {openDocument ? <BrainDocumentReader source={openDocument} onBack={() => setOpenDocument(null)} onClose={onClose} onSave={/\.(md|markdown|txt)$/i.test(openDocument) ? content => saveDocument(openDocument, content) : undefined} /> : <>
     <div id="brain-info" className="brain-info" hidden={!showInfo}><div className="brain-overview"><div><strong>{status?.files ?? 0}</strong><span>Fonti indicizzate</span></div><div><strong>{status?.chunks ?? 0}</strong><span>Estratti disponibili</span></div><div><strong>{groups.length}</strong><span>Raccolte</span></div></div><dl><dt>Ultimo aggiornamento</dt><dd>{status?.indexedAt ? new Date(status.indexedAt).toLocaleString("it-IT") : "Indice non ancora creato"}</dd><dt>Fonti locali</dt><dd>{status?.root ?? "Caricamento…"}</dd><dt>Embedding</dt><dd>{status?.model ?? "Caricamento…"}</dd><dt>TurboVec</dt><dd>{status?.turboVec?.ready ? `Attivo · ${status.turboVec.count?.toLocaleString("it-IT")} vettori` : status?.turboVec?.building ? "Elaborazione in corso…" : "Fallback JSON attivo"}</dd></dl><p><strong>Carica</strong> aggiunge documenti e li indicizza. <strong>Ripristina indice</strong> ricostruisce l'indice Brain già esistente.</p></div>
     {headerToolbarTarget ? createPortal(toolbar, headerToolbarTarget) : toolbar}
     <details className="brain-summary" open><summary><span><Database size={15} />Riepilogo</span><ChevronDown size={15} /></summary><div className="brain-summary-grid"><div><strong>{status?.files ?? 0}</strong><span>File</span></div><div><strong>{(status?.chunks ?? 0).toLocaleString("it-IT")}</strong><span>Embedding</span></div><div><strong>{status?.turboVec?.count != null ? status.turboVec.count.toLocaleString("it-IT") : "—"}</strong><span>Vettori indice</span></div><div><strong>{groups.length}</strong><span>Raccolte</span></div></div></details>
