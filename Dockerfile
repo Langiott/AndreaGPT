@@ -27,6 +27,17 @@ ENV DOCTR_PYTHON=/opt/doctr/bin/python
 ENV WHISPER_PYTHON=/opt/doctr/bin/python
 ENV TURBOVEC_PYTHON=/opt/doctr/bin/python
 ENV VISION_PYTHON=/opt/doctr/bin/python
+# Foto: ADB recente (il pacchetto Debian non ha "adb pair" per il debug wireless), volti FaceNet, HEIC.
+# Layer separato: non invalida la cache dell'installazione grande qui sopra.
+# CA di Norton (scansione SSL) tra quelle di sistema: serve a pip qui e ai download dei modelli (HF, pesi FaceNet) a runtime.
+COPY certs/norton-shield-root.pem /usr/local/share/ca-certificates/norton-shield-root.crt
+RUN update-ca-certificates \
+ && echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
+ && apt-get update && apt-get install -y --no-install-recommends -t bookworm-backports adb \
+ && rm -rf /var/lib/apt/lists/* \
+ && PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/doctr/bin/pip install --no-cache-dir --no-deps facenet-pytorch pillow-heif
+ENV TORCH_HOME=/app/data/huggingface/torch
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/norton-shield-root.crt
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist

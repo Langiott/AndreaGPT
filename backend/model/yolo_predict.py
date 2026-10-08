@@ -12,7 +12,9 @@ system_ca = Path("/etc/ssl/certs/ca-certificates.crt")
 if system_ca.is_file():
     os.environ.setdefault("REQUESTS_CA_BUNDLE", str(system_ca))
     os.environ.setdefault("SSL_CERT_FILE", str(system_ca))
+import base64
 import csv
+import io
 import json
 import sys
 import numpy as np
@@ -141,19 +143,36 @@ def cutout(result, source, annotated):
     return target
 
 
-def predict(task, model_name, source, annotated=None):
-    """Esegue la previsione; restituisce testo e, se richiesto, il percorso dell'immagine annotata."""
+def load(model_task, model_name):
     model_path = Path(model_name)
     if model_path.parent == Path("."):
         weights_dir = ocr_root / "models"
         weights_dir.mkdir(parents=True, exist_ok=True)
         model_path = weights_dir / model_path.name
-    # bbox usa il modello di detection, cambia solo l'output
-    model_task = "detect" if task == "bbox" else task
     key = (model_task, str(model_path))
     if key not in _models:
         _models[key] = YOLO(str(model_path), task=model_task)
-    result = next(iter(_models[key].predict(source=source, save=False, verbose=False)))
+    return _models[key]
+
+
+def live(model_name, image):
+    """Un fotogramma della fotocamera (JPEG base64): solo i box, in coordinate 0-1, senza file su disco."""
+    frame = Image.open(io.BytesIO(base64.b64decode(image))).convert("RGB")
+    result = next(iter(load("detect", model_name).predict(source=frame, imgsz=640, conf=0.35, save=False, verbose=False)))
+    boxes = []
+    if result.boxes is not None:
+        for (x1, y1, x2, y2), cls, conf in zip(result.boxes.xyxyn.tolist(), result.boxes.cls.tolist(), result.boxes.conf.tolist()):
+            name = result.names[int(cls)]
+            italian = LABELS_IT["coco"].get(name) or name
+            boxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "label": italian[:1].upper() + italian[1:], "conf": round(conf, 3), "cls": int(cls)})
+    return {"boxes": boxes}
+
+
+def predict(task, model_name, source, annotated=None):
+    """Esegue la previsione; restituisce testo e, se richiesto, il percorso dell'immagine annotata."""
+    # bbox usa il modello di detection, cambia solo l'output
+    model_task = "detect" if task == "bbox" else task
+    result = next(iter(load(model_task, model_name).predict(source=source, save=False, verbose=False)))
     if task == "bbox":
         return bounding_boxes(result, annotated)
     lines = []
@@ -205,7 +224,7 @@ args = parser.parse_args()
 if args.serve:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
     from json_serve import serve
-    serve(lambda request: predict(request["task"], request["model"], request["source"], request.get("annotated")))
+    serve(lambda request: live(request["model"], request["image"]) if request["task"] == "live" else predict(request["task"], request["model"], request["source"], request.get("annotated")))
 else:
     if not (args.task and args.model and args.source):
         parser.error("--task, --model e --source richiesti")

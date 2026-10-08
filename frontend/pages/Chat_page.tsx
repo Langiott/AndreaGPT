@@ -28,6 +28,7 @@ import {
   Newspaper,
   Maximize,
   Mic,
+  Camera,
   Minimize,
   MessageSquarePlus,
   Bookmark,
@@ -63,6 +64,7 @@ import { createStreamBatch } from "../utils/stream_batch";
 import { writeClipboard } from "../utils/clipboard";
 import { userErrorMessage } from "../utils/errors";
 import { useVoiceMode } from "../utils/voice_mode";
+import { YoloLive } from "../components/YoloLive";
 import { ShapPanel } from "../components/ShapPanel";
 import { TokenConfidencePanel } from "../components/TokenConfidence";
 import { parseCitation } from "../utils/cite_focus";
@@ -82,6 +84,7 @@ const BrainPanel = lazy(() => import("../components/BrainPanel").then(module => 
 const BrainDocumentReader = lazy(() => import("../components/BrainPanel").then(module => ({ default: module.BrainDocumentReader })));
 const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => ({ default: module.BrainGraph })));
 const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
+const FotoPanel = lazy(() => import("../components/FotoPanel").then(module => ({ default: module.FotoPanel })));
 const SocialPanel = lazy(() => import("../components/SocialPanel").then(module => ({ default: module.SocialPanel })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
 // Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
@@ -348,6 +351,7 @@ export default function App() {
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
   const [socialOpen, setSocialOpen] = useState(false);
+  const [fotoOpen, setFotoOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
   const [embeddingOpen, setEmbeddingOpen] = useState(false);
   const appearance = useAppearance();
@@ -398,6 +402,7 @@ export default function App() {
   // Fonte Brain aperta dalla chat sul tratto citato.
   const [citeOpen, setCiteOpen] = useState<{ source: string; startLine: number; endLine: number; text: string } | null>(null);
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
+  const [yoloLiveOpen, setYoloLiveOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [recordingFileName, setRecordingFileName] = useState("");
@@ -1840,7 +1845,7 @@ export default function App() {
               {specialMode === "ocr" && <ToolWelcomeCard model="docTR locale" text={cardTexts.ocr} {...cardEditProps("ocr")}
                 actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
               {specialMode === "yolo" && <ToolWelcomeCard model="YOLO11 locale" text={cardTexts.yolo} {...cardEditProps("yolo")}
-                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select></>} />}
+                actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><button type="button" className="special-upload-button" onClick={() => setYoloLiveOpen(true)}><Camera size={17} /> Live</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select></>} />}
               {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" model="Pandoc + LibreOffice" text={cardTexts.convert} {...cardEditProps("convert")}>
                 <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
               </ToolWelcomeCard>}
@@ -1909,6 +1914,7 @@ export default function App() {
           {modelsCollapsed && <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />}
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
           <button className="sidebar-action" onClick={() => setSocialOpen(true)}><Bookmark size={17} /> Social</button>
+          <button className="sidebar-action" onClick={() => setFotoOpen(true)}><Image size={17} /> Foto</button>
           <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
           <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
@@ -2058,9 +2064,10 @@ export default function App() {
               <div className="composer-tools" ref={composerToolsRef}><button className={`attach-button tools-toggle ${composerToolsOpen ? "active" : ""}`} onClick={() => setComposerToolsOpen((open) => !open)} aria-expanded={composerToolsOpen} aria-haspopup="menu" aria-label="Apri strumenti" title="Strumenti"><Settings2 size={18} /></button>{composerToolsOpen && <div className="composer-tools-menu" role="menu">
                 <button onClick={() => { setComposerToolsOpen(false); fileInputRef.current?.click(); }} disabled={loading || attachments.length >= MAX_ATTACHMENTS}><Paperclip size={17} /><span>Allega file</span></button>
                 <button onClick={() => void compactCurrentChat()} disabled={loading || compactingChat || messages.filter(message => message.content.trim()).length === 0}><Archive size={17} /><span>{compactingChat ? "Compatto…" : "Compatta chat"}</span></button>
+                {specialMode === "yolo" && <button onClick={() => { setComposerToolsOpen(false); setYoloLiveOpen(true); }}><Camera size={17} /><span>YOLO live</span></button>}
                 {specialMode === "normal" && <><button onClick={() => openAudioWelcome("transcribe")} disabled={loading || recording || transcribing}><AudioLines size={17} /><span>Trascrivi audio</span></button><button className={recording ? "active" : ""} onClick={() => openAudioWelcome("record")} disabled={loading || transcribing}><Mic size={17} /><span>{recording ? "Termina registrazione" : "Registra audio"}</span></button>
                 <button className={voce.attiva ? "active" : ""} onClick={() => { setComposerToolsOpen(false); voce.toggle(); }} disabled={!voce.supportata || !selectedModel || recording || transcribing} aria-pressed={voce.attiva} title={voce.supportata ? undefined : "Non supportata da questo browser"}><AudioLines size={17} /><span>Modalità audio {voce.attiva ? "ON" : "OFF"}</span></button>
-                <button className={webSearchEnabled ? "active" : ""} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false}><Globe2 size={17} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("ocr"); }} disabled={loading}><ScanLine size={17} /><span>OCR</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("yolo"); }} disabled={loading}><YoloIcon /><span>YOLO</span></button><button className={brainEnabled ? "active" : ""} onClick={() => setBrainMode(!brainEnabled)} disabled={loading}><Network size={17} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button></>}
+                <button className={webSearchEnabled ? "active" : ""} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false}><Globe2 size={17} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("ocr"); }} disabled={loading}><ScanLine size={17} /><span>OCR</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("yolo"); }} disabled={loading}><YoloIcon /><span>YOLO</span></button><button onClick={() => { setComposerToolsOpen(false); setYoloLiveOpen(true); }}><Camera size={17} /><span>YOLO live</span></button><button className={brainEnabled ? "active" : ""} onClick={() => setBrainMode(!brainEnabled)} disabled={loading}><Network size={17} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button></>}
               </div>}</div>
               <textarea
                 ref={textareaRef}
@@ -2090,6 +2097,8 @@ export default function App() {
         </footer>
       </main>
 
+      {yoloLiveOpen && <YoloLive onClose={() => setYoloLiveOpen(false)} />}
+
       <Mainboard currentActivity={activeOperation ? { label: activeOperation.label, startedAt: new Date(activeOperation.startedAt).toISOString(), status: "running" } : null} />
 
       {diagnosticReportMessageId && (() => {
@@ -2115,6 +2124,7 @@ export default function App() {
         </Modal>
       )}
 
+      {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" wide onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><FotoPanel /></Suspense></Modal>}
       {socialOpen && <Modal title="Social" className="fit-modal" wide onClose={() => setSocialOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><SocialPanel /></Suspense></Modal>}
       {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
