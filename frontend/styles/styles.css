@@ -278,6 +278,11 @@ button { color: inherit; }
 }
 .audio-record-button.active { color: #fff; background: #bd3030; animation: audio-pulse 1.25s ease-in-out infinite; }
 .audio-status { display: flex; align-items: center; gap: 8px; padding: 7px 10px; color: var(--muted); font-size: 12px; }
+.voice-status { min-width: 0; }
+.voice-status strong { flex: none; color: var(--text, inherit); font-weight: 600; }
+.voice-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--lime); animation: audio-pulse 1s infinite; }
+.voice-status .recording-dot { flex: none; animation: audio-pulse 1s infinite; }
 .recording-dot { width: 8px; height: 8px; border-radius: 50%; background: #d43b3b; box-shadow: 0 0 0 4px rgba(212,59,59,.16); }
 .audio-welcome-card { position: relative; z-index: 2; display: flex; align-items: center; gap: 25px; width: min(100%, 720px); margin: 28px auto 0; padding: 18px 22px; border: 1px solid rgba(var(--glow), .35); border-radius: 16px; background: rgba(17,20,17,.92); box-shadow: 0 16px 45px rgba(0,0,0,.2); text-align: left; }
 .audio-welcome-visual { position: relative; flex: 0 0 168px; display: grid; place-items: center; min-height: 105px; }

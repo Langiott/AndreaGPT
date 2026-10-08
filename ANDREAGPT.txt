@@ -199,3 +199,11 @@ Il modello analizza direttamente le relazioni tra le parole dei due testi e rest
 Si chiama **multilingue** perché è addestrato su più lingue e può confrontare, ad esempio, una query in italiano con un documento in inglese.
 Nei sistemi **RAG** viene spesso usato come **reranker**: prima un modello di embedding recupera velocemente, per esempio, i 20 documenti più simili; poi il cross-encoder li analizza uno per uno e li riordina in modo più preciso.
 In sintesi: **embedding = ricerca veloce dei candidati; cross-encoder = valutazione più precisa e riordinamento dei risultati**.
+Quella è la schermata sbagliata. "Aggiungi un sito" lì serve a togliere l'audio a un sito, quindi premi Annulla. Il permesso che serve si dà dai flag di Chrome:
+
+Nella barra degli indirizzi di Chrome, dove scrivi i siti, scrivi esattamente chrome://flags e premi invio.
+Nella casella di ricerca in alto scrivi insecure origins.
+Compare "Insecure origins treated as secure". Nel riquadro di testo sotto scrivi http://192.168.2.156:3000.
+Nel menu a tendina accanto metti Enabled.
+In basso compare il pulsante Relaunch: premilo e Chrome si riavvia.
+Apri http://192.168.2.156:3000 e attiva Modalità audio. Quando Chrome ti chiede il microfono, scegli Consenti.
