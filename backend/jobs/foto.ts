@@ -10,6 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { Response } from "express";
 import { JsonLineWorker } from "../utils/json_line_worker";
+import { recuperaFoto, type Collegamento } from "./foto_connection";
 
 const execFileAsync = promisify(execFile);
 const ESTENSIONI = ["jpg", "jpeg", "png", "heic", "webp"];
@@ -24,7 +25,6 @@ export interface FotoOptions {
 }
 
 type Passo = "" | "collegamento" | "elenco" | "analisi" | "volti";
-interface Collegamento { ip: string; porta: number }
 interface FileRemoto { remoto: string; size: number; mtime: number }
 
 export function createFoto(options: FotoOptions) {
@@ -41,6 +41,7 @@ export function createFoto(options: FotoOptions) {
   let fermare = false;
   // Dopo un riavvio del container il server ADB riparte vuoto: lo stato ritenta l'ultimo IP:porta, al massimo una volta al minuto.
   let ultimoTentativo = 0;
+  let recupero: Promise<string | undefined> | undefined;
 
   const indice = <T>(op: string, extra: Record<string, unknown> = {}) => (["analyze", "group", "recheck"].includes(op) ? analisi : consulta).request<T>({ dir: options.dataDir, op, ...extra });
 
@@ -61,14 +62,19 @@ export function createFoto(options: FotoOptions) {
 
   /** Seriale del telefono collegato; prova a ricollegare l'ultimo IP:porta se non c'è. */
   async function seriale(ricollega = true) {
+    if (recupero) return recupero;
+    recupero = recuperaSeriale(ricollega).finally(() => { recupero = undefined; });
+    return recupero;
+  }
+
+  async function recuperaSeriale(ricollega: boolean) {
     const conf = await salvato();
-    const atteso = conf ? `${conf.ip}:${conf.porta}` : "";
-    let lista = await dispositivi();
-    if (ricollega && conf && !lista.some(item => item.seriale === atteso && item.tipo === "device")) {
-      await adb(["connect", atteso], 8_000).catch(() => "");
-      lista = await dispositivi();
+    if (!conf) return (await dispositivi()).find(item => item.tipo === "device")?.seriale;
+    const trovato = await recuperaFoto(conf, adb, ricollega);
+    if (trovato && trovato.conf.porta !== conf.porta) {
+      await fs.writeFile(fileCollegamento, JSON.stringify(trovato.conf));
     }
-    return (lista.find(item => item.seriale === atteso && item.tipo === "device") ?? lista.find(item => item.tipo === "device"))?.seriale;
+    return trovato?.seriale;
   }
 
   async function elenca(dispositivo: string): Promise<FileRemoto[]> {
@@ -186,14 +192,15 @@ export function createFoto(options: FotoOptions) {
     async stato() {
       const ritenta = Date.now() - ultimoTentativo > 60_000;
       if (ritenta) ultimoTentativo = Date.now();
-      const [conf, dispositivo, riepilogo] = await Promise.all([salvato(), seriale(ritenta && !stato.running), indice<{ totale: number; categorie: Record<string, number> }>("summary")]);
+      const [dispositivo, riepilogo] = await Promise.all([seriale(ritenta && !stato.running), indice<{ totale: number; categorie: Record<string, number> }>("summary")]);
+      const conf = await salvato();
       return { ...stato, collegato: Boolean(dispositivo), dispositivo: dispositivo ?? "", ip: conf?.ip ?? "", porta: conf?.porta ?? "", foto: riepilogo.totale, categorie: riepilogo.categorie };
     },
     /** indirizzo = IP:porta della schermata Debug wireless; associazione + codice = finestra "Associa con codice" (solo la prima volta). */
     async collega(input: { indirizzo?: unknown; associazione?: unknown; codice?: unknown }) {
       const leggi = (value: unknown) => {
         const m = String(value ?? "").trim().match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/);
-        return m && Number(m[2]) <= 65535 ? { ip: m[1], porta: Number(m[2]) } : undefined;
+        return m && m[1].split(".").every(part => Number(part) <= 255) && Number(m[2]) > 0 && Number(m[2]) <= 65535 ? { ip: m[1], porta: Number(m[2]) } : undefined;
       };
       const indirizzo = leggi(input.indirizzo);
       const codice = String(input.codice ?? "").trim();
@@ -206,12 +213,12 @@ export function createFoto(options: FotoOptions) {
         if (!indirizzo) return { associato: true, collegato: false };
       }
       const { ip, porta } = indirizzo!;
-      const out = await adb(["connect", `${ip}:${porta}`], 15_000).catch(error => String(error?.stdout || error?.message || error));
-      if (!/connected to/i.test(out)) throw new Error(`Collegamento non riuscito: ${out.trim().split("\n").at(-1)}`);
+      const trovato = await recuperaFoto({ ip, porta }, adb, true);
+      if (!trovato) throw new Error("Telefono non raggiungibile. Controlla che Debug wireless sia attivo e telefono e PC siano sulla stessa Wi-Fi. La porta può cambiare: copia l’IP:porta attuale dalla schermata principale Debug wireless, non dalla finestra di associazione. Se il PC è ancora associato non serve un nuovo codice.");
       await fs.mkdir(options.dataDir, { recursive: true });
-      await fs.writeFile(fileCollegamento, JSON.stringify({ ip, porta }));
+      await fs.writeFile(fileCollegamento, JSON.stringify(trovato.conf));
       analizza();
-      return { associato: Boolean(codice), collegato: true };
+      return { associato: Boolean(codice), collegato: true, indirizzo: `${trovato.conf.ip}:${trovato.conf.porta}` };
     },
     analizza,
     ricontrolla: () => avvia(ricontrollaPersone),

@@ -33,6 +33,7 @@ export function FotoPanel() {
   const [q, setQ] = useState("");
   const [cerca, setCerca] = useState("");
   const [persona, setPersona] = useState<number>();
+  const [menuPersona, setMenuPersona] = useState<{ id: number; x: number; y: number }>();
   const [categoria, setCategoria] = useState("");
   const [aperta, setAperta] = useState<number>();
   const [selezione, setSelezione] = useState<Set<number>>(new Set());
@@ -148,7 +149,7 @@ export function FotoPanel() {
       {categoria === "persone" && persone.length > 0 && (
         <div className={`foto-volti${tuttiVolti ? " tutti" : ""}`} role="list">
           {visibili.slice(0, tuttiVolti ? undefined : VOLTI_RIGA).concat(!tuttiVolti && visibili.slice(VOLTI_RIGA).some(item => item.id === persona) ? visibili.filter(item => item.id === persona) : []).map(item => (
-            <button key={item.id} type="button" role="listitem" className={`foto-volto${persona === item.id ? " active" : ""}`} onClick={() => setPersona(persona === item.id ? undefined : item.id)} title={`${item.nome || "Senza nome"} · ${item.n}`}>
+            <button key={item.id} type="button" role="listitem" className={`foto-volto${persona === item.id ? " active" : ""}`} onClick={() => setPersona(persona === item.id ? undefined : item.id)} onContextMenu={event => { event.preventDefault(); setMenuPersona({ id: item.id, x: event.clientX, y: event.clientY }); }} title={`${item.nome || "Senza nome"} · ${item.n}`}>
               <img src={volto(item.copertina)} alt="" loading="lazy" />
               <span>{item.nome || "?"}</span>
             </button>
@@ -157,6 +158,9 @@ export function FotoPanel() {
         </div>
       )}
       {selezionata && <SchedaPersona key={selezionata.id} persona={selezionata} persone={persone} onCambio={async (via) => { if (via) setPersona(undefined); await ricaricaPersone(); }} onErrore={setError} />}
+      {menuPersona && (() => { const item = persone.find(personaItem => personaItem.id === menuPersona.id); if (!item) return null; return <div className="foto-contesto" style={{ left: menuPersona.x, top: menuPersona.y }} onMouseLeave={() => setMenuPersona(undefined)}>
+        <button type="button" onClick={() => { setCategoria("persone"); setPersona(item.id); setMenuPersona(undefined); window.setTimeout(() => document.querySelector(".foto-persona")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); }}>Apri profilo</button>
+      </div>; })()}
 
       {(cerca || persona || categoria) && <small className="foto-conta">{totale} foto</small>}
       <div className="foto-griglia">
@@ -265,10 +269,10 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
   async function invia() {
     setBusy(true); setError("");
     try {
-      const result = await api<{ associato: boolean; collegato: boolean }>("/api/foto/collega", { indirizzo: indirizzoValido(indirizzo) ? indirizzo.trim() : undefined, associazione: puoAssociare ? associazione.trim() : undefined, codice: puoAssociare ? codice : undefined });
+      const result = await api<{ associato: boolean; collegato: boolean; indirizzo?: string }>("/api/foto/collega", { indirizzo: indirizzoValido(indirizzo) ? indirizzo.trim() : undefined, associazione: puoAssociare ? associazione.trim() : undefined, codice: puoAssociare ? codice : undefined });
       if (result.associato) { setAssociato(true); setCodice(""); setAssociazione(""); }
       if (result.collegato) {
-        try { localStorage.setItem("foto.indirizzo", indirizzo.trim()); } catch { /* storage non disponibile */ }
+        try { localStorage.setItem("foto.indirizzo", result.indirizzo || indirizzo.trim()); } catch { /* storage non disponibile */ }
         await onFatto();
       }
     } catch (caught) { setError(userErrorMessage(caught, "Collegamento non riuscito.")); }
@@ -277,6 +281,7 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
   return (
     <form className="foto-collega" onSubmit={event => { event.preventDefault(); void invia(); }}>
       <label className="foto-campo">Debug wireless · IP:porta<input inputMode="decimal" value={indirizzo} placeholder="192.168.2.45:41235" onChange={event => setIndirizzo(soloIndirizzo(event.target.value))} /></label>
+      <small>La porta può cambiare dopo una disconnessione. Usa l’indirizzo attuale della schermata principale Debug wireless; se il PC è già associato non serve ripetere il codice.</small>
       <details open={!associato && !stato?.ip}>
         <summary>{associato ? "Associato ✓" : "Prima associazione"}</summary>
         <div className="foto-campi">
@@ -374,13 +379,7 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
                       <button type="button" disabled={!nuovo.nome.trim()} onClick={() => void assegna(faccia, "nuova", nuovo.nome.trim())}>OK</button>
                       <button type="button" aria-label="Annulla" onClick={() => setNuovo(undefined)}><X size={14} /></button>
                     </span>
-                  ) : <select value={faccia.persona ?? ""} onChange={event => void assegna(faccia, event.target.value)}>
-                    <option value="">{faccia.persona ? "" : "?"}</option>
-                    {persone.map(item => <option key={item.id} value={item.id}>{item.nome || `? (${item.n})`}</option>)}
-                    {faccia.persona && !persone.some(item => item.id === faccia.persona) && <option value={faccia.persona}>{faccia.nome || "?"}</option>}
-                    <option value="nuova">Nuova persona…</option>
-                    {faccia.persona && <option value="no">Non è questa persona</option>}
-                  </select>}
+                  ) : <PersonaPicker volto={faccia} persone={persone} onChange={value => void assegna(faccia, String(value))} />}
                 </label>
               ))}
             </div>
@@ -391,6 +390,25 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
     </div>,
     document.querySelector(".app-shell") ?? document.body,
   );
+}
+
+function PersonaPicker({ volto: faccia, persone, onChange }: { volto: Volto; persone: Persona[]; onChange: (value: number | "") => void }) {
+  const [aperto, setAperto] = useState(false);
+  const [cerca, setCerca] = useState("");
+  const scelta = persone.find(item => item.id === faccia.persona);
+  const filtrate = persone.filter(item => (item.nome || "").toLocaleLowerCase().includes(cerca.toLocaleLowerCase()));
+  return <div className="foto-persona-picker">
+    <button type="button" className="foto-persona-trigger" onClick={() => setAperto(!aperto)} aria-expanded={aperto}>
+      {scelta?.nome || faccia.nome || "?"} <span>⌄</span>
+    </button>
+    {aperto && <div className="foto-persona-menu">
+      <input autoFocus type="search" placeholder="Cerca persona…" value={cerca} onChange={event => setCerca(event.target.value)} />
+      <div className="foto-persona-options">
+        {!faccia.persona && <button type="button" onClick={() => { onChange(""); setAperto(false); }}>?</button>}
+        {filtrate.map(item => <button type="button" key={item.id} className={item.id === faccia.persona ? "active" : ""} onClick={() => { onChange(item.id); setAperto(false); }}>{item.nome || `Senza nome (${item.n})`}</button>)}
+      </div>
+    </div>}
+  </div>;
 }
 
 /** Conferma nello stile dell'app (al posto di window.confirm). */

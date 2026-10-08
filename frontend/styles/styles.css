@@ -2645,9 +2645,19 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .foto-volto.active img { border-color: var(--lime); box-shadow: 0 0 0 2px var(--lime-soft); }
 .foto-volto span { max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
 .foto-volto.active span { color: inherit; font-weight: 700; }
+.foto-contesto { position: fixed; z-index: 100; min-width: 130px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); box-shadow: 0 10px 28px #0008; }
+.foto-contesto button { width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.foto-contesto button:hover { color: var(--panel); background: #c93434; }
 .foto-persona { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .foto-persona input { flex: 1 1 140px; }
 .foto-persona select { flex: 0 1 150px; }
+.foto-persona-picker { position: relative; flex: 0 1 190px; }
+.foto-persona-trigger { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.foto-persona-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: min(240px, 72vw); padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 12px 30px #0008; }
+.foto-persona-menu input { width: 100%; margin-bottom: 5px; box-sizing: border-box; }
+.foto-persona-options { max-height: 260px; overflow-y: auto; display: grid; gap: 3px; }
+.foto-persona-options button { width: 100%; padding: 8px 9px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.foto-persona-options button:hover, .foto-persona-options button.active { background: var(--ink); color: var(--panel); }
 .foto-persona button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 12px; cursor: pointer; }
 .foto-persona button.go { border-color: var(--lime); background: var(--lime); font-weight: 700; }
 .foto-persona button:disabled { opacity: .45; cursor: not-allowed; }
