@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ChevronRight, Link2, Maximize, Minimize, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronLeft, ChevronRight, ImagePlus, Link2, Maximize, Minimize, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
 import { userErrorMessage } from "../utils/errors";
 
 type Passo = "" | "collegamento" | "elenco" | "analisi" | "volti";
@@ -35,6 +35,10 @@ export function FotoPanel() {
   const [persona, setPersona] = useState<number>();
   const [categoria, setCategoria] = useState("");
   const [aperta, setAperta] = useState<number>();
+  const [selezione, setSelezione] = useState<Set<number>>(new Set());
+  const [chiediElimina, setChiediElimina] = useState<number[]>();
+  // Clic singolo apre (dopo una breve attesa per riconoscere il doppio clic); doppio clic o tocco lungo seleziona.
+  const tocco = useRef<{ timer?: number; lungo?: boolean }>({});
   const [collega, setCollega] = useState(false);
   const [error, setError] = useState("");
   const [tuttiVolti, setTuttiVolti] = useState(false);
@@ -96,6 +100,17 @@ export function FotoPanel() {
     setError("");
     try { await task(); } catch (caught) { setError(userErrorMessage(caught, "Operazione non riuscita.")); }
   }
+  function alterna(id: number) {
+    setSelezione(prev => { const nuova = new Set(prev); if (!nuova.delete(id)) nuova.add(id); return nuova; });
+  }
+  async function elimina(ids: number[]) {
+    await azione(async () => {
+      await api("/api/foto/elimina", { ids });
+      setSelezione(new Set());
+      setAperta(undefined);
+      await Promise.all([carica(0), ricaricaPersone(), ricaricaStato()]);
+    });
+  }
   const selezionata = persone.find(item => item.id === persona);
   const visibili = persone;
   const categorie = Object.entries(stato?.categorie ?? {});
@@ -107,8 +122,11 @@ export function FotoPanel() {
       <button type="button" className={`foto-tasto${collega ? " active" : ""}`} onClick={() => setCollega(!collega)} aria-expanded={collega} title={stato?.collegato ? `Collegato · ${stato.dispositivo}` : "Non collegato"}>
         <span className={`foto-punto${stato?.collegato ? " ok" : ""}`} /><Link2 size={14} /><span className="foto-etichetta">Collega</span>
       </button>
-      <button type="button" className="foto-tasto go" disabled={!stato?.collegato || stato.running} onClick={() => azione(async () => { await api("/api/foto/analizza", {}); await ricaricaStato(); })} title="Analizza le foto nuove">
-        <RefreshCw size={14} className={stato?.running ? "spin" : undefined} /><span className="foto-etichetta">Nuove</span>
+      <button type="button" className="foto-tasto" disabled={!stato?.collegato || stato.running} onClick={() => azione(async () => { await api("/api/foto/analizza", {}); await ricaricaStato(); })} title="Nuove: foto nuove e cancellate dal telefono">
+        <ImagePlus size={14} /><span className="foto-etichetta">Nuove</span>
+      </button>
+      <button type="button" className="foto-tasto go" disabled={!stato || stato.running} onClick={() => azione(async () => { await api("/api/foto/aggiorna", {}); await ricaricaStato(); })} title="Aggiorna: ricontrolla le persone">
+        <RefreshCw size={14} className={stato?.running && stato.passo === "volti" ? "spin" : undefined} /><span className="foto-etichetta">Aggiorna</span>
       </button>
     </div>
   );
@@ -118,14 +136,13 @@ export function FotoPanel() {
       {testata ? createPortal(comandi, testata) : comandi}
       {collega && <Collega stato={stato} onFatto={async () => { setCollega(false); await ricaricaStato(); }} />}
       {stato?.running && <Avanzamento stato={stato} onFerma={() => azione(() => api("/api/foto/ferma", {}))} />}
-      {error && <p className="cand-error">{error}</p>}
-      {stato?.errori.map(item => <p key={item} className="cand-error">{item}</p>)}
+      <Avvisi voci={[...(error ? [error] : []), ...(stato?.errori ?? [])]} />
 
       {categorie.length > 0 && (
-        <div className="cand-tabs" role="tablist">
+        <Schede>
           <button type="button" role="tab" aria-selected={!categoria} className={!categoria ? "active" : ""} onClick={() => { setCategoria(""); setPersona(undefined); }}>Tutte {stato?.foto ?? ""}</button>
           {categorie.map(([nome, n]) => <button key={nome} type="button" role="tab" aria-selected={categoria === nome} className={categoria === nome ? "active" : ""} onClick={() => { setCategoria(categoria === nome ? "" : nome); setPersona(undefined); }}>{nome} {n}</button>)}
-        </div>
+        </Schede>
       )}
 
       {categoria === "persone" && persone.length > 0 && (
@@ -143,12 +160,37 @@ export function FotoPanel() {
 
       {(cerca || persona || categoria) && <small className="foto-conta">{totale} foto</small>}
       <div className="foto-griglia">
-        {foto.map((item, index) => <button key={item.id} type="button" onClick={() => setAperta(index)}><img src={thumb(item.id)} alt="" loading="lazy" /></button>)}
+        {foto.map((item, index) => (
+          <button key={item.id} type="button" className={selezione.has(item.id) ? "scelta" : undefined} aria-pressed={selezione.size ? selezione.has(item.id) : undefined}
+            onClick={() => {
+              if (tocco.current.lungo) { tocco.current.lungo = false; return; }
+              if (selezione.size) { alterna(item.id); return; }
+              window.clearTimeout(tocco.current.timer);
+              tocco.current.timer = window.setTimeout(() => setAperta(index), 230);
+            }}
+            onDoubleClick={() => { window.clearTimeout(tocco.current.timer); if (!selezione.size) alterna(item.id); }}
+            onTouchStart={() => { window.clearTimeout(tocco.current.timer); tocco.current.timer = window.setTimeout(() => { tocco.current.lungo = true; alterna(item.id); navigator.vibrate?.(15); }, 450); }}
+            onTouchMove={() => window.clearTimeout(tocco.current.timer)}
+            onTouchEnd={() => { if (!tocco.current.lungo) window.clearTimeout(tocco.current.timer); }}
+            onContextMenu={event => event.preventDefault()}>
+            <img src={thumb(item.id)} alt="" loading="lazy" draggable={false} />
+            {selezione.has(item.id) && <span className="foto-spunta"><Check size={14} /></span>}
+          </button>
+        ))}
       </div>
       {!foto.length && <p className="cand-empty">{stato?.foto ? "Nessuna foto." : "Vuoto."}</p>}
       <div ref={fondo} />
+      {selezione.size > 0 && (
+        <div className="foto-selezione">
+          <strong>{selezione.size}</strong>
+          <button type="button" onClick={() => setSelezione(new Set(foto.map(item => item.id)))} title="Seleziona tutte quelle caricate"><CheckCheck size={15} /> Tutte</button>
+          <button type="button" className="pericolo" onClick={() => setChiediElimina([...selezione])}><Trash2 size={15} /> Elimina</button>
+          <button type="button" aria-label="Annulla selezione" onClick={() => setSelezione(new Set())}><X size={15} /></button>
+        </div>
+      )}
+      {chiediElimina && <Dialogo titolo={chiediElimina.length === 1 ? "Eliminare la foto?" : `Eliminare ${chiediElimina.length} foto?`} testo="Tolte dall'app, restano sul telefono." conferma="Elimina" onAnnulla={() => setChiediElimina(undefined)} onOk={() => { const ids = chiediElimina; setChiediElimina(undefined); void elimina(ids); }} />}
       {aperta !== undefined && foto[aperta] && (
-        <Visore id={foto[aperta].id} persone={persone} onChiudi={() => setAperta(undefined)} onPrecedente={aperta > 0 ? () => setAperta(aperta - 1) : undefined} onSuccessiva={aperta < foto.length - 1 ? () => setAperta(aperta + 1) : undefined} onCambio={ricaricaPersone} />
+        <Visore id={foto[aperta].id} persone={persone} onChiudi={() => setAperta(undefined)} onPrecedente={aperta > 0 ? () => setAperta(aperta - 1) : undefined} onSuccessiva={aperta < foto.length - 1 ? () => setAperta(aperta + 1) : undefined} onCambio={ricaricaPersone} onElimina={id => setChiediElimina([id])} />
       )}
     </div>
   );
@@ -156,6 +198,61 @@ export function FotoPanel() {
 
 const indirizzoValido = (value: string) => /^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(value.trim());
 const soloIndirizzo = (value: string) => value.replace(/[^\d.:]/g, "").slice(0, 21);
+
+/** Schede categoria senza barra di scorrimento: < e > spostano di 4 alla volta. */
+function Schede({ children }: { children: React.ReactNode }) {
+  const riga = useRef<HTMLDivElement>(null);
+  const [inizio, setInizio] = useState(0);
+  const [frecce, setFrecce] = useState({ sx: false, dx: false });
+  const misura = useCallback(() => {
+    const nodo = riga.current;
+    if (!nodo) return;
+    setFrecce({ sx: nodo.scrollLeft > 2, dx: nodo.scrollLeft + nodo.clientWidth < nodo.scrollWidth - 2 });
+  }, []);
+  useEffect(() => {
+    const nodo = riga.current;
+    if (!nodo) return;
+    const osservatore = new ResizeObserver(misura);
+    osservatore.observe(nodo);
+    nodo.addEventListener("scroll", misura, { passive: true });
+    misura();
+    return () => { osservatore.disconnect(); nodo.removeEventListener("scroll", misura); };
+  }, [misura]);
+  function sposta(passo: number) {
+    const nodo = riga.current;
+    if (!nodo) return;
+    const schede = [...nodo.children] as HTMLElement[];
+    const nuovo = Math.max(0, Math.min(schede.length - 1, inizio + passo));
+    setInizio(nuovo);
+    nodo.scrollTo({ left: schede[nuovo]?.offsetLeft - schede[0].offsetLeft, behavior: "smooth" });
+  }
+  return (
+    <div className="foto-schede">
+      {frecce.sx && <button type="button" className="foto-freccia sx" aria-label="Categorie precedenti" onClick={() => sposta(-4)}><ChevronLeft size={16} /></button>}
+      <div ref={riga} className="cand-tabs foto-schede-riga" role="tablist">{children}</div>
+      {frecce.dx && <button type="button" className="foto-freccia dx" aria-label="Altre categorie" onClick={() => sposta(4)}><ChevronRight size={16} /></button>}
+    </div>
+  );
+}
+
+/** Avvisi in una card compatta: primi 3, gli altri dietro "+N"; chiusa resta chiusa finché non arrivano avvisi nuovi. */
+function Avvisi({ voci }: { voci: string[] }) {
+  const [chiusi, setChiusi] = useState<string[]>([]);
+  const [tutti, setTutti] = useState(false);
+  const nuove = voci.filter(voce => !chiusi.includes(voce));
+  if (!nuove.length) return null;
+  const visibili = tutti ? nuove : nuove.slice(0, 3);
+  return (
+    <div className="foto-avvisi" role="status">
+      <AlertTriangle size={15} />
+      <ul>
+        {visibili.map(voce => <li key={voce}>{voce}</li>)}
+        {nuove.length > 3 && <li><button type="button" onClick={() => setTutti(!tutti)}>{tutti ? "meno" : `+${nuove.length - 3}`}</button></li>}
+      </ul>
+      <button type="button" className="foto-avvisi-chiudi" aria-label="Chiudi avvisi" onClick={() => { setChiusi(voci); setTutti(false); }}><X size={14} /></button>
+    </div>
+  );
+}
 
 function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<void> }) {
   const [indirizzo, setIndirizzo] = useState(stato?.ip ? `${stato.ip}:${stato.porta}` : leggi("foto.indirizzo"));
@@ -195,10 +292,10 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
 
 function Avanzamento({ stato, onFerma }: { stato: Stato; onFerma: () => void }) {
   const ferma = <button type="button" className="foto-ferma" onClick={onFerma} aria-label="Ferma" title="Ferma"><Square size={12} /></button>;
-  if (stato.passo !== "analisi" || !stato.totale) return <div className="social-progress"><div className="social-progress-head"><strong>{PASSI[stato.passo] || "…"}</strong>{ferma}</div><div className="social-progress-bar is-indeterminate"><span /></div></div>;
+  if (!["analisi", "volti"].includes(stato.passo) || !stato.totale) return <div className="social-progress"><div className="social-progress-head"><strong>{PASSI[stato.passo] || "…"}</strong>{ferma}</div><div className="social-progress-bar is-indeterminate"><span /></div></div>;
   return (
     <div className="social-progress">
-      <div className="social-progress-head"><strong>{stato.fatti}/{stato.totale} foto</strong><span>{Math.round((stato.fatti / stato.totale) * 100)}%</span>{ferma}</div>
+      <div className="social-progress-head"><strong>{stato.fatti}/{stato.totale} {stato.passo === "volti" ? "persone" : "foto"}</strong><span>{Math.round((stato.fatti / stato.totale) * 100)}%</span>{ferma}</div>
       <div className="social-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={stato.totale} aria-valuenow={stato.fatti}><span style={{ width: `${(stato.fatti / stato.totale) * 100}%` }} /></div>
     </div>
   );
@@ -230,7 +327,7 @@ function SchedaPersona({ persona, persone, onCambio, onErrore }: { persona: Pers
   );
 }
 
-function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio }: { id: number; persone: Persona[]; onChiudi: () => void; onPrecedente?: () => void; onSuccessiva?: () => void; onCambio: () => Promise<void> }) {
+function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, onElimina }: { id: number; persone: Persona[]; onChiudi: () => void; onPrecedente?: () => void; onSuccessiva?: () => void; onCambio: () => Promise<void>; onElimina: (id: number) => void }) {
   const [dettaglio, setDettaglio] = useState<Dettaglio>();
   const [originale, setOriginale] = useState(false);
   const ricarica = useCallback(async () => { try { setDettaglio(await api<Dettaglio>(`/api/foto/${id}`)); } catch { setDettaglio(undefined); } }, [id]);
@@ -261,6 +358,7 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio }:
         {onPrecedente && <button type="button" className="foto-nav sx" aria-label="Precedente" onClick={onPrecedente}><ChevronLeft size={22} /></button>}
         {onSuccessiva && <button type="button" className="foto-nav dx" aria-label="Successiva" onClick={onSuccessiva}><ChevronRight size={22} /></button>}
         <button type="button" className="foto-chiudi" aria-label="Chiudi" onClick={onChiudi}><X size={20} /></button>
+        <button type="button" className="foto-chiudi foto-cestino" aria-label="Elimina foto" title="Elimina" onClick={() => onElimina(id)}><Trash2 size={18} /></button>
       </div>
       {dettaglio && (
         <div className="foto-info">

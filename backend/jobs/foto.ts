@@ -42,7 +42,7 @@ export function createFoto(options: FotoOptions) {
   // Dopo un riavvio del container il server ADB riparte vuoto: lo stato ritenta l'ultimo IP:porta, al massimo una volta al minuto.
   let ultimoTentativo = 0;
 
-  const indice = <T>(op: string, extra: Record<string, unknown> = {}) => (op === "analyze" || op === "group" ? analisi : consulta).request<T>({ dir: options.dataDir, op, ...extra });
+  const indice = <T>(op: string, extra: Record<string, unknown> = {}) => (["analyze", "group", "recheck"].includes(op) ? analisi : consulta).request<T>({ dir: options.dataDir, op, ...extra });
 
   async function adb(args: string[], timeout = 20_000) {
     await fs.mkdir(adbEnv.HOME, { recursive: true });
@@ -80,43 +80,103 @@ export function createFoto(options: FotoOptions) {
       .map(m => ({ size: Number(m[1]), mtime: Number(m[2]), remoto: m[3] }));
   }
 
+  /** Avviso breve per la card: nome del file e cosa non è andato, senza comandi né percorsi. */
+  function avvisa(testo: string) {
+    if (!stato.errori.includes(testo)) stato.errori = [testo, ...stato.errori].slice(0, 30);
+  }
+
+  /** Foto cancellate dal telefono → via anche dall'indice. Se ne mancano troppe è più probabile un errore di lettura: non si tocca niente. */
+  async function allineaCancellate(dispositivo: string) {
+    const remoti = await elenca(dispositivo);
+    const { noti, escluse } = await indice<{ noti: Record<string, [number, number]>; escluse: string[] }>("known");
+    const presenti = new Set(remoti.map(item => item.remoto));
+    const sparite = [...Object.keys(noti), ...escluse].filter(remoto => !presenti.has(remoto));
+    // Controllo di sicurezza: il telefono conferma file per file che non esistono più (una lettura fallita non cancella niente).
+    const confermate: string[] = [];
+    if (remoti.length) {
+      const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+      for (let i = 0; i < sparite.length; i += 80) {
+        const blocco = sparite.slice(i, i + 80);
+        const out = await adb(["-s", dispositivo, "shell", `for f in ${blocco.map(quote).join(" ")}; do [ -e "$f" ] || echo "$f"; done`], 60_000).catch(() => "");
+        const assenti = new Set(out.split("\n").map(line => line.trim()).filter(Boolean));
+        confermate.push(...blocco.filter(remoto => assenti.has(remoto)));
+      }
+    }
+    if (confermate.length) await indice("remove", { remoti: confermate });
+    return { remoti, noti, escluse };
+  }
+
   async function esegui() {
     Object.assign(stato, { passo: "collegamento", fatti: 0, totale: 0, nuove: 0, errori: [] });
     const dispositivo = await seriale();
     if (!dispositivo) throw new Error("Telefono non collegato.");
     stato.passo = "elenco";
-    const remoti = await elenca(dispositivo);
-    const { noti } = await indice<{ noti: Record<string, [number, number]> }>("known");
+    const { remoti, noti, escluse } = await allineaCancellate(dispositivo);
+    for (const remoto of escluse) noti[remoto] = [-1, -1];
     // Più recenti per prime: durante la prima passata le foto utili compaiono subito.
-    const nuove = remoti.filter(item => { const noto = noti[item.remoto]; return !noto || noto[0] !== item.size || noto[1] !== item.mtime; }).sort((a, b) => b.mtime - a.mtime);
+    const nuove = remoti.filter(item => { const noto = noti[item.remoto]; return !noto || (noto[0] !== -1 && (noto[0] !== item.size || noto[1] !== item.mtime)); }).sort((a, b) => b.mtime - a.mtime);
     Object.assign(stato, { passo: "analisi", totale: nuove.length, nuove: nuove.length });
     await fs.mkdir(temp, { recursive: true });
     for (const [numero, item] of nuove.entries()) {
       if (fermare) break;
       const locale = path.join(temp, `${numero}${path.extname(item.remoto).toLowerCase()}`);
+      let scaricata = false;
       try {
         await adb(["-s", dispositivo, "pull", item.remoto, locale], 180_000);
+        scaricata = true;
         await options.heavy(() => indice("analyze", { path: locale, remote: item.remoto, size: item.size, mtime: item.mtime }));
       } catch (error) {
-        stato.errori = [`${path.basename(item.remoto)}: ${error instanceof Error ? error.message.split("\n")[0] : error}`, ...stato.errori].slice(0, 5);
+        // Non scaricata perché cancellata nel frattempo: non è un errore, la toglie l'allineamento.
+        const cancellata = !scaricata && /does not exist|No such file/i.test(String((error as { stderr?: string })?.stderr ?? error));
+        if (!cancellata) avvisa(`${path.basename(item.remoto)} · ${scaricata ? "analisi non riuscita" : "non scaricata"}`);
       } finally { await fs.rm(locale, { force: true }); }
       stato.fatti++;
-      // Durante la prima passata i gruppi di volti compaiono a blocchi, senza aspettare la fine.
-      if (stato.fatti % 300 === 0) await indice("group").catch(() => undefined);
+      // Durante la prima passata i gruppi di volti compaiono a blocchi e le cancellazioni dal telefono arrivano senza aspettare la fine.
+      if (stato.fatti % 200 === 0) {
+        await indice("group").catch(() => undefined);
+        await allineaCancellate(dispositivo).catch(() => undefined);
+      }
     }
     stato.passo = "volti";
-    if (stato.fatti) await indice("group");
+    await allineaCancellate(dispositivo).catch(() => undefined);
+    await indice("group");
     stato.ultimo = new Date().toISOString();
   }
 
-  function analizza() {
+  /** "Aggiorna": secondo controllo sulle sole foto con persone. Originale dal telefono se collegato, altrimenti la miniatura. */
+  async function ricontrollaPersone() {
+    Object.assign(stato, { passo: "volti", fatti: 0, totale: 0, nuove: 0, errori: [] });
+    const dispositivo = await seriale();
+    if (dispositivo) await allineaCancellate(dispositivo).catch(() => undefined);
+    const { foto } = await indice<{ foto: Array<{ id: number; remoto: string }> }>("candidates");
+    stato.totale = foto.length;
+    await fs.mkdir(temp, { recursive: true });
+    for (const item of foto) {
+      if (fermare) break;
+      let originale = "";
+      if (dispositivo) {
+        originale = path.join(temp, `r${item.id}${path.extname(item.remoto).toLowerCase()}`);
+        await adb(["-s", dispositivo, "pull", item.remoto, originale], 180_000).catch(() => { originale = ""; });
+      }
+      try { await options.heavy(() => indice("recheck", { id: item.id, path: originale || path.join(options.dataDir, "thumbs", `${item.id}.jpg`) })); }
+      catch { avvisa(`${path.basename(item.remoto)} · controllo non riuscito`); }
+      finally { if (originale) await fs.rm(originale, { force: true }); }
+      stato.fatti++;
+    }
+    await indice("group");
+    if (!dispositivo) avvisa("Telefono non collegato: usate le miniature");
+    stato.ultimo = new Date().toISOString();
+  }
+
+  function avvia(lavoro: () => Promise<void>) {
     if (stato.running) return;
     stato.running = true;
     fermare = false;
-    void esegui()
-      .catch(error => { stato.errori = [error instanceof Error ? error.message : String(error), ...stato.errori].slice(0, 5); })
+    void lavoro()
+      .catch(error => { avvisa(error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error)); })
       .finally(() => { Object.assign(stato, { running: false, passo: "" }); });
   }
+  const analizza = () => avvia(esegui);
 
   const minuti = Number(process.env.FOTO_CONTROLLO_MIN ?? 15);
   const controllo = minuti > 0 ? setInterval(() => { void salvato().then(conf => { if (conf && !stato.running) analizza(); }); }, minuti * 60_000) : undefined;
@@ -154,6 +214,7 @@ export function createFoto(options: FotoOptions) {
       return { associato: Boolean(codice), collegato: true };
     },
     analizza,
+    ricontrolla: () => avvia(ricontrollaPersone),
     ferma() { fermare = true; },
     lista: (query: Record<string, unknown>) => indice("list", query),
     persone: () => indice("people"),
@@ -161,6 +222,7 @@ export function createFoto(options: FotoOptions) {
     rinomina: (id: number, nome: string) => indice("rename", { id, nome }),
     nascondi: (id: number, mostra = false) => indice("hide", { id, mostra }),
     unisci: (id: number, verso: number) => indice("merge", { id, in: verso }),
+    elimina: (ids: number[]) => indice<{ tolte: number }>("remove", { ids }),
     volto: (id: number, persona: number | "nuova" | null, nome?: string) => indice("face", { id, persona, nome }),
     /** Originale riletto dal telefono; senza telefono (o HEIC, non visibile nel browser) torna la miniatura. */
     async originale(id: number, response: Response) {

@@ -1,4 +1,4 @@
-"""Indice foto del telefono: miniatura, ricerca per contenuto (SigLIP 2), tag YOLO, volti (MTCNN + FaceNet), testo (Tesseract).
+"""Indice foto del telefono: miniatura, ricerca per contenuto (SigLIP 2), tag YOLO, volti (SCRFD + ArcFace), testo (Tesseract).
 
 Worker persistente (json_serve): Node scarica una foto alla volta via ADB e chiede "analyze"; l'originale viene poi cancellato.
 Tutto lo stato vive in <dir>/foto.sqlite, <dir>/thumbs/<id>.jpg e <dir>/volti/<id>.jpg.
@@ -22,9 +22,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from json_serve import serve  # noqa: E402
 
 CLIP_MODEL = os.environ.get("FOTO_CLIP_MODEL", "google/siglip2-base-patch16-224")
-# Coseno tra impronte FaceNet: sopra la soglia il volto va alla persona più vicina, sotto apre un gruppo nuovo.
-SOGLIA_VOLTO = float(os.environ.get("FOTO_SOGLIA_VOLTO", "0.55"))
-SOGLIA_GRUPPO = float(os.environ.get("FOTO_SOGLIA_GRUPPO", "0.50"))
+# Coseno tra impronte ArcFace: stessa persona 0.6–0.9, persone diverse sotto 0.25.
+# Sopra SOGLIA_VOLTO il volto va alla persona più vicina; SOGLIA_GRUPPO raggruppa i volti senza persona.
+SOGLIA_VOLTO = float(os.environ.get("FOTO_SOGLIA_VOLTO", "0.40"))
+SOGLIA_GRUPPO = float(os.environ.get("FOTO_SOGLIA_GRUPPO", "0.35"))
+# Volti più piccoli di questa frazione del lato lungo sono sfondo: impronte inaffidabili che si raggruppano tra loro.
+VOLTO_MINIMO = float(os.environ.get("FOTO_VOLTO_MINIMO", "0.025"))
+ARCFACE_ZIP = "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+# Posizione standard di occhi, naso e bocca nel volto 112×112 atteso da ArcFace.
+ARCFACE_PUNTI = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]], np.float32)
 CATEGORIE = {
     "documento": "una foto di un documento o di un foglio stampato con testo",
     "scontrino": "una foto di uno scontrino o di una ricevuta",
@@ -76,7 +82,12 @@ def apri(cartella):
             qualita REAL, vettore BLOB, confermato INTEGER DEFAULT 0, rifiutate TEXT DEFAULT '');
         CREATE INDEX IF NOT EXISTS volti_foto ON volti(foto);
         CREATE INDEX IF NOT EXISTS volti_persona ON volti(persona);
+        CREATE TABLE IF NOT EXISTS escluse (remoto TEXT PRIMARY KEY);
     """)
+    # arc: impronta ArcFace. I volti analizzati prima (solo FaceNet in "vettore") la ricevono da "Aggiorna".
+    if "arc" not in {r["name"] for r in db.execute("PRAGMA table_info(volti)")}:
+        db.execute("ALTER TABLE volti ADD COLUMN arc BLOB")
+        db.commit()
 
 
 # ---------- modelli (caricati alla prima analisi o ricerca) ----------
@@ -132,12 +143,70 @@ def yolo():
     return modelli["yolo"]
 
 
-def facce():
-    if "facce" not in modelli:
-        torch_cpu()
-        from facenet_pytorch import MTCNN, InceptionResnetV1
-        modelli["facce"] = (MTCNN(image_size=160, margin=24, keep_all=True, post_process=True, device="cpu"), InceptionResnetV1(pretrained="vggface2").eval())
-    return modelli["facce"]
+def insightface(nome):
+    """Modelli InsightFace buffalo_l (det_10g = SCRFD, w600k_r50 = ArcFace) in ONNX: archivio scaricato una volta nella cache dei modelli."""
+    if nome not in modelli:
+        import shutil
+        import urllib.request
+        import zipfile
+        import onnxruntime as ort
+        cartella = os.path.join(os.environ.get("HF_HOME") or os.path.join(dati, "modelli"), "insightface")
+        file = os.path.join(cartella, nome)
+        if not os.path.exists(file):
+            os.makedirs(cartella, exist_ok=True)
+            archivio = os.path.join(cartella, "buffalo_l.zip")
+            with urllib.request.urlopen(ARCFACE_ZIP, timeout=120) as risposta, open(archivio, "wb") as uscita:
+                shutil.copyfileobj(risposta, uscita)
+            with zipfile.ZipFile(archivio) as z:
+                for interno in ("det_10g.onnx", "w600k_r50.onnx"):
+                    with z.open(next(n for n in z.namelist() if n.endswith(interno))) as sorgente, open(os.path.join(cartella, interno + ".tmp"), "wb") as uscita:
+                        shutil.copyfileobj(sorgente, uscita)
+                    os.replace(os.path.join(cartella, interno + ".tmp"), os.path.join(cartella, interno))
+            os.remove(archivio)
+        modelli[nome] = ort.InferenceSession(file, providers=["CPUExecutionProvider"])
+    return modelli[nome]
+
+
+def arcface():
+    return insightface("w600k_r50.onnx")
+
+
+def scrfd(matrice, lato=640, soglia=0.5):
+    """Rilevatore SCRFD: riquadri, punteggi e 5 punti (occhi, naso, bocca) in coordinate dell'immagine."""
+    import cv2
+    sessione = insightface("det_10g.onnx")
+    h, w = matrice.shape[:2]
+    scala = lato / max(h, w)
+    tela = np.zeros((lato, lato, 3), np.uint8)
+    tela[:int(h * scala), :int(w * scala)] = cv2.resize(matrice, (int(w * scala), int(h * scala)))
+    uscite = sessione.run(None, {sessione.get_inputs()[0].name: ((tela.astype(np.float32) - 127.5) / 128.0).transpose(2, 0, 1)[None]})
+    riquadri, punteggi, punti = [], [], []
+    for i, passo in enumerate((8, 16, 32)):
+        # Uscite: punteggi, distanze dei bordi e punti per i tre passi; due ancore per cella.
+        sc, bb, kp = uscite[i].reshape(-1), uscite[i + 3].reshape(-1, 4) * passo, uscite[i + 6].reshape(-1, 10) * passo
+        celle = lato // passo
+        cy, cx = np.mgrid[:celle, :celle]
+        centri = np.repeat(np.stack([cx.ravel(), cy.ravel()], 1) * passo, 2, axis=0).astype(np.float32)
+        tieni = sc >= soglia
+        c, b = centri[tieni], bb[tieni]
+        riquadri.append(np.stack([c[:, 0] - b[:, 0], c[:, 1] - b[:, 1], c[:, 0] + b[:, 2], c[:, 1] + b[:, 3]], 1) / scala)
+        punti.append((np.repeat(c, 5, axis=0).reshape(-1, 10) + kp[tieni]) / scala)
+        punteggi.append(sc[tieni])
+    riquadri, punteggi, punti = np.concatenate(riquadri), np.concatenate(punteggi), np.concatenate(punti).reshape(-1, 5, 2)
+    if not len(riquadri):
+        return riquadri, punteggi, punti
+    tenuti = np.array(cv2.dnn.NMSBoxes([[float(a), float(b), float(c - a), float(d - b)] for a, b, c, d in riquadri], punteggi.tolist(), soglia, 0.4)).reshape(-1)
+    return riquadri[tenuti], punteggi[tenuti], punti[tenuti]
+
+
+def impronta(immagine, punti):
+    """Volto allineato su occhi/naso/bocca → impronta ArcFace normalizzata."""
+    import cv2
+    matrice, _ = cv2.estimateAffinePartial2D(np.asarray(punti, np.float32), ARCFACE_PUNTI)
+    allineato = cv2.warpAffine(immagine, matrice, (112, 112))
+    sessione = arcface()
+    v = sessione.run(None, {sessione.get_inputs()[0].name: ((allineato.astype(np.float32) - 127.5) / 127.5).transpose(2, 0, 1)[None]})[0][0]
+    return (v / np.linalg.norm(v)).astype(np.float32)
 
 
 # ---------- analisi di una foto ----------
@@ -167,25 +236,18 @@ def ridotta(img, lato):
     return copia
 
 
-def trova_volti(img):
-    import torch
-    mtcnn, rete = facce()
-    piccola = ridotta(img, 1280)
-    scala = img.width / piccola.width
-    riquadri, prob = mtcnn.detect(piccola)
-    if riquadri is None:
-        return []
-    buoni = [i for i, p in enumerate(prob) if p is not None and p >= 0.95 and min(riquadri[i][2] - riquadri[i][0], riquadri[i][3] - riquadri[i][1]) >= 40]
-    if not buoni:
-        return []
-    scelti = riquadri[buoni]
-    ritagli = mtcnn.extract(piccola, scelti, None)
-    with torch.no_grad():
-        impronte = rete(ritagli).numpy()
+def trova_volti(img, soglia=0.7, lato=640):
+    """Soglia più bassa e risoluzione più alta nel secondo controllo ("Aggiorna"): trova anche volti piccoli, di lato o inclinati."""
+    matrice = np.asarray(img)
+    riquadri, punteggi, punti = scrfd(matrice, lato, soglia)
+    minimo = max(img.width, img.height) * VOLTO_MINIMO
     risultato = []
-    for (x1, y1, x2, y2), p, v in zip(scelti, prob[buoni], impronte):
-        x1, y1, x2, y2 = [float(c) * scala for c in (x1, y1, x2, y2)]
-        risultato.append({"box": (x1, y1, x2 - x1, y2 - y1), "qualita": float(p) * min(1.0, (x2 - x1) / 300), "vettore": (v / np.linalg.norm(v)).astype(np.float32)})
+    for (x1, y1, x2, y2), p, occhi in zip(riquadri, punteggi, punti):
+        if min(x2 - x1, y2 - y1) < minimo:
+            continue
+        x1, y1 = max(0.0, float(x1)), max(0.0, float(y1))
+        x2, y2 = min(float(img.width), float(x2)), min(float(img.height), float(y2))
+        risultato.append({"box": (x1, y1, x2 - x1, y2 - y1), "qualita": float(p) * min(1.0, (x2 - x1) / max(img.width, img.height) * 8), "vettore": impronta(matrice, occhi)})
     return risultato
 
 
@@ -212,10 +274,10 @@ def ritaglio_volto(img, box, destinazione):
 
 def centroidi():
     """Impronta media di ogni persona (solo volti non rifiutati)."""
-    righe = db.execute("SELECT persona, vettore FROM volti WHERE persona IS NOT NULL").fetchall()
+    righe = db.execute("SELECT persona, arc FROM volti WHERE persona IS NOT NULL AND arc IS NOT NULL").fetchall()
     gruppi = {}
     for r in righe:
-        gruppi.setdefault(r["persona"], []).append(np.frombuffer(r["vettore"], dtype=np.float32))
+        gruppi.setdefault(r["persona"], []).append(np.frombuffer(r["arc"], dtype=np.float32))
     risultato = {}
     for persona, vettori in gruppi.items():
         media = np.mean(vettori, axis=0)
@@ -256,22 +318,91 @@ def analizza(req):
     for volto in volti:
         x, y, w, h = volto["box"]
         persona = assegna(volto["vettore"], centri)
-        vc = db.execute("INSERT INTO volti (foto, persona, x, y, w, h, qualita, vettore) VALUES (?,?,?,?,?,?,?,?)",
+        vc = db.execute("INSERT INTO volti (foto, persona, x, y, w, h, qualita, arc) VALUES (?,?,?,?,?,?,?,?)",
                         (foto_id, persona, x / img.width, y / img.height, w / img.width, h / img.height, volto["qualita"], volto["vettore"].tobytes()))
         ritaglio_volto(img, volto["box"], os.path.join(dati, "volti", f"{vc.lastrowid}.jpg"))
     db.commit()
     return {"id": foto_id, "categoria": categoria, "volti": len(volti)}
 
 
+def candidate(_req):
+    """Foto con persone, ricontrollate da "Aggiorna"."""
+    righe = db.execute("SELECT id, remoto FROM foto WHERE categoria = 'persone' OR tag LIKE '%persona%' OR id IN (SELECT foto FROM volti) ORDER BY scattata DESC").fetchall()
+    return {"foto": [dict(r) for r in righe]}
+
+
+def ricontrolla(req):
+    """Secondo controllo di una foto (originale dal telefono o miniatura): volti nuovi aggiunti, impronte ArcFace aggiornate."""
+    foto_id = int(req["id"])
+    img, _ = apri_immagine(req["path"])
+    trovati = trova_volti(img, lato=960)
+    esistenti = db.execute("""SELECT v.id, v.x, v.y, v.w, v.h, v.confermato, COALESCE(p.nome, '') nome FROM volti v
+                              LEFT JOIN persone p ON p.id = v.persona WHERE v.foto=?""", (foto_id,)).fetchall()
+    usati, nuovi = set(), 0
+    for volto in trovati:
+        x, y, w, h = volto["box"]
+        box = (x / img.width, y / img.height, w / img.width, h / img.height)
+        uguale = max(esistenti, key=lambda e: sovrapposizione(box, (e["x"], e["y"], e["w"], e["h"])), default=None)
+        if uguale is not None and uguale["id"] not in usati and sovrapposizione(box, (uguale["x"], uguale["y"], uguale["w"], uguale["h"])) > 0.3:
+            usati.add(uguale["id"])
+            db.execute("UPDATE volti SET arc=? WHERE id=?", (volto["vettore"].tobytes(), uguale["id"]))
+            continue
+        vc = db.execute("INSERT INTO volti (foto, persona, x, y, w, h, qualita, arc) VALUES (?,NULL,?,?,?,?,?,?)", (foto_id, *box, volto["qualita"], volto["vettore"].tobytes()))
+        ritaglio_volto(img, volto["box"], os.path.join(dati, "volti", f"{vc.lastrowid}.jpg"))
+        nuovi += 1
+    # Il secondo controllo fa testo: volti non ritrovati, non confermati e senza nome erano falsi positivi.
+    for e in esistenti:
+        if e["id"] not in usati and not e["confermato"] and not e["nome"]:
+            db.execute("DELETE FROM volti WHERE id=?", (e["id"],))
+            try:
+                os.unlink(os.path.join(dati, "volti", f"{e['id']}.jpg"))
+            except OSError:
+                pass
+    db.commit()
+    return {"volti": len(trovati), "nuovi": nuovi}
+
+
+def sovrapposizione(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    larghezza = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    altezza = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    comune = larghezza * altezza
+    return comune / (aw * ah + bw * bh - comune) if comune else 0.0
+
+
 def raggruppa(_req=None):
-    """Volti senza persona → gruppi nuovi (clustering gerarchico, coseno). Le persone esistenti non vengono toccate."""
+    """Riallinea i volti ai nomi: gruppi senza nome simili a una persona con nome → uniti; volti liberi → persona più vicina o gruppi nuovi."""
     from scipy.cluster.hierarchy import fcluster, linkage
+    piccoli = [r["id"] for r in db.execute("""SELECT v.id FROM volti v JOIN foto f ON f.id = v.foto WHERE v.confermato = 0
+        AND MIN(v.w * f.larghezza, v.h * f.altezza) < ? * MAX(f.larghezza, f.altezza)""", (VOLTO_MINIMO,))]
+    for volto_id in piccoli:
+        db.execute("DELETE FROM volti WHERE id=?", (volto_id,))
+        try:
+            os.unlink(os.path.join(dati, "volti", f"{volto_id}.jpg"))
+        except OSError:
+            pass
+    # I gruppi senza nome non hanno scelte dell'utente: si rifanno da zero (i volti confermati restano dove sono).
+    db.execute("UPDATE volti SET persona = NULL WHERE confermato = 0 AND persona IN (SELECT id FROM persone WHERE nome = '' AND nascosta = 0)")
     centri = centroidi()
-    liberi = db.execute("SELECT id, vettore, rifiutate FROM volti WHERE persona IS NULL").fetchall()
+    # Dopo aver dato un nome (es. Ambra) i suoi volti finiti in altri gruppi senza nome confluiscono in lei.
+    nomi = {r["id"] for r in db.execute("SELECT id FROM persone WHERE nome != '' AND nascosta = 0")}
+    senza_nome = {r["id"] for r in db.execute("SELECT id FROM persone WHERE nome = '' AND nascosta = 0")}
+    uniti = 0
+    for gruppo in senza_nome & set(centri):
+        candidati = {p: c for p, c in centri.items() if p in nomi}
+        destinazione = assegna(centri[gruppo], candidati)
+        if destinazione:
+            db.execute("UPDATE volti SET persona=? WHERE persona=?", (destinazione, gruppo))
+            uniti += 1
+    if uniti:
+        centri = centroidi()
+    liberi = db.execute("SELECT id, foto, qualita, arc, rifiutate FROM volti WHERE persona IS NULL AND arc IS NOT NULL").fetchall()
+    foto_di = {r["id"]: (r["foto"], r["qualita"]) for r in liberi}
     # Prima i volti che ora somigliano a una persona esistente (es. dopo una correzione).
     rimasti = []
     for r in liberi:
-        v = np.frombuffer(r["vettore"], dtype=np.float32)
+        v = np.frombuffer(r["arc"], dtype=np.float32)
         escluse = {int(x) for x in r["rifiutate"].split(",") if x}
         persona = assegna(v, centri, escluse)
         if persona:
@@ -286,6 +417,13 @@ def raggruppa(_req=None):
         for (volto_id, _), e in zip(rimasti, etichette):
             gruppi.setdefault(int(e), []).append(volto_id)
         for membri in gruppi.values():
+            # Più volti della stessa foto nel gruppo: resta il migliore, gli altri tornano liberi.
+            per_foto = {}
+            for m in membri:
+                foto, qualita = foto_di[m]
+                if foto not in per_foto or qualita > foto_di[per_foto[foto]][1]:
+                    per_foto[foto] = m
+            membri = list(per_foto.values())
             if len(membri) < 2:
                 continue
             persona = db.execute("INSERT INTO persone (nome) VALUES ('')").lastrowid
@@ -293,7 +431,7 @@ def raggruppa(_req=None):
             nuovi += 1
     aggiorna_copertine()
     db.commit()
-    return {"nuove": nuovi}
+    return {"nuove": nuovi, "uniti": uniti}
 
 
 def aggiorna_copertine():
@@ -315,7 +453,34 @@ def elimina_foto(foto_id):
 # ---------- consultazione ----------
 
 def noti(_req):
-    return {"noti": {r["remoto"]: [r["size"], r["mtime"]] for r in db.execute("SELECT remoto, size, mtime FROM foto")}}
+    return {"noti": {r["remoto"]: [r["size"], r["mtime"]] for r in db.execute("SELECT remoto, size, mtime FROM foto")},
+            "escluse": [r["remoto"] for r in db.execute("SELECT remoto FROM escluse")]}
+
+
+def rimuovi(req):
+    """ids: eliminate dall'app (escluse dalle prossime sincronizzazioni). remoti: sparite dal telefono."""
+    tolte = 0
+    for foto_id in req.get("ids") or []:
+        r = db.execute("SELECT remoto FROM foto WHERE id=?", (int(foto_id),)).fetchone()
+        if not r:
+            continue
+        db.execute("INSERT OR IGNORE INTO escluse (remoto) VALUES (?)", (r["remoto"],))
+        elimina_foto(int(foto_id))
+        tolte += 1
+    for remoto in req.get("remoti") or []:
+        db.execute("DELETE FROM escluse WHERE remoto=?", (remoto,))
+        r = db.execute("SELECT id FROM foto WHERE remoto=?", (remoto,)).fetchone()
+        if r:
+            elimina_foto(r["id"])
+            tolte += 1
+    for sotto, tabella in (("thumbs", "foto"), ("volti", "volti")):
+        vivi = {r[0] for r in db.execute(f"SELECT id FROM {tabella}")}
+        for nome in os.listdir(os.path.join(dati, sotto)):
+            if nome.endswith(".jpg") and nome[:-4].isdigit() and int(nome[:-4]) not in vivi:
+                os.unlink(os.path.join(dati, sotto, nome))
+    aggiorna_copertine()
+    db.commit()
+    return {"tolte": tolte}
 
 
 def riepilogo(_req):
@@ -429,7 +594,7 @@ def sposta_volto(req):
     return {"ok": True}
 
 
-AZIONI = {"analyze": analizza, "group": raggruppa, "known": noti, "summary": riepilogo, "people": persone, "list": lista, "detail": dettaglio,
+AZIONI = {"candidates": candidate, "recheck": ricontrolla, "remove": rimuovi, "analyze": analizza, "group": raggruppa, "known": noti, "summary": riepilogo, "people": persone, "list": lista, "detail": dettaglio,
           "rename": rinomina, "hide": nascondi, "merge": unisci, "face": sposta_volto}
 
 

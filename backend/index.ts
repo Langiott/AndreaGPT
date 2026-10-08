@@ -1073,7 +1073,8 @@ const fotoErrore = (response: express.Response, error: unknown, fallback: string
 app.get("/api/foto/stato", async (_request, response) => { try { response.json(await foto.stato()); } catch (error) { fotoErrore(response, error, "Stato non disponibile."); } });
 app.post("/api/foto/collega", async (request, response) => { try { response.json(await foto.collega(request.body ?? {})); } catch (error) { fotoErrore(response, error, "Collegamento non riuscito."); } });
 app.post("/api/foto/analizza", (_request, response) => { foto.analizza(); response.json({ avviata: true }); });
-app.post("/api/foto/ferma", (_request, response) => { foto.ferma(); response.json({ ok: true }); });
+app.post("/api/foto/aggiorna", (_request, response) => { foto.ricontrolla(); response.json({ avviata: true }); });
+app.post("/api/foto/ferma", (request, response) => { console.log(`Foto: stop richiesto da ${request.ip} (${request.headers["user-agent"] ?? "?"}) ${request.headers.referer ?? ""}`); foto.ferma(); response.json({ ok: true }); });
 app.get("/api/foto/lista", async (request, response) => {
   const { q, persona, categoria, offset, limit } = request.query;
   try { response.json(await foto.lista({ q: String(q ?? "").slice(0, 200), persona: Number(persona) || undefined, categoria: categoria ? String(categoria) : undefined, offset: Number(offset) || 0, limit: Math.min(Number(limit) || 120, 300) })); }
@@ -1094,6 +1095,11 @@ app.post("/api/foto/volti/:id", async (request, response) => {
   const { persona, nome } = request.body ?? {};
   try { response.json(await foto.volto(Number(request.params.id), persona === "nuova" ? "nuova" : Number(persona) || null, nome ? String(nome) : undefined)); }
   catch (error) { fotoErrore(response, error, "Modifica non riuscita."); }
+});
+app.post("/api/foto/elimina", async (request, response) => {
+  const parsed = z.object({ ids: z.array(z.number().int().positive()).min(1).max(5000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Selezione non valida." }); return; }
+  try { response.json(await foto.elimina(parsed.data.ids)); } catch (error) { fotoErrore(response, error, "Eliminazione non riuscita."); }
 });
 app.get("/api/foto/:id/originale", async (request, response) => { try { await foto.originale(Number(request.params.id), response); } catch (error) { fotoErrore(response, error, "Foto non disponibile."); } });
 app.get("/api/foto/:id", async (request, response) => { try { response.json(await foto.dettaglio(Number(request.params.id))); } catch (error) { fotoErrore(response, error, "Foto non trovata."); } });
