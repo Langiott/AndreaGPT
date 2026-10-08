@@ -32,6 +32,7 @@ import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
 import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
 import { createSocial } from "./jobs/social";
+import { createFoto } from "./jobs/foto";
 import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
 import { branchContext, rememberBranchContext, toTraceTokens, type OllamaLogprob } from "./model/token_trace";
 import { sourceFallback, sourceTitle, writeEdition, type NewsArticle, type OllamaChat } from "./news/news_edition";
@@ -200,6 +201,14 @@ const social = createSocial({
   },
 });
 
+// Foto: galleria del telefono via ADB Wi-Fi, volti e ricerca per contenuto.
+const foto = createFoto({
+  dataDir: path.join(toolsRoot, "foto"),
+  python: process.env.DOCTR_PYTHON?.trim() || "python",
+  script: path.join(path.dirname(audioScript), "..", "jobs", "foto_index.py"),
+  heavy: withHeavySlot,
+});
+
 app.disable("x-powered-by");
 app.use((request, response, next) => {
   if (!request.path.startsWith("/api/")) return next();
@@ -238,8 +247,10 @@ app.use((request, response, next) => {
     response.once("finish", () => finishMainboardActivity(activityId, response.statusCode < 400 ? "ok" : "error"));
     response.once("close", () => { if (!response.writableEnded) finishMainboardActivity(activityId, "error"); });
   }
-  const key = `${request.ip || request.socket.remoteAddress || "unknown"}:${expensive ? "heavy" : "api"}`;
-  const limit = expensive ? 30 : 240;
+  // YOLO dal vivo manda diversi fotogrammi al secondo: conteggio a parte, per non esaurire il limite del resto dell'app.
+  const live = request.path === "/api/yolo/live";
+  const key = `${request.ip || request.socket.remoteAddress || "unknown"}:${live ? "live" : expensive ? "heavy" : "api"}`;
+  const limit = live ? 900 : expensive ? 30 : 240;
   const window = requestWindows.get(key);
   if (!window || now - window.startedAt >= 60_000) requestWindows.set(key, { startedAt: now, count: 1 });
   else if (++window.count > limit) { response.setHeader("Retry-After", "60"); response.status(429).json({ error: "Troppe richieste: riprova tra un minuto." }); return; }
@@ -387,6 +398,8 @@ app.use("/outputs/images", express.static(imageOutputRoot, { fallthrough: false,
 // Solo le cartelle mostrate dall'interfaccia: OUTPUT/Log (log diagnostici, in Docker) e altri file restano privati.
 for (const folder of ["Image", "OCR", "YOLO", "Compatta_chat", "Analyze", "Audio", "News", "Instagram"]) app.use(`/outputs/${folder}`, express.static(path.join(outputRoot, folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: 0 }));
 app.use("/outputs", (_request, response) => { response.status(404).end(); });
+// Fuori da /api: una griglia carica centinaia di miniature e non deve consumare il limite richieste. Solo miniature e volti, mai il database.
+for (const folder of ["thumbs", "volti"]) app.use(`/media/foto/${folder}`, express.static(path.join(toolsRoot, "foto", folder), { fallthrough: false, index: false, dotfiles: "deny", maxAge: "7d" }));
 app.get("/api/output", async (_request, response) => {
   const collect = async (folder: string, category: string) => {
     const root = path.join(outputRoot, folder);
@@ -759,6 +772,21 @@ app.post("/api/yolo", async (request, response) => {
   }
 });
 
+// YOLO dal vivo: un fotogramma piccolo alla volta dalla fotocamera, risposta con i soli box normalizzati.
+const yoloLiveSchema = z.object({ data: z.string().startsWith("data:image/jpeg;base64,").max(1_500_000) }).strict();
+app.post("/api/yolo/live", async (request, response) => {
+  const parsed = yoloLiveSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Fotogramma non valido." }); return; }
+  try {
+    const result = await withHeavySlot(() => toolWorker(process.env.DOCTR_PYTHON || "python", yoloScript, 10 * 60_000).request<{ boxes: unknown[] }>({ task: "live", model: process.env.YOLO_MODEL || "yolo11n.pt", image: parsed.data.data.slice(parsed.data.data.indexOf(",") + 1) }));
+    response.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Errore YOLO.";
+    if (/ENOENT|not found|is not recognized|No module named/i.test(message)) response.status(503).json({ error: "YOLO non trovato. Installa Ultralytics (pip install ultralytics)." });
+    else response.status(500).json({ error: `YOLO live non riuscito: ${message.slice(0, 300)}` });
+  }
+});
+
 const analyzeImageSchema = z.object({
   name: z.string().min(1).max(180),
   type: z.string().max(100).optional(),
@@ -1040,6 +1068,35 @@ app.delete("/api/social/:id", async (request, response) => {
   try { await social.elimina(request.params.id); response.json({ ok: true }); }
   catch (error) { response.status(404).json({ error: error instanceof Error ? error.message : "Post non trovato." }); }
 });
+
+const fotoErrore = (response: express.Response, error: unknown, fallback: string) => response.status(400).json({ error: error instanceof Error ? error.message : fallback });
+app.get("/api/foto/stato", async (_request, response) => { try { response.json(await foto.stato()); } catch (error) { fotoErrore(response, error, "Stato non disponibile."); } });
+app.post("/api/foto/collega", async (request, response) => { try { response.json(await foto.collega(request.body ?? {})); } catch (error) { fotoErrore(response, error, "Collegamento non riuscito."); } });
+app.post("/api/foto/analizza", (_request, response) => { foto.analizza(); response.json({ avviata: true }); });
+app.post("/api/foto/ferma", (_request, response) => { foto.ferma(); response.json({ ok: true }); });
+app.get("/api/foto/lista", async (request, response) => {
+  const { q, persona, categoria, offset, limit } = request.query;
+  try { response.json(await foto.lista({ q: String(q ?? "").slice(0, 200), persona: Number(persona) || undefined, categoria: categoria ? String(categoria) : undefined, offset: Number(offset) || 0, limit: Math.min(Number(limit) || 120, 300) })); }
+  catch (error) { fotoErrore(response, error, "Ricerca non riuscita."); }
+});
+app.get("/api/foto/persone", async (_request, response) => { try { response.json(await foto.persone()); } catch (error) { fotoErrore(response, error, "Persone non disponibili."); } });
+app.post("/api/foto/persone/:id", async (request, response) => {
+  const id = Number(request.params.id);
+  const { nome, nascondi, mostra, unisci } = request.body ?? {};
+  try {
+    if (nascondi || mostra) await foto.nascondi(id, Boolean(mostra));
+    else if (unisci) await foto.unisci(id, Number(unisci));
+    else await foto.rinomina(id, String(nome ?? ""));
+    response.json({ ok: true });
+  } catch (error) { fotoErrore(response, error, "Modifica non riuscita."); }
+});
+app.post("/api/foto/volti/:id", async (request, response) => {
+  const { persona, nome } = request.body ?? {};
+  try { response.json(await foto.volto(Number(request.params.id), persona === "nuova" ? "nuova" : Number(persona) || null, nome ? String(nome) : undefined)); }
+  catch (error) { fotoErrore(response, error, "Modifica non riuscita."); }
+});
+app.get("/api/foto/:id/originale", async (request, response) => { try { await foto.originale(Number(request.params.id), response); } catch (error) { fotoErrore(response, error, "Foto non disponibile."); } });
+app.get("/api/foto/:id", async (request, response) => { try { response.json(await foto.dettaglio(Number(request.params.id))); } catch (error) { fotoErrore(response, error, "Foto non trovata."); } });
 
 app.post("/api/candidature/import", async (request, response) => {
   const parsed = z.object({ offers: z.array(z.record(z.string(), z.unknown())).max(5000) }).safeParse(request.body);
@@ -1719,6 +1776,7 @@ function shutdown(signal: string) {
   for (const controller of activeChats) controller.abort();
   visionWorker.close();
   for (const worker of toolWorkers.values()) worker.close();
+  foto.close();
   brainInstance?.close();
   // Le richieste in corso hanno pochi secondi per chiudersi; poi si esce comunque.
   setTimeout(() => process.exit(), 3_000).unref();

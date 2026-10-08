@@ -21,6 +21,7 @@ git push origin stabile
 
 --------------------------------------------------------------------------------
 
+<<<<<<< HEAD
 DUE PC (A e B): PRENDERE I FILE NUOVI DALL'ALTRO PC
 
 Regola: a fine lavoro su un PC → commit + push. Sull'altro PC, prima di lavorare → pull.
@@ -199,6 +200,10 @@ Il modello analizza direttamente le relazioni tra le parole dei due testi e rest
 Si chiama **multilingue** perché è addestrato su più lingue e può confrontare, ad esempio, una query in italiano con un documento in inglese.
 Nei sistemi **RAG** viene spesso usato come **reranker**: prima un modello di embedding recupera velocemente, per esempio, i 20 documenti più simili; poi il cross-encoder li analizza uno per uno e li riordina in modo più preciso.
 In sintesi: **embedding = ricerca veloce dei candidati; cross-encoder = valutazione più precisa e riordinamento dei risultati**.
+=======
+--------------------------------------------------------------------------------
+
+>>>>>>> 48265a412fc17e579eaa5f052855a13815e19b5e
 Quella è la schermata sbagliata. "Aggiungi un sito" lì serve a togliere l'audio a un sito, quindi premi Annulla. Il permesso che serve si dà dai flag di Chrome:
 
 Nella barra degli indirizzi di Chrome, dove scrivi i siti, scrivi esattamente chrome://flags e premi invio.
@@ -207,3 +212,20 @@ Compare "Insecure origins treated as secure". Nel riquadro di testo sotto scrivi
 Nel menu a tendina accanto metti Enabled.
 In basso compare il pulsante Relaunch: premilo e Chrome si riavvia.
 Apri http://192.168.2.156:3000 e attiva Modalità audio. Quando Chrome ti chiede il microfono, scegli Consenti.
+<<<<<<< HEAD
+=======
+
+--------------------------------------------------------------------------------
+ATTIVA MODALITA' SVILUPPATORE NOTHING 
+
+INFO_SULLO_SMARTPHONE → NOTHING_OS_4.1 → Numero build (premi 7 volte )
+Impostazioni → Sistema → Opzioni sviluppatore → Debug wireless e Debug usb( attiva l'interruttore)
+clicca Debug wireless → 192.168.2.220:42723
+
+PC1:192.168.2.156:3000
+PC2:192.168.1.106:3000
+
+Debug wireless · IP+porta → 192.168.2.220:42723
+Debug wireless · Associa  → 192.168.2.220:40495 
+
+>>>>>>> 48265a412fc17e579eaa5f052855a13815e19b5e

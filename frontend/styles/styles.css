@@ -278,6 +278,21 @@ button { color: inherit; }
 }
 .audio-record-button.active { color: #fff; background: #bd3030; animation: audio-pulse 1.25s ease-in-out infinite; }
 .audio-status { display: flex; align-items: center; gap: 8px; padding: 7px 10px; color: var(--muted); font-size: 12px; }
+.yolo-live { position: fixed; inset: 0; z-index: 1000; background: #000; }
+.yolo-live video, .yolo-live canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.yolo-live video { object-fit: contain; }
+.yolo-live video.fill { object-fit: cover; }
+.yolo-live video.mirror { transform: scaleX(-1); }
+.yolo-live-bar { position: absolute; left: 12px; right: 12px; top: max(12px, env(safe-area-inset-top)); display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 12px; background: rgba(0,0,0,.55); color: #fff; font: 12px ui-monospace, Consolas, monospace; backdrop-filter: blur(6px); }
+.yolo-live-fps { flex: none; opacity: .75; }
+.yolo-live-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yolo-live-bar button { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 9px; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; }
+.yolo-live-bar button.yolo-live-cam { width: auto; padding: 0 9px; gap: 5px; display: inline-flex; align-items: center; }
+.yolo-live-cam small { font-size: 11px; }
+.yolo-live-zoom { position: absolute; left: 50%; transform: translateX(-50%); bottom: max(70px, calc(env(safe-area-inset-bottom) + 54px)); width: min(320px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-radius: 999px; background: rgba(0,0,0,.55); color: #fff; font: 600 12px ui-monospace, Consolas, monospace; backdrop-filter: blur(6px); }
+.yolo-live-zoom span { flex: none; width: 34px; }
+.yolo-live-zoom input { flex: 1; accent-color: #fff; }
+.yolo-live-error { position: absolute; left: 12px; right: 12px; bottom: max(16px, env(safe-area-inset-bottom)); margin: 0; padding: 10px 12px; border-radius: 10px; background: #8f2a2a; color: #fff; font-size: 13px; }
 .voice-status { min-width: 0; }
 .voice-status strong { flex: none; color: var(--text, inherit); font-weight: 600; }
 .voice-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2613,3 +2628,125 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .social-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: social-pulse 1s ease-in-out infinite; }
 @keyframes social-pulse { 50% { opacity: .25; } }
 @media (max-width: 480px) { .social-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Foto: galleria del telefono */
+.foto-panel { display: grid; gap: 12px; min-width: 0; }
+.foto-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.foto-bar .cand-actions button.go, .foto-collega .cand-actions button.go, .foto-persona button.go { color: var(--panel); }
+.foto-collega { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.foto-collega > details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.foto-collega > details .foto-campi { margin-top: 8px; }
+.foto-campi { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.foto-campi label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
+.foto-campi input, .foto-persona input, .foto-persona select, .foto-faccia select { min-width: 0; padding: 8px 9px; font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+.foto-persona select option, .foto-faccia select option { background: var(--panel); color: inherit; }
+.foto-volti { display: flex; gap: 12px; overflow-x: auto; padding: 2px 2px 6px; scrollbar-width: thin; }
+.foto-volto { flex: 0 0 auto; display: grid; justify-items: center; gap: 4px; width: 64px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.foto-volto img { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); background: var(--line); }
+.foto-volto.active img { border-color: var(--lime); box-shadow: 0 0 0 2px var(--lime-soft); }
+.foto-volto span { max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
+.foto-volto.active span { color: inherit; font-weight: 700; }
+.foto-persona { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.foto-persona input { flex: 1 1 140px; }
+.foto-persona select { flex: 0 1 150px; }
+.foto-persona button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 12px; cursor: pointer; }
+.foto-persona button.go { border-color: var(--lime); background: var(--lime); font-weight: 700; }
+.foto-persona button:disabled { opacity: .45; cursor: not-allowed; }
+.foto-cerca { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
+.foto-cerca:focus-within { border-color: var(--lime); }
+.foto-cerca input { flex: 1; min-width: 0; padding: 10px 0; border: 0; outline: 0; background: transparent; color: var(--text, inherit); font: inherit; font-size: 14px; }
+.foto-cerca input::-webkit-search-cancel-button { display: none; }
+.foto-cerca button { display: grid; place-items: center; padding: 4px; border: 0; background: none; color: inherit; cursor: pointer; }
+.foto-conta { color: var(--muted); font-size: 11px; }
+.foto-griglia { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; }
+.foto-griglia button { aspect-ratio: 1; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--line); cursor: pointer; }
+.foto-griglia img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.foto-visore { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: rgba(0, 0, 0, .96); color: #f3f5ef; overflow-y: auto; }
+.foto-visore-img { position: relative; flex: 1 1 auto; min-height: 50dvh; display: grid; place-items: center; padding: 48px 8px 8px; }
+.foto-visore-img img { grid-area: 1 / 1; max-width: 100%; max-height: calc(100dvh - 190px); object-fit: contain; border-radius: 6px; }
+.foto-visore-img img.nascosta { visibility: hidden; position: absolute; }
+.foto-nav, .foto-chiudi { position: absolute; display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .5); color: #fff; cursor: pointer; }
+.foto-nav { top: 50%; transform: translateY(-50%); }
+.foto-nav.sx { left: 8px; }
+.foto-nav.dx { right: 8px; }
+.foto-chiudi { top: max(6px, env(safe-area-inset-top)); right: 8px; }
+.foto-info { display: grid; gap: 10px; width: min(900px, 100%); margin: 0 auto; padding: 10px 16px max(16px, env(safe-area-inset-bottom)); }
+.foto-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.foto-facce { display: flex; flex-wrap: wrap; gap: 10px; }
+.foto-faccia { display: flex; align-items: center; gap: 8px; }
+.foto-faccia img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
+.foto-faccia select { max-width: 170px; color: #f3f5ef; border-color: rgba(255, 255, 255, .2); }
+.foto-faccia select option { background: #111; color: #f3f5ef; }
+.foto-info .social-text > summary { color: rgba(255, 255, 255, .6); }
+@media (max-width: 850px) {
+  .foto-griglia { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+  .foto-griglia button { border-radius: 3px; }
+  .foto-visore-img img { max-height: calc(100dvh - 220px); }
+}
+
+/* Tutte le tendine <select> come il menu File: angoli tondi, sfondo del pannello (latte nel tema cosmico).
+   appearance: base-select è di Chrome/Edge 135+; gli altri browser tengono la tendina di sistema. */
+@supports (appearance: base-select) {
+  select:not([multiple]), select:not([multiple])::picker(select) { appearance: base-select; }
+  /* Il pulsante resta come prima: testo centrato in verticale e freccia sottile al posto del triangolo pieno. */
+  select:not([multiple]) { display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; line-height: 1.2; }
+  select:not([multiple])::picker-icon { content: ""; flex: none; width: 6px; height: 6px; margin: -3px 2px 0 0; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); opacity: .65; transition: transform .15s; }
+  select:not([multiple]):open::picker-icon { transform: rotate(225deg); margin-top: 3px; }
+  select:not([multiple])::picker(select) { margin-block: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; color: inherit; background: var(--panel); box-shadow: 0 14px 35px rgba(0,0,0,.25); }
+  select:not([multiple]) option { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 8px 10px; border-radius: 7px; font: inherit; font-size: 12px; font-weight: 400; cursor: pointer; }
+  select:not([multiple]) option:hover, select:not([multiple]) option:focus-visible { background: var(--lime-soft); outline: 0; }
+  select:not([multiple]) option:checked { background: var(--lime-soft); }
+  select:not([multiple]) option::checkmark { display: none; }
+}
+.foto-campo { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
+.foto-campo input { min-width: 0; padding: 8px 9px; font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+.foto-ferma { display: grid; place-items: center; width: 26px; height: 26px; margin-left: auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; color: inherit; cursor: pointer; }
+.foto-ferma:hover { border-color: #ff7a6b; color: #ff7a6b; }
+.social-progress-head:has(.foto-ferma) { align-items: center; }
+/* Foto: comandi nell'intestazione */
+.foto-modal .modal-header-slot { margin: 0 8px 0 14px; overflow: visible; }
+.foto-testata { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; justify-content: flex-end; }
+.foto-testata .foto-cerca { flex: 1 1 260px; max-width: 420px; min-width: 0; padding: 0 8px; border-radius: 8px; }
+.foto-testata .foto-cerca input { padding: 7px 0; font-size: 13px; }
+.foto-tasto { position: relative; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 12px; cursor: pointer; }
+.foto-tasto:hover:not(:disabled), .foto-tasto.active { border-color: var(--lime); background: var(--lime-soft); }
+.foto-tasto.go { border-color: var(--lime); background: var(--lime); color: var(--panel); font-weight: 700; }
+.foto-tasto:disabled { opacity: .45; cursor: not-allowed; }
+.foto-punto { width: 7px; height: 7px; border-radius: 50%; background: #ff7a6b; }
+.foto-punto.ok { background: #3ecf6e; }
+.foto-modal .cand-tabs { position: sticky; top: -23px; z-index: 2; background: var(--panel); }
+@media (max-width: 850px) {
+  .foto-modal .modal-header-slot { margin: 0 6px 0 10px; }
+  .foto-etichetta { display: none; }
+  .foto-tasto { width: 34px; padding: 0; justify-content: center; }
+  .foto-tasto .foto-punto { position: absolute; top: 4px; right: 4px; }
+  .foto-modal .cand-tabs { top: -16px; }
+}
+.foto-volto.nascosta img { opacity: .4; filter: grayscale(1); }
+.foto-nascosti { flex: 0 0 auto; align-self: center; height: 32px; padding: 0 10px; border: 1px dashed var(--line); border-radius: 99px; background: none; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.foto-modal > header > h2 { flex: 0 0 auto; }
+/* Foto: schermo intero e riga di volti */
+.modal-backdrop:has(> .modal.foto-intero) { padding: 0; }
+.modal.wide.fit-modal.foto-intero { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+.modal.foto-intero > header { border-radius: 0; }
+.modal.foto-intero > .modal-body { flex: 1 1 auto; }
+.foto-tasto.foto-icona { width: 32px; padding: 0; justify-content: center; }
+.foto-volti.tutti { flex-wrap: wrap; overflow-x: visible; }
+.foto-altri { flex: 0 0 auto; align-self: flex-start; width: 58px; height: 58px; border: 2px dashed var(--line); border-radius: 50%; background: none; color: inherit; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.foto-altri:hover { border-color: var(--lime); }
+@media (max-width: 850px) { .foto-tasto.foto-icona { width: 34px; } }
+.foto-persona button.foto-elimina:hover { border-color: #ff7a6b; color: #ff7a6b; }
+/* Foto: conferma e nome nuovo */
+.foto-dialogo-sfondo { position: fixed; inset: 0; z-index: 1100; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .55); backdrop-filter: blur(3px); }
+.foto-dialogo { display: grid; justify-items: center; gap: 10px; width: min(340px, 100%); padding: 22px 20px 18px; text-align: center; color: var(--text, inherit); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .4); }
+.foto-dialogo img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); }
+.foto-dialogo strong { font-size: 15px; }
+.foto-dialogo p { margin: 0; font-size: 12px; color: var(--muted); }
+.foto-dialogo-azioni { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; margin-top: 6px; }
+.foto-dialogo-azioni button { height: 38px; border: 1px solid var(--line); border-radius: 9px; background: none; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.foto-dialogo-azioni button:hover { border-color: var(--lime); }
+.foto-dialogo-azioni button.pericolo { border-color: #e5534b; background: #e5534b; color: #fff; font-weight: 700; }
+.foto-dialogo-azioni button.pericolo:hover { background: #cf3f37; }
+.foto-nuovo { display: inline-flex; align-items: center; gap: 6px; }
+.foto-nuovo input { width: 140px; padding: 8px 9px; font: inherit; font-size: 13px; color: #f3f5ef; background: transparent; border: 1px solid rgba(255, 255, 255, .3); border-radius: 8px; }
+.foto-nuovo button { display: grid; place-items: center; height: 34px; min-width: 34px; padding: 0 10px; border: 1px solid rgba(255, 255, 255, .3); border-radius: 8px; background: none; color: #f3f5ef; font: inherit; font-size: 12px; cursor: pointer; }
+.foto-nuovo button:disabled { opacity: .4; }
