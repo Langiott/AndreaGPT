@@ -69,7 +69,7 @@ export function createSocial(options: SocialOptions) {
   const cookie = () => process.env.INSTAGRAM_SESSIONID?.trim() || "";
 
   function scarica(request: Record<string, unknown>) {
-    return new Promise<{ user?: string; posts?: Elencato[]; errors?: string[]; error?: string }>((resolve, reject) => {
+    return new Promise<{ user?: string; posts?: Elencato[]; errors?: string[]; seen?: Record<string, Fonte[]>; error?: string }>((resolve, reject) => {
       const child = spawn(options.python, [options.fetchScript], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       let out = "", err = "";
       const timer = setTimeout(() => child.kill(), 45 * 60_000);
@@ -147,6 +147,13 @@ export function createSocial(options: SocialOptions) {
     if (result.error) throw new Error(result.error);
     stato.utente = result.user || "";
     stato.errori = result.errors ?? [];
+    // Post già analizzati ritrovati in un altro feed: si aggiunge la fonte (es. salvato che ora ha anche il mi piace).
+    let aggiornati = false;
+    for (const post of lista) {
+      const nuove = (result.seen?.[post.id] ?? []).filter(fonte => !post.sources.includes(fonte));
+      if (nuove.length) { post.sources.push(...nuove); aggiornati = true; }
+    }
+    if (aggiornati) await salva();
     // Dal più vecchio al più recente: se si interrompe, i post mancanti restano sopra quelli già letti e la prossima volta vengono ripresi.
     const nuovi = (result.posts ?? []).reverse();
     stato.totale = nuovi.length;

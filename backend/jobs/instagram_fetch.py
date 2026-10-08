@@ -26,8 +26,8 @@ HEADERS = {
 }
 MAX_IMAGES = 10
 MAX_VIDEOS = 3
-# In modalità "entrambi" i post validi possono essere rari: oltre queste pagine di salvati ci si ferma.
-MAX_PAGES_BOTH = 25
+# I post già letti si saltano e si scende nei più vecchi: oltre queste pagine per feed ci si ferma.
+MAX_PAGES = 25
 
 
 def parse_cookie(raw):
@@ -109,22 +109,22 @@ def fetch(request):
     # "both": solo i post salvati a cui hai anche messo mi piace; si scorre il feed dei salvati.
     both = bool(request.get("both"))
     sources = ["saved"] if both else request.get("sources") or list(FEEDS)
-    posts, errors, by_code = [], [], {}
+    posts, errors, by_code, seen = [], [], {}, {}
     for source in sources:
         params, count, pages = {}, 0, 0
         try:
-            while count < limit and (not both or pages < MAX_PAGES_BOTH):
+            while count < limit and pages < MAX_PAGES:
                 data = client.get(FEEDS[source], params, app=source == "liked")
                 pages += 1
-                stop = False
                 for item in data.get("items") or []:
                     media = media_of(item)
                     code = media.get("code")
                     if not code or (both and not media.get("has_liked")):
                         continue
                     if code in known:
-                        stop = True  # i feed vanno dal più recente: da qui in giù è già stato letto
-                        break
+                        # già analizzato: si salta e si continua coi più vecchi, segnando la fonte trovata
+                        seen.setdefault(code, set()).update(["saved", "liked"] if both else [source])
+                        continue
                     count += 1
                     if code in by_code:
                         by_code[code]["sources"].append(source)
@@ -144,13 +144,13 @@ def fetch(request):
                     posts.append(post)
                     if count >= limit:
                         break
-                if stop or not data.get("more_available") or not data.get("next_max_id"):
+                if not data.get("more_available") or not data.get("next_max_id"):
                     break
                 params = {"max_id": data["next_max_id"]}
                 time.sleep(2)  # ritmo umano tra le pagine: evita il blocco temporaneo dell'account
         except Exception as error:
             errors.append(f"{'Salvati' if source == 'saved' else 'Mi piace'}: {error}")
-    return {"user": user, "posts": posts, "errors": errors}
+    return {"user": user, "posts": posts, "errors": errors, "seen": {code: sorted(found) for code, found in seen.items()}}
 
 
 def main():

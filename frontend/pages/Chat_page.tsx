@@ -62,6 +62,7 @@ import { createId } from "../utils/compat";
 import { createStreamBatch } from "../utils/stream_batch";
 import { writeClipboard } from "../utils/clipboard";
 import { userErrorMessage } from "../utils/errors";
+import { useVoiceMode } from "../utils/voice_mode";
 import { ShapPanel } from "../components/ShapPanel";
 import { TokenConfidencePanel } from "../components/TokenConfidence";
 import { parseCitation } from "../utils/cite_focus";
@@ -1385,6 +1386,9 @@ export default function App() {
     setMessages((current) => [...current, { id: createId(), role: "assistant", content: `Conversione completata: ${result.name}`, generatedFile: result }]);
   }
 
+  const ultimaRisposta = [...messages].reverse().find((message) => message.role === "assistant");
+  const voce = useVoiceMode({ risposta: ultimaRisposta, loading, invia: (testo) => sendMessage(testo), onErrore: setError });
+
   async function sendMessage(text = input) {
     const content = text.trim();
     // Skill \chat: ristampa la card di benvenuto dello strumento attivo sotto i risultati, senza cancellarli.
@@ -2036,6 +2040,7 @@ export default function App() {
           {error && <div className="error-banner" role="alert" aria-live="assertive"><span><strong>Attenzione</strong>{error}</span><button onClick={() => setError("")} aria-label="Chiudi notifica"><X size={20} /></button></div>}
           {!configured && configured !== null && <div className="config-banner"><Info size={15} /> Verifica il server AndreaGPT. Ollama locale non richiede chiavi cloud.</div>}
           <div className={`composer ${specialMode !== "normal" ? "special-composer" : ""}`}>
+            {voce.attiva && <div className="audio-status voice-status" role="status" aria-live="polite"><span className={voce.fase === "ascolto" ? "recording-dot" : "voice-dot"} /><strong>{voce.fase === "ascolto" ? "Ascolto" : voce.fase === "parla" ? "Parla" : "Penso"}</strong>{voce.parziale && <span className="voice-text">{voce.parziale}</span>}</div>}
             {(recording || transcribing) && <div className="audio-status" role="status"><span className={recording ? "recording-dot" : ""} />{recording ? "Sto registrando audio" : "Sto trascrivendo audio"}</div>}
             {activeOperation && !activeOperation.inline && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
@@ -2054,6 +2059,7 @@ export default function App() {
                 <button onClick={() => { setComposerToolsOpen(false); fileInputRef.current?.click(); }} disabled={loading || attachments.length >= MAX_ATTACHMENTS}><Paperclip size={17} /><span>Allega file</span></button>
                 <button onClick={() => void compactCurrentChat()} disabled={loading || compactingChat || messages.filter(message => message.content.trim()).length === 0}><Archive size={17} /><span>{compactingChat ? "Compatto…" : "Compatta chat"}</span></button>
                 {specialMode === "normal" && <><button onClick={() => openAudioWelcome("transcribe")} disabled={loading || recording || transcribing}><AudioLines size={17} /><span>Trascrivi audio</span></button><button className={recording ? "active" : ""} onClick={() => openAudioWelcome("record")} disabled={loading || transcribing}><Mic size={17} /><span>{recording ? "Termina registrazione" : "Registra audio"}</span></button>
+                <button className={voce.attiva ? "active" : ""} onClick={() => { setComposerToolsOpen(false); voce.toggle(); }} disabled={!voce.supportata || !selectedModel || recording || transcribing} aria-pressed={voce.attiva} title={voce.supportata ? undefined : "Non supportata da questo browser"}><AudioLines size={17} /><span>Modalità audio {voce.attiva ? "ON" : "OFF"}</span></button>
                 <button className={webSearchEnabled ? "active" : ""} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false}><Globe2 size={17} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("ocr"); }} disabled={loading}><ScanLine size={17} /><span>OCR</span></button><button onClick={() => { setComposerToolsOpen(false); openSpecialChat("yolo"); }} disabled={loading}><YoloIcon /><span>YOLO</span></button><button className={brainEnabled ? "active" : ""} onClick={() => setBrainMode(!brainEnabled)} disabled={loading}><Network size={17} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button></>}
               </div>}</div>
               <textarea

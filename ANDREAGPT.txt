@@ -21,3 +21,11 @@ git push origin stabile
 
 --------------------------------------------------------------------------------
 
+Quella è la schermata sbagliata. "Aggiungi un sito" lì serve a togliere l'audio a un sito, quindi premi Annulla. Il permesso che serve si dà dai flag di Chrome:
+
+Nella barra degli indirizzi di Chrome, dove scrivi i siti, scrivi esattamente chrome://flags e premi invio.
+Nella casella di ricerca in alto scrivi insecure origins.
+Compare "Insecure origins treated as secure". Nel riquadro di testo sotto scrivi http://192.168.2.156:3000.
+Nel menu a tendina accanto metti Enabled.
+In basso compare il pulsante Relaunch: premilo e Chrome si riavvia.
+Apri http://192.168.2.156:3000 e attiva Modalità audio. Quando Chrome ti chiede il microfono, scegli Consenti.
