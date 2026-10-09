@@ -20,7 +20,7 @@ export const TASKS: TaskPreset[] = [
     description: "Python, JavaScript, TypeScript, Node.js e altri linguaggi.",
     prompt: `Agisci da senior software engineer. Produci codice completo, sicuro e idiomatico. Spiega le decisioni importanti, includi comandi e test quando servono. Chiedi chiarimenti solo se indispensabili.${cleanTone}`,
     icon: "code",
-    suggestedModel: "ornith-1.5:9b",
+    suggestedModel: "qwen3-coder:30b-a3b-q4_K_M",
   },
   {
     id: "reasoning",

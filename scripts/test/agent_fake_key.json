@@ -1,0 +1,51 @@
+[
+  {
+    "file": "fake/fake_error_1.py",
+    "line": 18,
+    "kind": "syntax",
+    "description": "Manca i due punti alla fine dell'istruzione if in prodotti_da_riordinare: SyntaxError: expected ':'.",
+    "fix": "Riga 18: aggiungere ':' alla fine -> `if prodotto[\"quantita\"] < SOGLIA_RIORDINO:`."
+  },
+  {
+    "file": "fake/fake_error_2.ts",
+    "line": 37,
+    "kind": "type",
+    "description": "Nell'array dipendenti il campo ral di Bianchi e' una stringa (\"35000\") ma l'interfaccia Dipendente richiede number: TS2322 Type 'string' is not assignable to type 'number'.",
+    "fix": "Riga 37: sostituire `ral: \"35000\"` con `ral: 35000` (numero, senza virgolette)."
+  },
+  {
+    "file": "fake/fake_error_3.py",
+    "line": 18,
+    "kind": "logic",
+    "description": "Off-by-one in totale_punti: range(len(voti) - 1) salta l'ultimo voto, quindi totale e media sono sbagliati (es. [6, 7, 8] da' 13 invece di 21).",
+    "fix": "Riga 18: usare `for i in range(len(voti)):` (oppure sostituire il ciclo con `return sum(voti)`)."
+  },
+  {
+    "file": "fake/fake_error_3.py",
+    "line": 44,
+    "kind": "runtime",
+    "description": "In stampa_pagella l'f-string usa la variabile inesistente `medie` invece di `media`: NameError a runtime alla prima iterazione.",
+    "fix": "Riga 44: sostituire `{medie}` con `{media}` nell'f-string."
+  },
+  {
+    "file": "fake/fake_error_4.js",
+    "line": 44,
+    "kind": "syntax",
+    "description": "Nel ciclo while la chiamata console.log non chiude la parentesi tonda prima del punto e virgola: SyntaxError: missing ) after argument list.",
+    "fix": "Riga 44: aggiungere `)` dopo il template literal -> `console.log(`...${ordine.importo} EUR`);`."
+  },
+  {
+    "file": "fake/fake_error_5.ts",
+    "line": 21,
+    "kind": "logic",
+    "description": "Condizione invertita in applicaSconto: lo sconto del 10% viene applicato quando l'importo e' SOTTO la soglia (importo < 100) invece che quando la raggiunge (>= 100).",
+    "fix": "Riga 21: cambiare `if (importo < SOGLIA_SCONTO)` in `if (importo >= SOGLIA_SCONTO)`."
+  },
+  {
+    "file": "fake/fake_error_5.ts",
+    "line": 35,
+    "kind": "logic",
+    "description": "In totaleCarrello la Promise di costoSpedizione non viene attesa: il .then aggiorna totale dopo il return, quindi la spedizione non viene mai sommata (esempio carrello 120 -> stampa 120.00 invece di 113.00).",
+    "fix": "Riga 35: `const spedizione = await costoSpedizione(scontato);` e righe 36-39: sostituire let/then con `const totale = scontato + spedizione;`."
+  }
+]

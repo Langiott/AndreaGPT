@@ -276,16 +276,14 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
   }
   return (
     <form className="foto-collega" onSubmit={event => { event.preventDefault(); void invia(); }}>
-      <label className="foto-campo">Debug wireless · IP:porta<input inputMode="decimal" value={indirizzo} placeholder="192.168.2.45:41235" onChange={event => setIndirizzo(soloIndirizzo(event.target.value))} /></label>
-      <details open={!associato && !stato?.ip}>
-        <summary>{associato ? "Associato ✓" : "Prima associazione"}</summary>
-        <div className="foto-campi">
-          <label>Associa · IP:porta<input inputMode="decimal" value={associazione} placeholder="192.168.2.45:37099" onChange={event => setAssociazione(soloIndirizzo(event.target.value))} /></label>
-          <label>Codice<input inputMode="numeric" value={codice} placeholder="6 cifre" onChange={event => setCodice(event.target.value.replace(/\D/g, "").slice(0, 6))} /></label>
-        </div>
-      </details>
+      <div className="foto-collega-riga">
+        <label className="lungo"><span>Debug wireless</span><input inputMode="decimal" value={indirizzo} onChange={event => setIndirizzo(soloIndirizzo(event.target.value))} /></label>
+        <label><span>Indirizzo accoppiamento</span><input inputMode="decimal" value={associazione} onChange={event => setAssociazione(soloIndirizzo(event.target.value))} /></label>
+        <label className="corto"><span>Codice autenticazione</span><input inputMode="numeric" value={codice} onChange={event => setCodice(event.target.value.replace(/\D/g, "").slice(0, 6))} /></label>
+        <button type="submit" className="go" disabled={busy || (!indirizzoValido(indirizzo) && !puoAssociare)}>{busy ? "…" : puoAssociare && !indirizzoValido(indirizzo) ? "Associa" : "Collega"}</button>
+      </div>
+      {associato && <small className="foto-associato">Associato ✓</small>}
       {error && <p className="cand-error">{error}</p>}
-      <div className="cand-actions"><button type="submit" className="go" disabled={busy || (!indirizzoValido(indirizzo) && !puoAssociare)}>{busy ? "…" : puoAssociare && !indirizzoValido(indirizzo) ? "Associa" : "Collega"}</button></div>
     </form>
   );
 }

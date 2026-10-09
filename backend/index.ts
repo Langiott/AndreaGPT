@@ -13,7 +13,7 @@ import { fetch as upstreamFetch } from "undici";
 import { cloudTransport, ollamaTransport, paths, settings } from "./config/config";
 import { localOllamaUrl } from "./utils/local";
 import { localContext, type LocalMessage } from "./context/context";
-import { enrichModel, GEMMA_INFO, GLM_INFO, humanizeOllamaId, MINIMAX_INFO, OLLAMA_INFO, OLLAMA_MODEL, OLLAMA_MODELS, OLLAMA_NUM_CTX, ollamaErrorMessage, OLLAMA_ORNITH_INFO, OLLAMA_ORNITH_MODEL, OLLAMA_QWEN3_14B, OLLAMA_QWEN3_INFO, OLLAMA_QWEN3_CODER_INFO, OLLAMA_QWEN3_CODER_MODEL } from "./model/models";
+import { enrichModel, GEMMA_INFO, GLM_INFO, humanizeOllamaId, MINIMAX_INFO, OLLAMA_INFO, OLLAMA_MODEL, OLLAMA_MODELS, OLLAMA_NUM_CTX, ollamaErrorMessage, OLLAMA_QWEN3_14B, OLLAMA_QWEN3_INFO, OLLAMA_QWEN3_CODER_INFO, OLLAMA_QWEN3_CODER_MODEL } from "./model/models";
 import { routeLocally } from "./router/router";
 import { assessCitations, assessOutputLanguage, createDiagnosticTrace } from "./diagnostics/diagnostics";
 import { ITALIAN_TECHNICAL_LANGUAGE_RULES } from "../frontend/config/language";
@@ -23,16 +23,20 @@ import { fuseRankings, planWebSearch, relaxWebPlan, selectRelevant, type PlanMod
 import { isSmallTalk } from "./retrieval/evidence_policy";
 import { JsonLineWorker } from "./utils/json_line_worker";
 import { GROUP_METHODS } from "./brain/embedding_ml";
-import { CodeWorkspace } from "./code/code_workspace";
-import { runCodeAgent } from "./code/code_agent";
+import { loadAgentConfig, saveAgentConfig } from "./agent/agent_config";
+import { AgentError, AgentWorkspace } from "./agent/agent_workspace";
+import { runAgent, type AgentChat, type AgentDecision } from "./agent/agent_runner";
+import type { AgentEvent } from "../frontend/types/agent";
+import { codeTree } from "./code/code_tree";
 import { groundingWarning as hasGroundingWarning, inspectGrounding } from "./grounding/grounding";
 import { auditEvidenceDelivery, DOCUMENT_SCOPE_INSTRUCTION } from "./grounding/evidence_audit";
 import { activateMainboardMonitoring, beginMainboardActivity, clearMainboardHistory, deactivateMainboardMonitoring, finishMainboardActivity, getMainboardSnapshot, isMainboardMonitoringActive } from "./diagnostics/mainboard";
 import { formatCompactChat } from "./utils/chat_compact";
 import type { ModelInfo } from "../frontend/types/types";
-import { createCandidature, STATI, tokenValido } from "./jobs/candidature";
-import { createSocial } from "./jobs/social";
-import { createFoto } from "./jobs/foto";
+import { createCandidature, STATI, tokenValido } from "./candidature/candidature";
+import { createSocial } from "./social/social";
+import { createFoto } from "./foto/foto";
+import { createVideo } from "./video/video";
 import { generateWithComfy, VIGGLE_STEPS, type ImageProgress } from "./model/comfy_image";
 import { branchContext, rememberBranchContext, toTraceTokens, type OllamaLogprob } from "./model/token_trace";
 import { sourceFallback, sourceTitle, writeEdition, type NewsArticle, type OllamaChat } from "./news/news_edition";
@@ -193,7 +197,7 @@ const social = createSocial({
   mediaDir: path.join(outputRoot, "Instagram"),
   mediaUrl: "/outputs/Instagram",
   python: process.env.WHISPER_PYTHON?.trim() || "python",
-  fetchScript: path.join(path.dirname(audioScript), "..", "jobs", "instagram_fetch.py"),
+  fetchScript: path.join(path.dirname(audioScript), "..", "social", "instagram_fetch.py"),
   ollamaUrl: ollamaBase,
   async transcribe(file) {
     const result = await withHeavySlot(() => toolWorker(whisperRuntime, audioScript, 30 * 60_000).request<{ text?: string }>({ input: file, model: process.env.WHISPER_MODEL || "small", language: "auto", retry: false }));
@@ -201,11 +205,18 @@ const social = createSocial({
   },
 });
 
+// Video: file caricato o link YouTube → audio → Whisper (lingua riconosciuta da sola).
+const video = createVideo({
+  workDir: toolsRoot,
+  ollamaUrl: ollamaBase,
+  transcribe: file => withHeavySlot(() => toolWorker(whisperRuntime, audioScript, 60 * 60_000).request<{ text?: string; language?: string; duration?: number }>({ input: file, model: process.env.WHISPER_MODEL || "small", language: "auto" })),
+});
+
 // Foto: galleria del telefono via ADB Wi-Fi, volti e ricerca per contenuto.
 const foto = createFoto({
   dataDir: path.join(toolsRoot, "foto"),
   python: process.env.DOCTR_PYTHON?.trim() || "python",
-  script: path.join(path.dirname(audioScript), "..", "jobs", "foto_index.py"),
+  script: path.join(path.dirname(audioScript), "..", "foto", "foto_index.py"),
   heavy: withHeavySlot,
 });
 
@@ -224,7 +235,7 @@ app.use((request, response, next) => {
   const now = Date.now();
   // La generazione immagini risponde 202 prima che il processo Python finisca.
   // Viene quindi tracciata esplicitamente dal ciclo di vita del job, sotto.
-  const expensive = ["/api/chat", "/api/analyze-image", "/api/ocr", "/api/yolo", "/api/audio/transcribe", "/api/convert", "/api/convert/zip", "/api/research", "/api/brain/upload", "/api/brain/import", "/api/image/generate"].includes(request.path);
+  const expensive = ["/api/chat", "/api/analyze-image", "/api/ocr", "/api/yolo", "/api/audio/transcribe", "/api/video/file", "/api/video/link", "/api/convert", "/api/convert/zip", "/api/research", "/api/brain/upload", "/api/brain/import", "/api/image/generate", "/api/agent/run"].includes(request.path);
   const activityLabels: Record<string, string> = {
     "/api/chat": "Generazione chat",
     "/api/research": "Ricerca web",
@@ -232,12 +243,15 @@ app.use((request, response, next) => {
     "/api/ocr": "OCR immagine",
     "/api/yolo": "Analisi YOLO",
     "/api/audio/transcribe": "Trascrizione audio",
+    "/api/video/file": "Trascrizione video",
+    "/api/video/link": "Trascrizione video da link",
     "/api/convert": "Conversione file",
     "/api/convert/zip": "Conversione archivio",
     "/api/brain/index": "Indicizzazione Brain",
     "/api/brain/upload": "Upload Brain",
     "/api/brain/import": "Import Brain",
     "/api/brain/turbovec": "Ricostruzione TurboVec",
+    "/api/agent/run": "Agente codice",
   };
   const activityLabel = activityLabels[request.path];
   if (activityLabel && isMainboardMonitoringActive()) {
@@ -1055,6 +1069,134 @@ for (const action of ["index", "import"] as const) {
   });
 }
 
+app.get("/api/code/albero", async (_request, response) => {
+  try { response.json(await codeTree(path.resolve(process.env.CODE_WORKSPACE || process.cwd()), "AndreaGPT2")); }
+  catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Albero non disponibile." }); }
+});
+// Agente: legge il progetto, propone modifiche, scrive solo dopo approvazione e nelle cartelle consentite.
+const agentRoot = () => path.resolve(process.env.CODE_WORKSPACE || process.cwd());
+/** Approvazioni in attesa, chiave runId:approvalId. */
+const agentApprovals = new Map<string, (decision: AgentDecision) => void>();
+const agentErrore = (response: express.Response, error: unknown, fallback: string) => {
+  const status = error instanceof AgentError ? error.status : 500;
+  response.status(status).json({ error: error instanceof Error ? error.message.slice(0, 500) : fallback });
+};
+app.get("/api/agent/config", async (_request, response) => {
+  try { response.json({ ...(await loadAgentConfig(toolsRoot)), models: [...(await ollamaCatalog()).ids].sort() }); }
+  catch (error) { agentErrore(response, error, "Configurazione non disponibile."); }
+});
+const agentConfigSchema = z.object({ model: z.string().min(1).max(200).optional(), writable: z.array(z.string().min(1).max(300)).max(20).optional() }).strict();
+app.put("/api/agent/config", async (request, response) => {
+  const parsed = agentConfigSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Configurazione non valida." }); return; }
+  try { response.json(await saveAgentConfig(toolsRoot, parsed.data)); }
+  catch (error) { agentErrore(response, error, "Configurazione non salvata."); }
+});
+const agentRunSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1).max(120_000) })).min(1).max(100),
+  numCtx: z.number().int().min(2048).max(32768).optional(),
+  maxTokens: z.number().int().min(256).max(4096).optional(),
+}).strict();
+app.post("/api/agent/run", async (request, response) => {
+  const parsed = agentRunSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta agente non valida." }); return; }
+  const last = parsed.data.messages.at(-1)!;
+  if (last.role !== "user") { response.status(400).json({ error: "L'ultimo messaggio deve essere dell'utente." }); return; }
+  const config = await loadAgentConfig(toolsRoot);
+  try { localOllamaUrl(ollamaBase); } catch { response.status(403).json({ error: "L'agente usa solo Ollama locale." }); return; }
+  // details contiene solo i modelli scaricati (ids include anche quelli configurati): vuoto = Ollama non raggiungibile.
+  const catalog = await ollamaCatalog();
+  if (catalog.details.size ? !catalog.details.has(config.model) : !catalog.ids.has(config.model)) { response.status(400).json({ error: `Il modello "${config.model}" non è installato in Ollama.` }); return; }
+  const runId = randomUUID();
+  const controller = new AbortController();
+  activeChats.add(controller);
+  response.on("close", () => { if (!response.writableEnded) controller.abort(); });
+  response.status(200).setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  response.setHeader("X-Accel-Buffering", "no");
+  response.flushHeaders();
+  const emit = (event: AgentEvent) => { if (!response.writableEnded && !response.destroyed) response.write(`data: ${JSON.stringify(event)}\n\n`); };
+  const chat: AgentChat = async (messages, { tools, format, signal, options }) => {
+    const reply = await upstreamFetch(`${ollamaBase}/api/chat`, { dispatcher: ollamaTransport, method: "POST", redirect: "error", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.model, messages, ...(tools ? { tools } : {}), ...(format ? { format } : {}), stream: false, think: false, keep_alive: "30m", options }) });
+    if (!reply.ok) throw new Error(ollamaErrorMessage(reply.status, (await reply.text().catch(() => "")).slice(0, 300), config.model));
+    return await reply.json() as Awaited<ReturnType<AgentChat>>;
+  };
+  try {
+    await runAgent({ runId, question: last.content, history: parsed.data.messages.slice(0, -1), config, chat, emit, signal: controller.signal,
+      numCtx: parsed.data.numCtx, maxTokens: parsed.data.maxTokens,
+      workspace: new AgentWorkspace(agentRoot(), { toolsRoot, writable: config.writable, signal: controller.signal }),
+      waitApproval: id => new Promise<AgentDecision>(resolve => {
+        const key = `${runId}:${id}`;
+        const timer = setTimeout(() => { agentApprovals.delete(key); resolve("expired"); }, 10 * 60_000);
+        agentApprovals.set(key, decision => { clearTimeout(timer); agentApprovals.delete(key); resolve(decision); });
+      }) });
+  } catch (error) {
+    emit({ type: "error", message: error instanceof Error ? error.message.slice(0, 500) : "Errore agente." });
+  } finally {
+    activeChats.delete(controller);
+    for (const [key, resolve] of agentApprovals) if (key.startsWith(`${runId}:`)) resolve("expired");
+    if (!response.writableEnded) response.end("data: [DONE]\n\n");
+  }
+});
+const agentApproveSchema = z.object({ runId: z.string().uuid(), approvalId: z.string().uuid(), decision: z.enum(["approve", "reject"]) }).strict();
+app.post("/api/agent/approve", (request, response) => {
+  const parsed = agentApproveSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Approvazione non valida." }); return; }
+  const resolve = agentApprovals.get(`${parsed.data.runId}:${parsed.data.approvalId}`);
+  if (!resolve) { response.status(404).json({ error: "Nessuna approvazione in attesa con questo id." }); return; }
+  resolve(parsed.data.decision);
+  response.json({ ok: true });
+});
+const agentUndoSchema = z.object({ backupId: z.string().regex(/^\d{13}-[0-9a-f]{8}$/) }).strict();
+app.post("/api/agent/undo", async (request, response) => {
+  const parsed = agentUndoSchema.safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Backup non valido." }); return; }
+  try {
+    const config = await loadAgentConfig(toolsRoot);
+    const result = await new AgentWorkspace(agentRoot(), { toolsRoot, writable: config.writable }).undo(parsed.data.backupId);
+    response.json({ ok: true, file: result.file });
+  } catch (error) { agentErrore(response, error, "Annullamento non riuscito."); }
+});
+const videoErrore = (response: express.Response, error: unknown) => {
+  const message = error instanceof Error ? error.message : "Trascrizione video non riuscita.";
+  response.status(/No module named|ModuleNotFoundError|non installato/i.test(message) ? 503 : 400).json({ error: message.slice(0, 500) });
+};
+// Corpo grezzo (application/octet-stream), nome nell'header: il video va su disco in streaming.
+app.post("/api/video/file", async (request, response) => {
+  try { response.json(await video.daFile(request, decodeURIComponent(String(request.headers["x-file-name"] ?? "")))); }
+  catch (error) { request.resume(); videoErrore(response, error); }
+});
+// Riassunto o domanda sulla trascrizione, in streaming. Righe "\u0001stato\n" (es. "parte 2/5") prima del testo; "\u0002errore" se fallisce a metà.
+const videoTurnoSchema = z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(20_000) });
+app.post("/api/video/chiedi", async (request, response) => {
+  const parsed = z.object({ trascrizione: z.string().min(1).max(2_000_000), domanda: z.string().max(4000).optional(), storia: z.array(videoTurnoSchema).max(40).default([]) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Richiesta non valida." }); return; }
+  const controller = new AbortController();
+  response.on("close", () => { if (!response.writableEnded) controller.abort(); });
+  try {
+    const modello = await video.modello();
+    response.setHeader("Content-Type", "text/plain; charset=utf-8");
+    response.setHeader("X-Model", modello);
+    response.flushHeaders();
+    const { trascrizione, domanda, storia } = parsed.data;
+    if (domanda?.trim()) await video.chiedi(trascrizione, domanda.trim(), storia, controller.signal, token => response.write(token));
+    else await video.riassumi(trascrizione, controller.signal, token => response.write(token), stato => response.write(`\u0001${stato}\n`));
+    response.end();
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    const message = error instanceof Error ? error.message : "Risposta non riuscita.";
+    if (response.headersSent) response.end(`\u0002${message}`);
+    else response.status(500).json({ error: message });
+  }
+});
+app.post("/api/video/link", async (request, response) => {
+  const parsed = z.object({ url: z.string().min(8).max(2000) }).safeParse(request.body);
+  if (!parsed.success) { response.status(400).json({ error: "Link non valido." }); return; }
+  try { response.json(await video.daLink(parsed.data.url)); }
+  catch (error) { videoErrore(response, error); }
+});
+
 app.get("/api/social", async (_request, response) => {
   try { response.json(await social.elenco()); }
   catch (error) { response.status(500).json({ error: error instanceof Error ? error.message : "Elenco non disponibile." }); }
@@ -1222,7 +1364,6 @@ app.get("/api/models", async (_request, response) => {
     if (id === OLLAMA_MODEL) { local.push(OLLAMA_INFO); continue; }
     if (id === OLLAMA_QWEN3_14B) { local.push(OLLAMA_QWEN3_INFO); continue; }
     if (id === OLLAMA_QWEN3_CODER_MODEL) { local.push(OLLAMA_QWEN3_CODER_INFO); continue; }
-    if (id === OLLAMA_ORNITH_MODEL) { local.push(OLLAMA_ORNITH_INFO); continue; }
     const detail = catalog.details.get(id);
     const sizeTag = detail?.parameterSize ? [detail.parameterSize.replace(/\.0+(B)$/i, "$1").toUpperCase()] : [];
     local.push({
@@ -1292,7 +1433,6 @@ const chatSchema = z.object({
   provider: z.enum(["ollama", "nvidia", "openrouter"]),
   conversationId: z.string().uuid(),
   brain: z.boolean().default(false),
-  codeAgent: z.boolean().default(false),
   brainPrivate: z.boolean().default(false),
   brainSource: z.string().min(1).max(300).optional(),
   // Numero di fonti Brain scelto nelle impostazioni; assente = automatico (5, oppure 8 per metodi e formule).
@@ -1369,7 +1509,7 @@ app.post("/api/chat", async (request, response) => {
   } else {
     trace.add({ stage: "router", status: "info", message: wasPrivate ? "Router non eseguito: conversazione privata." : "Router non eseguito: percorso scelto manualmente.", details: { brain: effectiveBrain, web: effectiveWebSearch } });
   }
-  const isPrivate = parsed.data.codeAgent || effectiveBrain || wasPrivate;
+  const isPrivate = effectiveBrain || wasPrivate;
   if (isPrivate) {
     privateConversations.set(parsed.data.conversationId, Date.now() + 24 * 60 * 60_000);
     response.append("Set-Cookie", `${privacyCookie}; HttpOnly; SameSite=Strict; Path=/api/chat; Max-Age=86400`);
@@ -1406,24 +1546,6 @@ app.post("/api/chat", async (request, response) => {
   });
 
   try {
-    if (parsed.data.codeAgent) {
-      if (!usesOllama || parsed.data.webSearch) { response.status(400).json({error:"L'agente codice usa solo Ollama locale, senza Web."}); return; }
-      if (!process.env.CODE_WORKSPACE) { response.status(503).json({error:"Configura CODE_WORKSPACE con la cartella del progetto da consultare."}); return; }
-      const agentSignal=AbortSignal.any([controller.signal,AbortSignal.timeout(90000)]);
-      const workspace = new CodeWorkspace(path.resolve(process.env.CODE_WORKSPACE),agentSignal);
-      const result = await runCodeAgent({question:extractSearchQuery(parsed.data.messages),model:parsed.data.model,workspace,signal:agentSignal,
-        chat:async (messages,tools,signal)=> {
-          const reply=await upstreamFetch(`${ollamaBase}/api/chat`, {dispatcher:ollamaTransport,method:"POST",redirect:"error",signal,
-            headers:{"Content-Type":"application/json"},body:JSON.stringify({model:parsed.data.model,messages,tools,stream:false,think:false,keep_alive:"30m",options:{temperature:0,num_ctx:effectiveNumCtx,num_predict:1024}})});
-          if(!reply.ok)throw new Error(`Ollama agente HTTP ${reply.status}: verificare il supporto tool calling del modello.`);
-          return await reply.json() as Parameters<typeof runCodeAgent>[0]["chat"] extends (...args: never[])=>Promise<infer T> ? T : never;
-        }});
-      response.status(200).setHeader("Content-Type","text/event-stream; charset=utf-8");
-      const patchText=result.proposals.length?`\n\nProposte di modifica (non applicate):\n\n\`\`\`json\n${JSON.stringify(result.proposals,null,2)}\n\`\`\``:"";
-      trace.add({stage:"response",status:result.completed?"ok":"warning",message:"Agente codice locale: lettura e proposte, nessuna modifica applicata.",details:{toolCalls:result.trace.length,proposals:result.proposals.length}});
-      response.write(`data: ${JSON.stringify({choices:[{delta:{content:result.answer+patchText}}],metrics:{totalMs:performance.now()-started,codeToolCalls:result.trace.length},diagnostics:{requestId:trace.requestId,events:trace.events}})}\n\n`);
-      response.end("data: [DONE]\n\n");traceOutcome="ok";return;
-    }
     let upstreamMessages = parsed.data.messages;
     let brainSources: Array<{ id: string; source: string; text: string; retrievalScore?: number }> = [];
     let retrievedBrainSources: typeof brainSources = [];
@@ -1771,6 +1893,8 @@ const server = app.listen(port, listenHost, () => {
   // Riscaldamento: Brain, snapshot, reranker ed embedding pronti prima della prima domanda (BRAIN_WARMUP=0 lo salta).
   if (process.env.BRAIN_WARMUP !== "0") void brainModule().then(brain => brain.warmUp()).catch(() => undefined);
 });
+// Upload video grandi dal telefono: il limite predefinito di Node (5 min per ricevere la richiesta) è troppo corto.
+server.requestTimeout = 30 * 60_000;
 
 // Chiusura ordinata: senza, su Windows i processi Python (reranker, visione, TurboVec) restano vivi dopo ogni riavvio.
 let shuttingDown = false;
