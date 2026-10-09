@@ -1,0 +1,149 @@
+<mxfile host="app.diagrams.net" version="24.7.17">
+  <diagram name="Agente">
+    <mxGraphModel dx="1300" dy="900" grid="1" gridSize="10" page="1" pageWidth="1300" pageHeight="900" background="#ffffff">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b&gt;AndreaGPT · Agente&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size: 14px&quot;&gt;Piano, strumenti, controlli e scrittura solo con approvazione&lt;/font&gt;" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#1e293b;strokeColor=#1e293b;fontColor=#ffffff;fontSize=22;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1220" height="76" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="laneA" value="Frontend · chat Agente N" style="swimlane;html=1;rounded=1;arcSize=6;startSize=34;fillColor=#1d4ed8;swimlaneFillColor=#eff6ff;strokeColor=#1d4ed8;fontColor=#ffffff;fontSize=15;fontStyle=1;align=left;spacingLeft=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="1220" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="a1" value="&lt;b&gt;Richiesta&lt;/b&gt;&lt;br&gt;es. correggi gli errori in fake" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneA">
+          <mxGeometry x="20" y="50" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="a2" value="&lt;b&gt;Timeline in diretta&lt;/b&gt;&lt;br&gt;piano con spunte · un passo per azione · tempi" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneA">
+          <mxGeometry x="280" y="50" width="280" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="a3" value="&lt;b&gt;Card modifica&lt;/b&gt;&lt;br&gt;diff · Approva / Rifiuta · Annulla" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#b45309;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneA">
+          <mxGeometry x="600" y="50" width="280" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="a4" value="&lt;b&gt;Report finale&lt;/b&gt;&lt;br&gt;file:riga · errore · correzione" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneA">
+          <mxGeometry x="940" y="50" width="260" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="laneB" value="Backend · eventi SSE" style="swimlane;html=1;rounded=1;arcSize=6;startSize=34;fillColor=#0f766e;swimlaneFillColor=#ecfdf9;strokeColor=#0f766e;fontColor=#ffffff;fontSize=15;fontStyle=1;align=left;spacingLeft=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="1220" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="b1" value="&lt;b&gt;Config&lt;/b&gt;&lt;br&gt;modello · cartelle scrivibili" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="20" y="60" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="b2" value="&lt;b&gt;Piano&lt;/b&gt;&lt;br&gt;JSON · max 6 passi" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="260" y="60" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="b3" value="&lt;b&gt;Ciclo modello&lt;/b&gt;&lt;br&gt;max 36 turni · 60 strumenti · 20 min" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="480" y="60" width="240" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="b4" value="Chiama uno&lt;br&gt;strumento?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="770" y="50" width="160" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="b5" value="&lt;b&gt;Report&lt;/b&gt;&lt;br&gt;answer + done" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="1000" y="60" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="b6" value="Passi del piano&lt;br&gt;aperti?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;strokeWidth=2;fontColor=#1e293b;fontSize=13;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="1010" y="160" width="180" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="t1" value="&lt;b&gt;Lettura&lt;/b&gt;&lt;br&gt;list_dir · search_text · read_file" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="20" y="280" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="t2" value="&lt;b&gt;Controlli fissi&lt;/b&gt;&lt;br&gt;python_syntax · javascript_syntax · typescript" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="290" y="280" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="t3" value="&lt;b&gt;Permessi&lt;/b&gt;&lt;br&gt;solo cartelle scrivibili&lt;br&gt;.env · .git · node_modules vietati" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fef2f2;strokeColor=#b91c1c;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="570" y="280" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="t4" value="&lt;b&gt;Approvazione&lt;/b&gt;&lt;br&gt;diff · attesa max 10 min" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#b45309;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="820" y="280" width="170" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="t5" value="&lt;b&gt;Scrittura&lt;/b&gt;&lt;br&gt;backup · file atomico · undo" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#0f766e;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="laneB">
+          <mxGeometry x="1020" y="280" width="180" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="c1" value="&lt;b&gt;Ollama locale&lt;/b&gt;&lt;br&gt;qwen3:14b · tool calling&lt;br&gt;temperature 0.2 · num_ctx 8192" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#f5f3ff;strokeColor=#6d28d9;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="460" y="770" width="380" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="c2" value="&lt;b&gt;/workspace&lt;/b&gt; · progetto&lt;br&gt;lettura ovunque tranne percorsi vietati&lt;br&gt;scrittura solo in fake/ (da Impostazioni)" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#475569;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="40" y="770" width="380" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="c3" value="&lt;b&gt;data/tools/agent&lt;/b&gt;&lt;br&gt;config.json · backups/&amp;lt;id&amp;gt;" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#475569;strokeWidth=2;fontColor=#1e293b;fontSize=14;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="880" y="770" width="380" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="note" value="Risultati ed errori tornano al modello" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#64748b;fontStyle=2;fontFamily=Helvetica;" vertex="1" parent="1">
+          <mxGeometry x="320" y="692" width="270" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="POST /api/agent/run" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#475569;labelBackgroundColor=#ffffff;exitX=0.9;exitY=1;exitDx=0;exitDy=0;entryX=0.9;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a1" target="b1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;" edge="1" parent="1" source="b1" target="b2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;" edge="1" parent="1" source="b2" target="b3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;" edge="1" parent="1" source="b3" target="b4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b4" target="b6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="b6" target="b5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="sì · sollecito max 6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#64748b;labelBackgroundColor=#ecfdf9;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="b6" target="b3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1140" y="575"/><mxPoint x="640" y="575"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="lettura" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b4" target="t1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="890" y="500"/><mxPoint x="180" y="500"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="controllo" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b4" target="t2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="890" y="500"/><mxPoint x="455" y="500"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="edit_file · write_file" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#b91c1c;labelBackgroundColor=#ecfdf9;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b4" target="t3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="890" y="500"/><mxPoint x="720" y="500"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="ok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#b45309;labelBackgroundColor=#ecfdf9;" edge="1" parent="1" source="t3" target="t4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="Approva" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#0f766e;labelBackgroundColor=#ecfdf9;" edge="1" parent="1" source="t4" target="t5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="approval · POST approve" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#b45309;labelBackgroundColor=#ffffff;dashed=1;startArrow=block;startFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="t4" target="a3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="945" y="590"/><mxPoint x="1005" y="590"/><mxPoint x="1005" y="280"/><mxPoint x="780" y="280"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="plan · step" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#1d4ed8;labelBackgroundColor=#ffffff;dashed=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="b3" target="a2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e15" value="answer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#1d4ed8;labelBackgroundColor=#ffffff;dashed=1;" edge="1" parent="1" source="b5" target="a4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e16" value="chat + tools" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#6d28d9;labelBackgroundColor=#ffffff;dashed=1;startArrow=block;startFill=1;exitX=0.3125;exitY=1;exitDx=0;exitDy=0;entryX=0.355;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b3" target="c1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#475569;labelBackgroundColor=#ecfdf9;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.368;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="t1" target="c2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e18" value="scrittura" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#475569;labelBackgroundColor=#ffffff;exitX=0.22;exitY=1;exitDx=0;exitDy=0;entryX=0.684;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="t5" target="c2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="1100" y="745"/><mxPoint x="300" y="745"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e19" value="backup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;endArrow=block;endFill=1;fontSize=12;fontColor=#334155;strokeColor=#475569;labelBackgroundColor=#ffffff;exitX=0.78;exitY=1;exitDx=0;exitDy=0;entryX=0.842;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="t5" target="c3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

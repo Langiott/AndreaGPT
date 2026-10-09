@@ -1,3 +1,7 @@
+Da questo PC: http://127.0.0.1:3000 (oppure http://localhost:3000)
+Dal telefono o da un altro dispositivo in ufficio: http://192.168.2.156:3000
+Dal PC di casa (PC2): http://192.168.1.106:3000
+
 --------------------------------------------------------------------------------
 cd /Desktop/AndreaGPT
 git status

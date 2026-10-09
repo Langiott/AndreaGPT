@@ -33,6 +33,8 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/s
  && apt-get update && apt-get install -y --no-install-recommends -t bookworm-backports adb \
  && rm -rf /var/lib/apt/lists/* \
  && PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/doctr/bin/pip install --no-cache-dir --no-deps facenet-pytorch pillow-heif
+# Video: yt-dlp (con yt-dlp-ejs per YouTube, eseguito con node) in un layer a parte, aggiornabile senza toccare gli altri.
+RUN PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/doctr/bin/pip install --no-cache-dir -U "yt-dlp[default]"
 ENV TORCH_HOME=/app/data/huggingface/torch
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 COPY package.json package-lock.json ./

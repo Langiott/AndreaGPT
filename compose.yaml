@@ -88,7 +88,7 @@ services:
       BRAIN_RETRIEVAL_BACKEND: ${BRAIN_RETRIEVAL_BACKEND:-sqlite}
       BRAIN_PCA_DIM: ${BRAIN_PCA_DIM:-768}
       BRAIN_VECTOR_CANDIDATES: ${BRAIN_VECTOR_CANDIDATES:-96}
-      CODE_WORKSPACE: ${CODE_WORKSPACE:-/app/backend}
+      CODE_WORKSPACE: ${CODE_WORKSPACE:-/workspace}
       RAG_OPTIMIZE: ${RAG_OPTIMIZE:-1}
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       HF_HOME: /app/data/huggingface
@@ -135,6 +135,7 @@ services:
       - model-cache:/app/data/huggingface
       - ./OCR:/app/OCR
       - ./OUTPUT:/app/OUTPUT
+      - ./:/workspace
     depends_on:
       searxng:
         condition: service_healthy

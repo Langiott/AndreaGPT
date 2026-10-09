@@ -4,12 +4,11 @@ import { randomUUID } from "node:crypto";
 
 const reports=[];
 for(const test of [
-  {name:"retrieval",brain:true,codeAgent:false,question:"Parlami metodi retrival"},
-  {name:"code-agent",brain:false,codeAgent:true,question:"Usa search_code per trovare assessSemanticSupport. Rispondi soltanto con file e intervallo di righe, senza leggere altri file."},
+  {name:"retrieval",brain:true,question:"Parlami metodi retrival"},
 ]) {
   const start=performance.now();
   const reply=await fetch("http://127.0.0.1:3000/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({conversationId:randomUUID(),provider:"ollama",model:"qwen3:14b",brain:test.brain,codeAgent:test.codeAgent,
+    body:JSON.stringify({conversationId:randomUUID(),provider:"ollama",model:"qwen3:14b",brain:test.brain,
       maxTokens:256,numCtx:4096,messages:[{role:"user",content:test.question}]}),signal:AbortSignal.timeout(150000)});
   if(!reply.ok)throw new Error(`${test.name}: HTTP ${reply.status} ${await reply.text()}`);
   const events=(await reply.text()).split("\n").filter(line=>line.startsWith("data: {")).map(line=>JSON.parse(line.slice(6)));

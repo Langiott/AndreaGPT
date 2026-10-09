@@ -7,12 +7,10 @@ import type { ModelInfo } from "../../frontend/types/types";
 export const OLLAMA_MODEL = "openbmb/minicpm5-2b:latest";
 export const OLLAMA_QWEN3_14B = "qwen3:14b";
 export const OLLAMA_QWEN3_CODER_MODEL = "qwen3-coder:30b-a3b-q4_K_M";
-export const OLLAMA_ORNITH_MODEL = "ornith-1.5:9b";
 export const OLLAMA_MODELS = new Set([
   OLLAMA_MODEL,
   OLLAMA_QWEN3_14B,
   OLLAMA_QWEN3_CODER_MODEL,
-  OLLAMA_ORNITH_MODEL,
 ]);
 // I modelli piccoli restano a 4096 per limitare memoria e latenza.
 export const OLLAMA_NUM_CTX = 4096;
@@ -32,11 +30,6 @@ export const OLLAMA_QWEN3_CODER_INFO: ModelInfo = {
   id: OLLAMA_QWEN3_CODER_MODEL, name: "Qwen3 Coder 30B-A3B Q4_K_M (locale)", provider: "Ollama", providerId: "ollama",
   description: "MoE coder locale specializzato in coding, repository e agenti. La quantizzazione Q4_K_M occupa circa 19 GB e richiede più memoria dei modelli rapidi.",
   tags: ["Locale", "Brain", "Codice", "Agente", "30B-A3B", "Q4_K_M"], context: "8192", featured: true,
-};
-export const OLLAMA_ORNITH_INFO: ModelInfo = {
-  id: OLLAMA_ORNITH_MODEL, name: "Ornith 1.5 9B (locale)", provider: "Ollama", providerId: "ollama",
-  description: "Modello locale di ragionamento e uso di strumenti, adatto a revisione del codice, agenti e conversazioni con correzioni persistenti.",
-  tags: ["Locale", "Brain", "Ragionamento", "Codice", "Agente", "Visione", "9B", "Q4_K_M"], context: "8192", featured: true,
 };
 export const GLM_INFO: ModelInfo = {
   id: "z-ai/glm-5.2", name: "GLM 5.2", provider: "OpenRouter · Z.ai", providerId: "openrouter",

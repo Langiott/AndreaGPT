@@ -58,7 +58,6 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
     "openbmb/minicpm5-2b:latest",
     "qwen3:14b",
     "qwen3-coder:30b-a3b-q4_K_M",
-    "ornith-1.5:9b",
     "z-ai/glm-5.2",
     "google/gemma-4-31b-it:free",
     "minimaxai/minimax-m3",
@@ -86,7 +85,6 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
   assert.equal((await post(payload, { Origin: "http://localhost:9999" })).status, 403);
   assert.equal((await post({ ...payload, messages: [{ role: "user", content: "x".repeat(10000) }] })).status, 400);
   assert.equal(requests.length, 1, "richieste rifiutate prima di qualsiasi chiamata upstream");
-  assert.equal((await post({...payload,conversationId:randomUUID(),brainPrivate:false,codeAgent:true,provider:"nvidia"})).status,403,"agente codice privato anche senza flag del client");
   const qwenResult = await post({ ...payload, model: "qwen3:14b", numCtx: 8192 });
   assert.equal(qwenResult.status, 200);
   await qwenResult.text();

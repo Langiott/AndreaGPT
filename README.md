@@ -143,7 +143,6 @@ passa dal 63% all'85% e l'MRR da 0,73 a 0,91, al costo di circa 1,3 s su CPU.
 | Chat locale rapida | [openbmb/minicpm5-2b](https://github.com/OpenBMB/MiniCPM):latest | 2,5B | Chat, scrittura, Brain e codice con bassa latenza |
 | Chat locale ragionata | [qwen3:14b](https://ollama.com/library/qwen3) | 14B | Ragionamento, italiano, codice e Brain |
 | Coding locale | [qwen3-coder:30b-a3b-q4_K_M](https://ollama.com/library/qwen3-coder) | 30B (3B attivi) | Repository, codice e agente locale |
-| Agente e revisione | ornith-1.5:9b | 9B | Ragionamento, strumenti, codice e conversazioni |
 | Embedding Brain | [nomic-embed-text](https://ollama.com/library/nomic-embed-text) | 137M | Trasforma documenti e query in vettori |
 | Reranker Brain | [cross-encoder/mmarco-mMiniLMv2-L12-H384-v1](https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1) | 118M | Riordina i 20 candidati leggendo domanda e brano insieme |
 | Visione Analyze | [Qwen/Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) | 2B | Descrizione e analisi delle immagini |
@@ -204,6 +203,38 @@ meno di 200 caratteri utili vengono scartate e ogni fonte entra nel prompt con a
 massimo 1500 caratteri, data e citazione. Se il servizio non risponde entro 15 secondi
 il backend continua con gli snippet di SearXNG, quindi Scrapling migliora le risposte
 ma non è mai un punto di blocco.
+
+## Agente: come funziona
+
+![Workflow dell'Agente](DRAW/agente.png)
+
+Il pulsante **Agente** apre una chat dedicata ("Agente N") in cui un modello locale
+lavora sui file del progetto tramite strumenti. Tutto gira su Ollama, nessun dato esce
+dal PC.
+
+| Fase | Cosa succede |
+|---|---|
+| **Piano** | Il modello scompone la richiesta in massimo 6 passi, mostrati come checklist. |
+| **Ciclo** | A ogni turno il modello chiama uno strumento o scrive il report. Limiti: 36 turni, 60 strumenti, 20 minuti. |
+| **Lettura** | `list_dir`, `search_text`, `read_file` su tutto il progetto, esclusi `.env`, `.git`, `node_modules`, `data`, `runtime` e file con chiavi o password. |
+| **Controlli** | Solo controlli fissi, nessun comando libero: `python_syntax`, `javascript_syntax`, `typescript` (strict). |
+| **Scrittura** | `edit_file` e `write_file` solo nelle cartelle scrivibili (Impostazioni → Agente, default `fake`). Ogni modifica mostra il diff e attende **Approva / Rifiuta**; dopo l'approvazione c'è backup automatico e **Annulla**. |
+| **Report** | Per ogni problema: `file:riga`, errore, correzione applicata o proposta. |
+
+Ogni azione compare in diretta come riga della timeline (eventi SSE da
+`POST /api/agent/run`). Se il modello si ferma con passi del piano ancora aperti viene
+sollecitato a continuare (massimo 6 volte). I contenuti dei file sono trattati come dati:
+eventuali istruzioni scritte dentro vengono ignorate.
+
+**Configurazione.** Modello e cartelle scrivibili si scelgono in Impostazioni → Agente
+(salvati in `data/tools/agent/config.json`). Modello consigliato `qwen3:14b`, che va
+scaricato con `ollama pull qwen3:14b`. I permessi sono applicati dal backend, non dal
+prompt.
+
+**Benchmark.** `fake/` contiene 5 file con 7 errori (sintassi, tipi, runtime, logica).
+`npx tsx scripts/test/smoke_agent.ts` avvia l'agente, approva le modifiche e confronta il
+risultato con `scripts/test/agent_fake_key.json`; `npx tsx scripts/test/agent_fake_reset.ts`
+ripristina i file originali.
 
 ## Diagnostica: Fonti, Tempi, Log, Semantic e Shap
 
@@ -274,7 +305,7 @@ I menu **File** e **Audio** raggruppano rispettivamente OCR/Converti e Trascrivi
 | **Brain** | <img src="img/README/Screenshot%202026-10-02%20081113.png" alt="Brain" height="32"> | Cerca nell'archivio locale prima di generare la risposta. Permette upload, import GitHub, reindicizzazione, filtro per fonte, lettura del documento, citazioni, feedback positivo/negativo e ricostruzione TurboVec. |
 | **Micelio** | <img src="img/README/Screenshot%202026-10-02%20081748.png" alt="Micelio" height="32"> | Vista grafica della rete Brain. Serve per esplorare i collegamenti tra raccolte, file ed estratti, capire quali nodi sono centrali e usare un nodo come fonte della chat. |
 | **Web** | <img src="img/README/Screenshot%202026-10-02%20081109.png" alt="Web" height="32"> | Attiva la ricerca esterna tramite SearXNG e, se configurati, Firecrawl o Perplexity. Utile per notizie, prezzi, normativa, meteo, versioni recenti e informazioni che cambiano. Mostra titoli, URL ed estratti delle fonti. |
-| **Codice** | <img src="img/README/Screenshot%202026-10-02%20081118.png" alt="Codice" height="32"> | Legge il progetto configurato e propone modifiche senza applicarle. Richiede un modello locale Ollama con strumenti. |
+| **Agente** | <img src="img/README/Screenshot%202026-10-02%20081118.png" alt="Agente" height="32"> | Chat dedicata in cui un modello locale legge il progetto, esegue controlli fissi e modifica i file solo nelle cartelle scrivibili, con approvazione di ogni modifica. Vedi [Agente: come funziona](#agente-come-funziona). |
 | **OCR** | <img src="img/README/Screenshot%202026-10-02%20081144.png" alt="OCR" height="32"> | Dal menu File. Legge testo da immagini e PDF con docTR e Tesseract come fallback. Il testo riconosciuto può essere modificato nell'interfaccia e salvato in OUTPUT/OCR. |
 | **Converti** | <img src="img/README/Screenshot%202026-10-02%20081144.png" alt="Converti" height="32"> | Dal menu File. Converte PDF, DOCX, Markdown e TXT, anche in modalità multipla con ZIP. Può correggere tabelle e tradurre Markdown tramite Ollama. I risultati sono scaricabili dal pannello Output. |
 | **YOLO** | <img src="img/README/Screenshot%202026-10-02%20081121.png" alt="YOLO" height="32"> | Esegue detection, segmentazione, classificazione, pose e object detection orientata. I risultati e le immagini annotate vengono salvati in OUTPUT/YOLO. |
@@ -298,7 +329,8 @@ AndreaGPT/
 │  ├─ router/               Scelta locale normal/brain/web
 │  ├─ search/               Parsing e normalizzazione delle ricerche Web
 │  ├─ model/                Catalogo modelli e pipeline Python
-│  ├─ code/                 Agente codice, simboli e workspace
+│  ├─ agent/                Agente: ciclo, strumenti, permessi, controlli
+│  ├─ code/                 Albero dei file della sezione Code
 │  ├─ diagnostics/          Mainboard, tempi e tracce operative
 │  ├─ config/               Configurazione applicativa
 │  ├─ http/                 Test del comportamento HTTP
@@ -319,6 +351,7 @@ AndreaGPT/
 ├─ OCR/                     Input e output dei processi OCR
 ├─ OUTPUT/                  Risultati: Image, OCR, YOLO e chat
 ├─ DRAW/                    Diagrammi Draw.io, SVG e PNG
+├─ fake/                    File con errori per il benchmark dell'Agente
 ├─ scripts/                 Avvio, benchmark, test e strumenti
 ├─ docs/                    Documentazione aggiuntiva
 ├─ public/                  Logo, icone e asset statici

@@ -12,6 +12,7 @@ import {
   AudioLines,
   ArrowLeft,
   Archive,
+  Bot,
   ScanEye,
   Check,
   ChevronDown,
@@ -53,6 +54,9 @@ import {
   ThumbsUp,
   X,
   Zap,
+  Clapperboard,
+  Link2,
+  ScrollText,
 } from "lucide-react";
 import mascotUrl from "../../img/mascotte-no-sfondo.png";
 import { TASKS } from "../utils/data";
@@ -69,7 +73,9 @@ import { ShapPanel } from "../components/ShapPanel";
 import { TokenConfidencePanel } from "../components/TokenConfidence";
 import { parseCitation } from "../utils/cite_focus";
 import { Mainboard } from "../components/Mainboard";
-import type { BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, TokenTrace, WebCitation } from "../types/types";
+import type { AgentView, BrainCitation, ChatAttachment, ChatMessage, ChatSettings, Conversation, DiagnosticTrace, ModelInfo, TokenTrace, WebCitation } from "../types/types";
+import type { AgentConfig, AgentEvent, AgentRunRequest } from "../types/agent";
+import { closeAgentView, foldAgentEvent } from "../utils/agent_events";
 
 const iconByName = {
   sparkles: Sparkles,
@@ -86,6 +92,8 @@ const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => 
 const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
 const FotoPanel = lazy(() => import("../components/FotoPanel").then(module => ({ default: module.FotoPanel })));
 const SocialPanel = lazy(() => import("../components/SocialPanel").then(module => ({ default: module.SocialPanel })));
+const CodePanel = lazy(() => import("../components/CodePanel").then(module => ({ default: module.CodePanel })));
+const AgentRun = lazy(() => import("../components/AgentRun").then(module => ({ default: module.AgentRun })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
 // Markdown e KaTeX sono pesanti: si caricano solo alla prima risposta mostrata.
 const MarkdownMessage = lazy(() => import("../components/MarkdownMessage").then(module => ({ default: module.MarkdownMessage })));
@@ -219,8 +227,10 @@ const ANALYZE_ATTACHMENTS_SIZE = 50 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set(["txt", "md", "csv", "json", "xml", "html", "css", "js", "jsx", "ts", "tsx", "py", "java", "c", "cpp", "h", "hpp", "sql", "yaml", "yml", "log", "sh", "ps1"]);
 type Theme = "cosmic" | "normal" | "tropico";
 type YoloTask = "detect" | "bbox" | "segment" | "classify" | "pose";
-type SpecialMode = "normal" | "ocr" | "yolo" | "analyze" | "image" | "convert";
-const specialModes: SpecialMode[] = ["normal", "ocr", "yolo", "analyze", "image", "convert"];
+type SpecialMode = "normal" | "ocr" | "yolo" | "analyze" | "image" | "convert" | "video" | "agent";
+const specialModes: SpecialMode[] = ["normal", "ocr", "yolo", "analyze", "image", "convert", "video", "agent"];
+const VIDEO_ACCEPT = "video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.mpeg,.mpg,.3gp,.wmv,.flv,.ts";
+const VIDEO_FILE = /\.(?:mp4|mov|mkv|webm|avi|m4v|mpeg|mpg|3gp|wmv|flv|ts)$/i;
 /** Strumento di una chat: campo salvato, poi titolo standard, poi contenuto (chat vecchie o rinominate). */
 function conversationMode(conversation?: Conversation): SpecialMode {
   if (!conversation) return "normal";
@@ -231,9 +241,12 @@ function conversationMode(conversation?: Conversation): SpecialMode {
   if (/^(?:Analyze|Analizza IMG) \d+$/i.test(title)) return "analyze";
   if (/^Image \d+$/i.test(title)) return "image";
   if (/^Converti \d+$/i.test(title)) return "convert";
+  if (/^Video \d+$/i.test(title)) return "video";
+  if (/^Agente \d+$/.test(title)) return "agent";
   const firstUser = conversation.messages.find((message) => message.role === "user")?.content ?? "";
   if (firstUser === "Esegui OCR sugli allegati.") return "ocr";
   if (firstUser === "Analizza gli elementi nelle immagini con YOLO.") return "yolo";
+  if (conversation.messages.some((message) => message.agent)) return "agent";
   if (conversation.messages.some((message) => message.generatedImage)) return "image";
   if (conversation.messages.some((message) => message.generatedFile)) return "convert";
   if (conversation.messages.some((message) => message.logs?.some((line) => line.includes("Analisi completata")))) return "analyze";
@@ -272,23 +285,43 @@ function LocalModelCookbook({ models, onChoose }: { models: ModelInfo[]; onChoos
   const localModels = models.filter((model) => model.providerId === "ollama" && isChatListModel(model));
   const chooseAvailable = (patterns: string[]) => localModels.find((model) => patterns.some((pattern) => `${model.id} ${model.name}`.toLowerCase().includes(pattern)))?.id;
   const miniCpm = chooseAvailable(["minicpm5-2b", "minicpm", "2b"]);
-  const ornith = chooseAvailable(["ornith-1.5:9b", "ornith-1.5", "ornith"]);
   const qwenExpert = chooseAvailable(["qwen3-coder:30b-a3b", "qwen3-coder"]);
-  const recommended = ornith
-    ? { label: "Ornith 1.5", size: "9B", model: ornith }
-    : qwenExpert
+  const recommended = qwenExpert
     ? { label: "Qwen3 Coder", size: "30B-A3B", model: qwenExpert }
     : { label: "MiniCPM5", size: "2B", model: miniCpm };
-  const codeModel = ornith ?? qwenExpert ?? miniCpm;
 
   return <details className="settings-row">
     <summary><span>Cookbook</span><ChevronDown size={15} /></summary>
     <div className="settings-body">
       <div className="settings-line"><span>Dispositivo</span><span className="settings-value">{hardware.ram} GB · {hardware.cores} thread</span></div>
       <div className="settings-line"><span>Consigliato</span><span className="settings-pair"><span className="settings-value">{recommended.label} {recommended.size}</span>{recommended.model && <button type="button" className="settings-small-button" onClick={() => onChoose(recommended.model!)}>Usa</button>}</span></div>
-      <div className="settings-line"><span>Codice</span><span className="settings-value">{codeModel ?? "ornith-1.5:9b"}</span></div>
     </div>
   </details>;
+}
+
+const shortModelName = (model: ModelInfo) => model.name.replace(/\s*\(locale\)$/i, "");
+
+// Tendina che si apre verso l'alto: in fondo alla finestra Impostazioni non c'è spazio sotto.
+function DropUpSelect({ options, value, onChange }: { options: ModelInfo[]; value?: string; onChange: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+  const current = options.find((model) => model.id === value);
+  return <div className="dropup" ref={ref}>
+    <button type="button" className="dropup-trigger" onClick={() => setOpen(!open)} aria-expanded={open} disabled={!options.length}>
+      <span>{current ? shortModelName(current) : "Nessun modello"}</span><ChevronDown size={14} className={open ? "open" : undefined} />
+    </button>
+    {open && <div className="dropup-menu" role="listbox">
+      {options.map((model) => <button type="button" role="option" aria-selected={model.id === value} key={model.id} className={model.id === value ? "active" : undefined} onClick={() => { onChange(model.id); setOpen(false); }}>
+        <span>{shortModelName(model)}</span>{model.id === value && <Check size={14} />}
+      </button>)}
+    </div>}
+  </div>;
 }
 
 function comfyBrowserUrl() {
@@ -346,12 +379,18 @@ export default function App() {
     return localStorage.getItem("andreagpt-brain-enabled") !== "false";
   });
   const [brainSource, setBrainSource] = useState("");
-  const [codeAgentEnabled, setCodeAgentEnabled] = useState(false);
+  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  const [agentConfigError, setAgentConfigError] = useState("");
+  const [agentFolderDraft, setAgentFolderDraft] = useState("");
+  // Messaggio dell'Agente con il run in corso: solo lui mostra spinner e pulsanti di approvazione.
+  const [agentLiveId, setAgentLiveId] = useState("");
+  const agentLiveUpdateRef = useRef<((update: (view: AgentView) => AgentView) => void) | null>(null);
   const [brainPaths, setBrainPaths] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
   const [socialOpen, setSocialOpen] = useState(false);
   const [fotoOpen, setFotoOpen] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
   const [embeddingOpen, setEmbeddingOpen] = useState(false);
   const appearance = useAppearance();
@@ -423,8 +462,10 @@ export default function App() {
     yolo: { title: "YOLO", accent: "Computer vision sulle immagini", subtitle: "Detection, bounding box, segmentazione, classificazione, pose." },
     image: { title: "Image", accent: "Descrivila, io la creo", subtitle: "" },
     convert: { title: "Conversione", accent: "Converte i tuoi documenti", subtitle: "" },
+    video: { title: "Video", accent: "Dal video al testo", subtitle: "" },
     transcribe: { title: "Trascrivi audio", accent: "", subtitle: "" },
     record: { title: "Registra audio", accent: "", subtitle: "" },
+    agent: { title: "Agente", accent: "", subtitle: "" },
   };
   // Testi predefiniti precedenti: se salvati invariati vengono sostituiti dai nuovi (migrazione una tantum).
   const OLD_CARD_TEXTS: Record<string, Partial<WelcomeCardText>> = {
@@ -489,6 +530,8 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const [videoLink, setVideoLink] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -584,35 +627,130 @@ export default function App() {
     finally { setTranscribing(false); if (audioInputRef.current) audioInputRef.current.value = ""; }
   }
 
-  /** Riassunto e punti d'azione della trascrizione, in streaming in un nuovo messaggio. */
+  /** Chat Video: file caricato o link → trascrizione Whisper nel messaggio, nota in OUTPUT/Audio, riassunto se attivo. */
+  async function transcribeVideo(source: { file: File } | { url: string }) {
+    if (loading) return;
+    const name = "file" in source ? source.file.name : source.url;
+    if ("file" in source && (!source.file.size || source.file.size > 2048 * 1024 * 1024)) { setError("Il video deve essere non vuoto e pesare al massimo 2 GB."); return; }
+    const conversationId = activeConversationId || createId();
+    if (!activeConversationId) setActiveConversationId(conversationId);
+    const messageId = createId();
+    const startedAt = Date.now();
+    const url = "url" in source ? source.url : undefined;
+    stickToBottomRef.current = true;
+    setMessages((current) => [...current,
+      { id: createId(), role: "user", content: url ?? `🎬 ${name}` },
+      { id: messageId, role: "assistant", content: "", modelName: "Whisper locale", video: { status: "transcribing", name, url }, pending: { title: url ? "Scarico e trascrivo" : "Carico e trascrivo", detail: url ? undefined : name, startedAt } }]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoading(true); setError("");
+    try {
+      const response = "file" in source
+        ? await fetch("/api/video/file", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(source.file.name) }, body: source.file, signal: controller.signal })
+        : await fetch("/api/video/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: source.url }), signal: controller.signal });
+      const result = await readJsonResponse<{ text?: string; title?: string; language?: string; duration?: number; error?: string }>(response);
+      if (!response.ok) throw new Error(result.error || "Trascrizione video fallita.");
+      const transcript = cleanAudioTranscript(result.text?.trim() || "");
+      if (!transcript) throw new Error("Nessun parlato riconosciuto nel video.");
+      const title = result.title || name;
+      const length = result.duration ? ` · ${Math.floor(result.duration / 60)}:${String(Math.round(result.duration % 60)).padStart(2, "0")}` : "";
+      setMessages((current) => current.map((message) => message.id === messageId ? { ...message, content: transcript, pending: undefined, video: { status: "complete", name: title, url }, logs: [`${title}${length}${result.language ? ` · ${result.language}` : ""} · ${Math.round((Date.now() - startedAt) / 1000)} s`] } : message));
+      const note = `# ${title}\n\n${url ? `${url}\n\n` : ""}## Trascrizione\n\n${transcript}\n`;
+      const saved: { name?: string } = await fetch("/api/output/Audio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `${title.slice(0, 80)}.md`, content: note }) }).then(response => response.ok ? response.json() as Promise<{ name?: string }> : {}).catch(() => ({} as { name?: string }));
+      if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
+      if (audioSummaryRef.current) void askVideo({ transcript, output: saved.name ? { name: saved.name, note } : undefined });
+    } catch (caught) {
+      const aborted = (caught as Error).name === "AbortError";
+      const message = aborted ? "Trascrizione interrotta." : userErrorMessage(caught, "Trascrizione video fallita.");
+      setMessages((current) => current.map((item) => item.id === messageId ? { ...item, content: message, pending: undefined, video: { status: "error", name, url } } : item));
+      if (!aborted) setError(message);
+    } finally {
+      if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
+      if (videoInputRef.current) videoInputRef.current.value = "";
+    }
+  }
+
+  /**
+   * Chat Video: riassunto (senza domanda) o risposta a una domanda sulle trascrizioni, dal backend con trascrizione intera.
+   * Il modello è quello del backend (qwen3:8b o il migliore installato), non quello selezionato: i modelli piccoli inventano.
+   */
+  async function askVideo({ transcript, question, output }: { transcript?: string; question?: string; output?: { name: string; note: string } }) {
+    const transcripts = messages.filter((message) => message.video?.status === "complete" && message.content).map((message) => message.content);
+    const trascrizione = transcript ?? transcripts.join("\n\n---\n\n");
+    if (!trascrizione) { setError("Prima carica un video o incolla un link."); return; }
+    // Scambi precedenti della chat (domande e risposte), senza trascrizioni, link e card.
+    const storia = messages.filter((message) => !message.video && !message.welcomeCard && message.content.trim() && !(message.role === "user" && (/^https?:\/\/\S+$/i.test(message.content) || message.content.startsWith("🎬")))).slice(-6).map((message) => ({ role: message.role === "user" ? "user" as const : "assistant" as const, content: message.content }));
+    const assistantId = createId();
+    const startedAt = Date.now();
+    stickToBottomRef.current = true;
+    setMessages((current) => [...current, ...(question ? [{ id: createId(), role: "user" as const, content: question }] : []), { id: assistantId, role: "assistant", content: "", modelName: "Video", pending: { title: question ? "Risposta" : "Riassunto", startedAt } }]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoading(true); setError("");
+    const streamBatch = createStreamBatch((content) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content, pending: undefined } : message)));
+    let text = "";
+    try {
+      const response = await fetch("/api/video/chiedi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trascrizione, domanda: question, storia }), signal: controller.signal });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || `Errore HTTP ${response.status}`);
+      if (!response.body) throw new Error("Risposta streaming non disponibile.");
+      const model = response.headers.get("X-Model") ?? "";
+      setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, modelName: model || "Video" } : message));
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        // Righe di stato (\u0001parte 2/5) arrivano prima del testo.
+        while (buffer.startsWith("\u0001") && buffer.includes("\n")) {
+          const end = buffer.indexOf("\n");
+          const detail = buffer.slice(1, end);
+          setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, pending: { title: "Riassunto", detail: detail || undefined, startedAt } } : message));
+          buffer = buffer.slice(end + 1);
+        }
+        if (buffer.startsWith("\u0001") && !done) continue;
+        const failure = buffer.indexOf("\u0002");
+        if (failure >= 0) { streamBatch.append(buffer.slice(0, failure)); throw new Error(buffer.slice(failure + 1)); }
+        if (buffer) { streamBatch.append(buffer); text += buffer; buffer = ""; }
+        if (done) break;
+      }
+      if (output && text.trim()) void fetch(`/api/output/Audio/${encodeURIComponent(output.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: `${output.note}\n## Riassunto\n\n${text.trim()}\n` }) }).catch(() => undefined);
+    } catch (caught) {
+      if ((caught as Error).name !== "AbortError") setError(userErrorMessage(caught, question ? "Risposta non riuscita." : "Riassunto non riuscito."));
+    } finally {
+      streamBatch.flush();
+      setMessages((current) => current.filter((message) => message.id !== assistantId || message.content).map((message) => message.id === assistantId ? { ...message, pending: undefined } : message));
+      if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
+    }
+  }
+
+  /**
+   * Riassunto e punti d'azione della trascrizione, in streaming in un nuovo messaggio.
+   * Trascrizioni più lunghe del contesto: sintesi parte per parte, poi riassunto finale sulle sintesi (nessun limite di lunghezza).
+   */
   async function summarizeTranscript(transcript: string, conversationId: string, output?: { name: string; note: string }) {
     if (!selectedModel) { setError("Riassunto: nessun modello selezionato."); return; }
+    const model = selectedModel;
+    const maxTokens = isOllama ? selectedOllamaProfile.maxTokens : settings.maxTokens;
+    const numCtx = isOllama ? selectedOllamaProfile.numCtx : 4096;
+    // Stesso conto del backend (3 caratteri per token, 512 di margine), meno lo spazio delle istruzioni.
+    const chunkChars = isOllama ? Math.max(1500, Math.floor((numCtx - maxTokens - 512 - 300) * 3 * 0.9)) : 60_000;
     const assistantId = createId();
-    setMessages((current) => [...current, { id: assistantId, role: "assistant", content: "", modelId: selectedModel.id, modelName: selectedModel.name, modelProvider: selectedModel.provider }]);
+    const startedAt = Date.now();
+    setMessages((current) => [...current, { id: assistantId, role: "assistant", content: "", modelId: model.id, modelName: model.name, modelProvider: model.provider }]);
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
     const streamBatch = createStreamBatch((content) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content } : message)));
-    let summary = "";
-    try {
+    const setPending = (detail?: string) => setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, pending: detail ? { title: "Riassunto", detail, startedAt } : undefined } : message));
+    const ask = async (prompt: string, onToken?: (token: string) => void) => {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: selectedModel.id,
-          provider: selectedModel.providerId,
-          conversationId,
-          brain: false,
-          webSearch: false,
-          messages: [
-            { role: "system", content: "Rispondi in italiano. Non inventare nulla che non sia nella trascrizione." },
-            { role: "user", content: `Trascrizione audio:\n\n${transcript}\n\nScrivi:\n## Riassunto\n3-5 frasi.\n## Punti d'azione\nElenco puntato di cose da fare, con chi e quando se citati. Se non ce ne sono scrivi "Nessuno".` },
-          ],
-          ...settings,
-          temperature: 0.2,
-          maxTokens: isOllama ? selectedOllamaProfile.maxTokens : settings.maxTokens,
-          numCtx: isOllama ? selectedOllamaProfile.numCtx : 4096,
-          diagnostics: false,
+          model: model.id, provider: model.providerId, conversationId, brain: false, webSearch: false,
+          messages: [{ role: "system", content: "Rispondi in italiano. Non inventare nulla che non sia nella trascrizione." }, { role: "user", content: prompt }],
+          ...settings, temperature: 0.2, maxTokens, numCtx, diagnostics: false,
         }),
         signal: controller.signal,
       });
@@ -620,7 +758,7 @@ export default function App() {
       if (!response.body) throw new Error("Risposta streaming non disponibile.");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      let buffer = "", text = "";
       while (true) {
         const { value, done } = await reader.read();
         buffer += decoder.decode(value, { stream: !done });
@@ -634,17 +772,50 @@ export default function App() {
           try { event = JSON.parse(data); } catch { continue; }
           if (event.error) throw new Error(event.error);
           const token = event.choices?.[0]?.delta?.content ?? "";
-          if (token) { streamBatch.append(token); summary += token; }
+          if (token) { text += token; onToken?.(token); }
         }
         if (done) break;
       }
+      return text.trim();
+    };
+    /** Divide su fine frase vicino al limite, così nessuna parte supera il contesto. */
+    const split = (text: string) => {
+      const parts: string[] = [];
+      let rest = text.trim();
+      while (rest.length > chunkChars) {
+        const window = rest.slice(0, chunkChars);
+        const sentence = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "), window.lastIndexOf("\n"));
+        const space = window.lastIndexOf(" ");
+        const at = sentence > chunkChars * 0.6 ? sentence + 1 : space > chunkChars * 0.6 ? space : chunkChars;
+        parts.push(rest.slice(0, at).trim());
+        rest = rest.slice(at).trim();
+      }
+      if (rest) parts.push(rest);
+      return parts;
+    };
+    let summary = "";
+    try {
+      let material = transcript;
+      let label = "Trascrizione";
+      for (let round = 1; material.length > chunkChars; round++) {
+        const parts = split(material);
+        const notes: string[] = [];
+        for (const [index, part] of parts.entries()) {
+          setPending(`${round > 1 ? `giro ${round} · ` : ""}parte ${index + 1}/${parts.length}`);
+          notes.push(await ask(`${label}, parte ${index + 1} di ${parts.length}:\n\n${part}\n\nElenca in modo sintetico i fatti, i concetti e le cose da fare di questa parte (al massimo 8 punti, con nomi, numeri e date citati). Solo l'elenco.`));
+        }
+        material = notes.map((note, index) => `### Parte ${index + 1}\n${note}`).join("\n\n");
+        label = "Appunti per parti della trascrizione";
+      }
+      setPending(undefined);
+      summary = await ask(`${label}:\n\n${material}\n\nScrivi:\n## Riassunto\n3-5 frasi.\n## Punti d'azione\nElenco puntato di cose da fare, con chi e quando se citati. Se non ce ne sono scrivi "Nessuno".`, (token) => streamBatch.append(token));
       // Il riassunto finisce nella stessa nota di OUTPUT/Audio.
-      if (output && summary.trim()) void fetch(`/api/output/Audio/${encodeURIComponent(output.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: `${output.note}\n${summary.trim()}\n` }) }).catch(() => undefined);
+      if (output && summary) void fetch(`/api/output/Audio/${encodeURIComponent(output.name)}/content`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: `${output.note}\n${summary}\n` }) }).catch(() => undefined);
     } catch (caught) {
       if ((caught as Error).name !== "AbortError") setError(userErrorMessage(caught, "Riassunto non riuscito."));
     } finally {
       streamBatch.flush();
-      setMessages((current) => current.filter((message) => message.id !== assistantId || message.content));
+      setMessages((current) => current.filter((message) => message.id !== assistantId || message.content).map((message) => message.id === assistantId ? { ...message, pending: undefined } : message));
       if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
     }
   }
@@ -744,9 +915,21 @@ export default function App() {
   const selectedOllamaProfile = selectedModel?.providerId === "ollama"
     ? { ...defaultOllamaProfile(selectedModel), ...ollamaProfiles[selectedModel.id] }
     : defaultOllamaProfile(selectedModel);
+  const agentModel = localOllamaModels.find((model) => model.id === agentConfig?.model);
+  const agentModelOptions = agentConfig?.model && !agentModel ? [...localOllamaModels, { id: agentConfig.model, name: agentConfig.model, provider: "Ollama", providerId: "ollama" as const, description: "", tags: [] }] : localOllamaModels;
   const activeConversationTitle = conversations.find((conversation) => conversation.id === activeConversationId)?.title ?? "";
   const imageConversation = specialMode === "image" || /^Image \d+$/i.test(activeConversationTitle);
   const activeConversationMode = conversationMode(conversations.find((conversation) => conversation.id === activeConversationId));
+  useEffect(() => {
+    if (!settingsOpen && specialMode !== "agent") return;
+    let active = true;
+    void fetch("/api/agent/config").then(async (response) => {
+      const data = (await response.json().catch(() => ({}))) as Partial<AgentConfig> & { error?: string };
+      if (!response.ok) throw new Error(data.error || `Errore HTTP ${response.status}`);
+      if (active) { setAgentConfig({ model: data.model ?? "", writable: Array.isArray(data.writable) ? data.writable : [] }); setAgentConfigError(""); }
+    }).catch((caught) => { if (active) setAgentConfigError(userErrorMessage(caught, "Configurazione non disponibile.")); });
+    return () => { active = false; };
+  }, [settingsOpen, specialMode]);
   // Anche dopo un ricaricamento la chat riapre il suo strumento (YOLO, OCR, Analyze…).
   useEffect(() => {
     if (activeConversationMode !== "normal") setSpecialMode(activeConversationMode);
@@ -764,7 +947,7 @@ export default function App() {
     }).catch(() => undefined);
     return () => { active = false; };
   }, [imageConversation, activeConversationId]);
-  const brainPrivate = codeAgentEnabled || brainEnabled || messages.some((message) => message.brainPrivate) || Boolean(conversations.find((c) => c.id === activeConversationId)?.brainPrivate);
+  const brainPrivate = brainEnabled || messages.some((message) => message.brainPrivate) || Boolean(conversations.find((c) => c.id === activeConversationId)?.brainPrivate);
   const isOllama = selectedModel?.providerId === "ollama";
   const selectedTask = TASKS.find((task) => task.id === taskId) ?? TASKS[0];
   const filteredModels = visibleModels.filter((model) => {
@@ -1412,6 +1595,10 @@ export default function App() {
     if (specialMode === "analyze") { await processAnalyzeBatch(content); return; }
     if (specialMode === "convert") return;
     if (specialMode === "image") { await processImage(content); return; }
+    if (specialMode === "agent") { if (content) await processAgent(content); return; }
+    if (specialMode === "video" && /^https?:\/\/\S+$/i.test(content) && !attachments.length) { setInput(""); await transcribeVideo({ url: content }); return; }
+    // Chat Video: il testo libero è una domanda sulle trascrizioni della chat.
+    if (specialMode === "video" && !attachments.length) { setInput(""); await askVideo({ question: content }); return; }
     if (brainPrivate && (!isOllama || webSearchEnabled)) { setError("Brain e cronologia privata possono usare solo Ollama, senza web."); return; }
     if (isOllama && [...messages.flatMap((m) => m.attachments || []), ...attachments].some((a) => a.kind !== "text")) { setError("Ollama accetta solo testo. Questa conversazione contiene immagini/PDF: avvia una nuova chat o usa testo estratto."); return; }
 
@@ -1445,7 +1632,6 @@ export default function App() {
           provider: selectedModel.providerId,
           conversationId,
           brain: brainEnabled,
-          codeAgent: codeAgentEnabled,
           brainPrivate,
           brainSource: mentionedSource || undefined,
           messages: [
@@ -1536,6 +1722,91 @@ export default function App() {
     finally { setCompactingChat(false); }
   }
 
+  // Chat Agente: run SSE dedicato; ogni evento aggiorna la trascrizione salvata nel messaggio assistente.
+  async function processAgent(content: string) {
+    const conversationId = activeConversationId || createId();
+    if (!activeConversationId) setActiveConversationId(conversationId);
+    const userMessage: ChatMessage = { id: createId(), role: "user", content };
+    const assistantId = createId();
+    const startedAt = Date.now();
+    const history = messages.filter((message) => !message.welcomeCard && (message.role === "user" || message.role === "assistant") && message.content.trim()).map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
+    const profile = agentModel ? { ...defaultOllamaProfile(agentModel), ...ollamaProfiles[agentModel.id] } : undefined;
+    let view: AgentView = { model: agentConfig?.model, writable: agentConfig?.writable, plan: [], steps: [], approvals: [] };
+    let answer = "";
+    const base = [...messages, userMessage];
+    const current = (): ChatMessage => ({ id: assistantId, role: "assistant", content: answer, agent: view, modelId: view.model, modelName: "Agente" });
+    const render = (save = false) => {
+      const message = current();
+      setMessages((list) => list.map((item) => item.id === assistantId ? message : item));
+      // Anche a run aperto: approvazioni ed esiti sopravvivono a una ricarica.
+      if (save) setConversations((list) => list.map((conversation) => conversation.id === conversationId ? { ...conversation, messages: [...base, message], updatedAt: Date.now() } : conversation));
+    };
+    stickToBottomRef.current = true;
+    setMessages([...base, current()]);
+    setInput(""); setAttachments([]); setError(""); setLoading(true); setAgentLiveId(assistantId);
+    // Le azioni dalla card (errore approvazione, annulla) passano dalla stessa trascrizione locale del run.
+    agentLiveUpdateRef.current = (update) => { view = update(view); render(); };
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const body: AgentRunRequest = { conversationId, messages: [...history, { role: "user", content }], numCtx: profile?.numCtx, maxTokens: profile?.maxTokens };
+      const response = await fetch("/api/agent/run", { method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" }, body: JSON.stringify(body), signal: controller.signal });
+      if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || `Errore HTTP ${response.status}`);
+      if (!response.body) throw new Error("Risposta streaming non disponibile.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finished = false;
+      while (!finished) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        if (done && buffer.trim()) lines.push(buffer);
+        let changed = false;
+        let save = false;
+        for (const line of lines) {
+          const data = line.trim().replace(/^data:\s*/, "");
+          if (!data) continue;
+          if (data === "[DONE]") { finished = true; break; }
+          let event: AgentEvent;
+          try { event = JSON.parse(data) as AgentEvent; } catch { continue; }
+          ({ view, answer } = foldAgentEvent(view, answer, event));
+          changed = true;
+          if (event.type === "approval" || event.type === "approval_result" || event.type === "done" || event.type === "error") save = true;
+        }
+        if (changed) render(save);
+        if (done) break;
+      }
+      if (finished) void reader.cancel().catch(() => undefined);
+      view = closeAgentView(view, view.error ? "Errore" : "Interrotto", startedAt);
+    } catch (caught) {
+      const aborted = (caught as Error).name === "AbortError";
+      view = closeAgentView(aborted ? view : { ...view, error: view.error ?? userErrorMessage(caught, "Agente non disponibile.") }, aborted ? "Interrotto" : "Errore", startedAt);
+    } finally {
+      agentLiveUpdateRef.current = null;
+      render(true);
+      if (abortRef.current === controller) { setLoading(false); abortRef.current = null; }
+      setAgentLiveId((id) => id === assistantId ? "" : id);
+    }
+  }
+
+  function updateAgentMessage(id: string, update: (view: AgentView) => AgentView) {
+    if (id === agentLiveId && agentLiveUpdateRef.current) { agentLiveUpdateRef.current(update); return; }
+    setMessages((list) => list.map((message) => message.id === id && message.agent ? { ...message, agent: update(message.agent) } : message));
+  }
+
+  async function saveAgentConfig(patch: Partial<AgentConfig>) {
+    setAgentConfigError("");
+    try {
+      const response = await fetch("/api/agent/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+      const data = (await response.json().catch(() => ({}))) as Partial<AgentConfig> & { error?: string };
+      if (!response.ok) throw new Error(data.error || `Errore HTTP ${response.status}`);
+      setAgentConfig((current) => ({ model: data.model ?? patch.model ?? current?.model ?? "", writable: data.writable ?? patch.writable ?? current?.writable ?? [] }));
+      return true;
+    } catch (caught) { setAgentConfigError(userErrorMessage(caught, "Salvataggio non riuscito.")); return false; }
+  }
+
   function stopGeneration() {
     if (activeOperation?.label.startsWith("Analyze") && analyzeConversationIdRef.current === activeConversationIdRef.current) analyzeAbortRef.current?.abort();
     else abortRef.current?.abort();
@@ -1566,6 +1837,13 @@ export default function App() {
     if (!selectedFiles.length) return;
     const audioExtensions = /\.(?:aac|flac|m4a|mp3|mpeg|mp4|ogg|wav|webm)$/i;
     const audioFile = specialMode === "normal" ? selectedFiles.find(file => file.type.startsWith("audio/") || audioExtensions.test(file.name)) : undefined;
+    if (specialMode === "video") {
+      const videoFile = selectedFiles.find(file => file.type.startsWith("video/") || VIDEO_FILE.test(file.name));
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (!videoFile) { setError("Allega un file video."); return; }
+      await transcribeVideo({ file: videoFile });
+      return;
+    }
     if (audioFile) {
       if (selectedFiles.length > 1) { setError("Scegli un solo audio alla volta per la trascrizione."); if (fileInputRef.current) fileInputRef.current.value = ""; return; }
       await transcribeAudio(audioFile);
@@ -1616,7 +1894,7 @@ export default function App() {
     const initialInput = "";
     setLoading(false); setMessages([]); setAttachments([]); setInput(initialInput); setError(""); setBrainEnabled(false); setSpecialMode(mode); setAudioWelcomeMode("none");
     if (mode === "yolo") setYoloTask("detect");
-    const prefix = mode === "ocr" ? "OCR" : mode === "yolo" ? "YOLO" : mode === "analyze" ? "Analyze" : mode === "image" ? "Image" : "Converti";
+    const prefix = mode === "ocr" ? "OCR" : mode === "yolo" ? "YOLO" : mode === "analyze" ? "Analyze" : mode === "image" ? "Image" : mode === "video" ? "Video" : mode === "agent" ? "Agente" : "Converti";
     const nextNumber = conversations.reduce((max, conversation) => {
       const match = conversation.title.match(mode === "analyze" ? /^(?:Analyze|Analizza IMG) (\d+)$/i : new RegExp(`^${prefix} (\\d+)$`, "i"));
       return match ? Math.max(max, Number(match[1])) : max;
@@ -1846,6 +2124,15 @@ export default function App() {
                 actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini o PDF</button><button type="button" className="welcome-chip" onClick={() => openOutputFolder("ocr")}><Folder size={16} /> Apri risultati</button><label className="welcome-chip" title="Indicizza subito il testo estratto nel Brain"><input type="checkbox" checked={ocrToBrain} onChange={(event) => setOcrToBrain(event.target.checked)} /> Salva nel Brain</label></>} />}
               {specialMode === "yolo" && <ToolWelcomeCard model="YOLO11 locale" text={cardTexts.yolo} {...cardEditProps("yolo")}
                 actions={<><button type="button" className="special-upload-button" onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Carica immagini</button><button type="button" className="special-upload-button" onClick={() => setYoloLiveOpen(true)}><Camera size={17} /> Live</button><select className="welcome-select" aria-label="Task YOLO" value={yoloTask} onChange={(event) => setYoloTask(event.target.value as YoloTask)}><option value="detect">Detection</option><option value="bbox">Bounding box</option><option value="segment">Segmentazione</option><option value="classify">Classificazione</option><option value="pose">Pose</option></select></>} />}
+              {specialMode === "video" && <ToolWelcomeCard className="video-welcome" model="Whisper locale" text={cardTexts.video} {...cardEditProps("video")}
+                actions={<><button type="button" className="special-upload-button" onClick={() => videoInputRef.current?.click()} disabled={loading}><Clapperboard size={17} /> Carica video</button>{summaryToggle}</>}>
+                <form className="video-link-form" onSubmit={(event) => { event.preventDefault(); const url = videoLink.trim(); if (!/^https?:\/\/\S+$/i.test(url)) { setError("Link non valido."); return; } setVideoLink(""); void transcribeVideo({ url }); }}>
+                  <Link2 size={16} aria-hidden="true" /><input type="url" inputMode="url" value={videoLink} onChange={(event) => setVideoLink(event.target.value)} placeholder="Link YouTube" aria-label="Link YouTube" /><button type="submit" className="primary-action" disabled={loading || !videoLink.trim()}>Trascrivi</button>
+                </form>
+              </ToolWelcomeCard>}
+              {specialMode === "agent" && <ToolWelcomeCard className="agent-welcome" model={agentConfig?.model ?? "—"} text={{ ...cardTexts.agent, subtitle: "" }} editSubtitle={false} {...cardEditProps("agent")}>
+                {agentConfig && <div className="agent-welcome-paths">{agentConfig.writable.length ? agentConfig.writable.map((folder) => <code key={folder}>{folder}</code>) : <span>Sola lettura</span>}</div>}
+              </ToolWelcomeCard>}
               {specialMode === "convert" && <ToolWelcomeCard className="convert-welcome" model="Pandoc + LibreOffice" text={cardTexts.convert} {...cardEditProps("convert")}>
                 <Suspense fallback={<div className="thinking">Caricamento convertitore…</div>}><ConvertPanel onResult={handleConvertedResult} /></Suspense>
               </ToolWelcomeCard>}
@@ -1915,6 +2202,7 @@ export default function App() {
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
           <button className="sidebar-action" onClick={() => setSocialOpen(true)}><Bookmark size={17} /> Social</button>
           <button className="sidebar-action" onClick={() => setFotoOpen(true)}><Image size={17} /> Foto</button>
+          <button className="sidebar-action" onClick={() => setCodeOpen(true)}><Code2 size={17} /> Code</button>
           <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output</button>
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
           <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
@@ -1934,6 +2222,8 @@ export default function App() {
                 ? <div><strong>Analisi immagine Yolo</strong></div>
                 : specialMode === "analyze"
                   ? <div><strong>Analyze</strong></div>
+                : specialMode === "agent"
+                  ? <div><strong>Agente{agentConfig?.model ? ` · ${agentConfig.model}` : ""}</strong></div>
                 : imageConversation
                   ? <div><strong>Qwen Image 2.1</strong></div>
                 : <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong></div>}
@@ -1958,12 +2248,13 @@ export default function App() {
                   <button type="button" onClick={() => { openSpecialChat("convert"); setFileMenuOpen(false); setTopbarMenuOpen(false); }}><FileOutput size={17} /><span>Converti</span></button>
                 </div>}
               </div>
-            <button className={`brain-mode-button ${webSearchEnabled ? "active" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false} aria-pressed={webSearchEnabled} title={brainPrivate ? "Web bloccato: la conversazione Brain è privata" : webAvailable === false ? "Ricerca Web non disponibile" : webSearchEnabled ? "Ricerca Web attiva" : "Ricerca Web disattivata"}><Globe2 size={18} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button>
-            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><Network className="brain-symbol" size={18} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button>
-            <button className={`brain-mode-button ${codeAgentEnabled ? "active" : ""}`} onClick={() => {setCodeAgentEnabled(!codeAgentEnabled);setWebSearchEnabled(false);}} disabled={loading || !isOllama} aria-pressed={codeAgentEnabled} title="Legge il progetto configurato e propone modifiche senza applicarle. Richiede un modello locale con strumenti."><Code2 size={17} /><span>Codice {codeAgentEnabled ? "ON" : "OFF"}</span></button>
+            <button className={`brain-mode-button ${webSearchEnabled ? "active" : ""}`} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false || specialMode === "agent"} aria-pressed={webSearchEnabled} title={brainPrivate ? "Web bloccato: la conversazione Brain è privata" : webAvailable === false ? "Ricerca Web non disponibile" : webSearchEnabled ? "Ricerca Web attiva" : "Ricerca Web disattivata"}><Globe2 size={18} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button>
+            <button className={`brain-mode-button ${brainEnabled ? "active" : ""}`} onClick={() => setBrainMode(!brainEnabled)} disabled={loading || specialMode === "agent"} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><Network className="brain-symbol" size={18} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button>
+            <button className={`brain-library-button agent-button ${specialMode === "agent" ? "active" : ""}`} onClick={() => openSpecialChat("agent")} disabled={loading} title="Nuova chat Agente"><Bot size={17} /><span>Agente</span></button>
             <button className={`brain-library-button yolo-button ${specialMode === "yolo" ? "active" : ""}`} onClick={() => openSpecialChat("yolo")} disabled={loading} title="Apri una nuova chat YOLO"><YoloIcon /><span>YOLO</span></button>
             <button className={`brain-library-button analyze-button ${specialMode === "analyze" ? "active" : ""}`} onClick={() => openSpecialChat("analyze")} disabled={loading} title="Analizza immagini con Qwen3-VL"><Eye size={17} /><span>Analyze</span></button>
             <button className={`brain-library-button image-button ${specialMode === "image" ? "active" : ""}`} onClick={() => openSpecialChat("image")} disabled={loading} title="Crea immagini con Qwen-Image-2.1"><Image size={17} /><span>Image</span></button>
+            <button className={`brain-library-button video-button ${specialMode === "video" ? "active" : ""}`} onClick={() => openSpecialChat("video")} disabled={loading} title="Trascrivi un video o un link YouTube"><Clapperboard size={17} /><span>Video</span></button>
             <button className="brain-library-button news-button" onClick={() => setResearchOpen(true)} disabled={loading} title="Crea un giornale di notizie e paper"><Newspaper size={17} /><span>News</span></button>
             {/* Task specifico rimosso dalla barra: le chat dedicate selezionano direttamente la loro operazione. */}{false && <div className="task-selector">
               <button className="task-trigger" onClick={() => setTaskMenuOpen((value) => !value)}>
@@ -1999,24 +2290,24 @@ export default function App() {
            ) : (
             <div className="message-list">
               {messages.map((message, messageIndex) => message.welcomeCard ? <div key={message.id} className="welcome-stage message-welcome-card">{message.welcomeCard === "transcribe" || message.welcomeCard === "record" ? renderWelcome("normal", message.welcomeCard) : renderWelcome(specialModes.includes(message.welcomeCard as SpecialMode) ? message.welcomeCard as SpecialMode : "normal", "none")}</div> : (
-                <article key={message.id} className={`message ${message.role}`}>
+                <article key={message.id} className={`message ${message.role}${message.agent ? " agent-message" : ""}`}>
                   <div className="message-avatar">{message.role === "user" ? <img src="/cetriolo.png" alt="Tu" /> : <img src="/andreagpt-logo-128.png" alt="AndreaGPT" />}</div>
                   <div className="message-content">
-                    <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}{message.pending?.detail && <span className="message-meta-detail">· {message.pending.detail}</span>}{message.pending && loading && <span className="message-meta-detail">· <ElapsedTime startedAt={message.pending.startedAt} /></span>}</div>
+                    <div className="message-meta">{message.role === "user" ? "Tu" : specialMode === "ocr" ? "OCR locale" : specialMode === "yolo" ? "YOLO locale" : specialMode === "analyze" ? "Analyze" : specialMode === "image" ? "Qwen-Image-2.1" : specialMode === "convert" ? "Conversione locale" : message.agent ? <>Agente{message.agent.model && <span className="message-meta-detail">· {message.agent.model}</span>}{message.agent.writable?.length ? <span className="message-meta-detail">· {message.agent.writable.join(", ")}</span> : null}</> : message.modelName ?? selectedModel?.name}{message.role === "assistant" && message.modelProvider && <span className="message-model-provider">{message.modelProvider}</span>}{message.webSearch && <span className="web-search-badge"><Globe2 size={10} /> Web</span>}{message.pending?.detail && <span className="message-meta-detail">· {message.pending.detail}</span>}{message.pending && loading && <span className="message-meta-detail">· <ElapsedTime startedAt={message.pending.startedAt} /></span>}</div>
                     {message.attachments?.length ? <AttachmentList attachments={message.attachments} /> : null}
                     {message.generatedImage && <a className="generated-image" href={message.generatedImage.url} download={message.generatedImage.name} title="Scarica immagine"><img src={message.generatedImage.url} alt={message.content || "Immagine generata"} /></a>}
                     {message.generatedFile?.data && <button type="button" className="generated-file-download" onClick={() => downloadConverted(message.generatedFile!)}><Download size={16} /> Scarica {message.generatedFile.name}</button>}
                     {message.audio?.status === "transcribing" && !message.content && <div className="audio-chat-status" role="status" aria-live="polite"><AudioCassette playing /><div><strong>Sto trascrivendo audio</strong><span>{message.audio.fileName}</span></div></div>}
-                    {message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" || message.pending ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
+                    {message.agent ? <Suspense fallback={<div className="thinking"><span /><span /><span /></div>}><AgentRun view={message.agent} answer={message.content} active={message.id === agentLiveId} logsOpen={Boolean(openMessagePanels[message.id]?.logs)} onChange={(update) => updateAgentMessage(message.id, update)} onReply={!loading && messageIndex === messages.length - 1 ? (text) => void processAgent(text) : undefined} /></Suspense> : message.content ? specialMode === "ocr" && message.role === "assistant" && !message.content.startsWith("Elaborazione OCR") ? <div className="ocr-result-editor"><textarea value={message.content} onChange={(event) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: event.target.value } : item))} aria-label="Modifica risultato OCR" /><div className="ocr-result-actions"><button onClick={() => saveTextResult(message.content, "risultato-ocr.txt")}>Salva risultato</button></div></div> : <Suspense fallback={<p>{message.content}</p>}><MarkdownMessage content={message.content} privateMode={Boolean(brainPrivate || message.brainPrivate)} /></Suspense> : message.audio?.status === "transcribing" || message.pending ? null : message.role === "assistant" ? brainEnabled ? <div className="thinking">Ricerca nelle fonti Brain…</div> : <div className="thinking"><span /><span /><span /></div> : null}
                     {message.pending && (loading ? <PendingWork {...message.pending} /> : <p className="pending-stopped">Elaborazione interrotta.</p>)}
                     {message.resultImages?.length ? <ResultImages images={message.resultImages} /> : null}
                     {message.role === "assistant" && !message.generatedImage && message.content.startsWith("ComfyUI ·") && <a className="comfy-progress-link" href={comfyBrowserUrl()} target="_blank" rel="noreferrer">Apri ComfyUI</a>}
                     {message.resultFiles?.length ? <div className="result-files">{message.resultFiles.map((file) => <a key={file.url} className="generated-file-download" href={file.url} download={file.name}><Download size={16} /> {file.name.split(".").pop()?.toUpperCase()}</a>)}</div> : null}
-                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button></div>
+                    {message.content && <div className="message-footer"><div className="message-actions"><button type="button" onClick={() => void copyMessage(message)} title={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"} aria-label={copiedMessageId === message.id ? "Testo copiato" : "Copia il testo"}><Copy size={14} /></button><button type="button" onClick={() => editAndResend(message)} title="Modifica e invia" aria-label="Modifica e invia"><Pencil size={14} /></button>{message.agent?.done && <button type="button" className={`agent-logs-button${openMessagePanels[message.id]?.logs ? " active" : ""}`} aria-expanded={Boolean(openMessagePanels[message.id]?.logs)} onClick={() => toggleMessagePanel(message.id, "logs")} title="Logs" aria-label="Logs"><ScrollText size={14} /></button>}{message.video?.status === "complete" && <button type="button" onClick={() => void askVideo({ transcript: message.content })} disabled={loading} title="Riassumi" aria-label="Riassumi"><Sparkles size={14} /></button>}</div>
                     {diagnosticsEnabled && message.brainSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.brain)} onClick={() => toggleMessagePanel(message.id, "brain")}>{openMessagePanels[message.id]?.brain ? "▼" : "▶"} Fonti Brain ({message.brainSources.length})</button>}
                     {diagnosticsEnabled && message.webSources && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.web)} onClick={() => toggleMessagePanel(message.id, "web")}>{openMessagePanels[message.id]?.web ? "▼" : "▶"} Fonti Web ({message.webSources.length})</button>}
                     {message.outputNotes?.map((note) => <button key={note.name} type="button" className="citation-toggle output-note-toggle" onClick={() => openOutputNote(note)}><Folder size={13} /> Apri in Output{message.outputNotes!.length > 1 ? ` · ${note.name.replace(/\.md$/i, "").replace(/^\d+-/, "")}` : ""}</button>)}
-                    {message.logs?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.logs)} onClick={() => toggleMessagePanel(message.id, "logs")}>{openMessagePanels[message.id]?.logs ? "▼" : "▶"} Logs</button> : null}
+                                        {message.logs?.length ? <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.logs)} onClick={() => toggleMessagePanel(message.id, "logs")}>{openMessagePanels[message.id]?.logs ? "▼" : "▶"} Logs</button> : null}
                     {message.generatedImage && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.image)} onClick={() => toggleMessagePanel(message.id, "image")}>{openMessagePanels[message.id]?.image ? "▼" : "▶"} Dettagli immagine</button>}
                     {diagnosticsEnabled && message.metrics && <button type="button" className="citation-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.metrics)} onClick={() => toggleMessagePanel(message.id, "metrics")}>{openMessagePanels[message.id]?.metrics ? "▼" : "▶"} Tempi</button>}
                     {diagnosticsEnabled && message.diagnostics && <button type="button" className="citation-toggle diagnostics-toggle" aria-expanded={Boolean(openMessagePanels[message.id]?.diagnostics)} onClick={() => toggleMessagePanel(message.id, "diagnostics")}>{openMessagePanels[message.id]?.diagnostics ? "▼" : "▶"} Log ({message.diagnostics.events.filter(event => event.status === "warning" || event.status === "error").length})</button>}
@@ -2057,12 +2348,13 @@ export default function App() {
                 className="file-input"
                 type="file"
                 multiple
-                accept={specialMode === "ocr" ? "image/*,.pdf" : specialMode === "yolo" || specialMode === "analyze" ? "image/*" : specialMode === "normal" ? "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1,audio/*,.aac,.flac,.m4a,.mp3,.mpeg,.mp4,.ogg,.wav,.webm" : "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"}
+                accept={specialMode === "ocr" ? "image/*,.pdf" : specialMode === "video" ? VIDEO_ACCEPT : specialMode === "yolo" || specialMode === "analyze" ? "image/*" : specialMode === "normal" ? "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1,audio/*,.aac,.flac,.m4a,.mp3,.mpeg,.mp4,.ogg,.wav,.webm" : "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"}
                 onChange={(event) => void addAttachments(event.target.files ?? [])}
               />
+              <input ref={videoInputRef} className="file-input" type="file" accept={VIDEO_ACCEPT} onChange={event => { const file = event.target.files?.[0]; if (file) void transcribeVideo({ file }); }} />
               <input ref={audioInputRef} className="file-input" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm,.flac,.aac" onChange={event => { const audio = event.target.files?.[0]; if (audio) void transcribeAudio(audio); }} />
               <div className="composer-tools" ref={composerToolsRef}><button className={`attach-button tools-toggle ${composerToolsOpen ? "active" : ""}`} onClick={() => setComposerToolsOpen((open) => !open)} aria-expanded={composerToolsOpen} aria-haspopup="menu" aria-label="Apri strumenti" title="Strumenti"><Settings2 size={18} /></button>{composerToolsOpen && <div className="composer-tools-menu" role="menu">
-                <button onClick={() => { setComposerToolsOpen(false); fileInputRef.current?.click(); }} disabled={loading || attachments.length >= MAX_ATTACHMENTS}><Paperclip size={17} /><span>Allega file</span></button>
+                <button onClick={() => { setComposerToolsOpen(false); fileInputRef.current?.click(); }} disabled={loading || attachments.length >= MAX_ATTACHMENTS || specialMode === "agent"}><Paperclip size={17} /><span>Allega file</span></button>
                 <button onClick={() => void compactCurrentChat()} disabled={loading || compactingChat || messages.filter(message => message.content.trim()).length === 0}><Archive size={17} /><span>{compactingChat ? "Compatto…" : "Compatta chat"}</span></button>
                 {specialMode === "yolo" && <button onClick={() => { setComposerToolsOpen(false); setYoloLiveOpen(true); }}><Camera size={17} /><span>YOLO live</span></button>}
                 {specialMode === "normal" && <><button onClick={() => openAudioWelcome("transcribe")} disabled={loading || recording || transcribing}><AudioLines size={17} /><span>Trascrivi audio</span></button><button className={recording ? "active" : ""} onClick={() => openAudioWelcome("record")} disabled={loading || transcribing}><Mic size={17} /><span>{recording ? "Termina registrazione" : "Registra audio"}</span></button>
@@ -2126,6 +2418,7 @@ export default function App() {
 
       {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" wide onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><FotoPanel /></Suspense></Modal>}
       {socialOpen && <Modal title="Social" className="fit-modal" wide onClose={() => setSocialOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><SocialPanel /></Suspense></Modal>}
+      {codeOpen && <Modal title="Code" className="fit-modal code-modal" wide onClose={() => setCodeOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CodePanel /></Suspense></Modal>}
       {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
       {outputOpen && !compactOpen && <Modal title="Output" className="output-modal fit-modal" wide={Boolean(outputFolder)} compact={!outputFolder} onClose={() => { setOutputOpen(false); setOutputFolder(null); }}><div className="output-sections">{!outputFolder ? <div className="output-folders">{([ ["images", "Immagini generate", Image], ["ocr", "OCR", FileText], ["news", "News", Newspaper], ["analyze", "Analyze", ScanEye], ["audio", "Audio", AudioLines], ["compactChat", "Chat compatte", Archive] ] as const).map(([folder, title, Icon]) => <button key={folder} className="output-folder" onClick={() => setOutputFolder(folder)}><Icon size={28} /><strong>{title}</strong><small>{outputFiles[folder].length} risultati</small></button>)}</div> : <section className="output-section"><button className="output-back" onClick={() => setOutputFolder(null)}>← Tutte le cartelle</button><h3>{outputFolderLabel[outputFolder]}</h3>{outputFolder === "news" ? <div className="output-results">{researchLoading && <div className="output-result"><button type="button" className="output-result-open" onClick={() => { setOutputOpen(false); setOutputFolder(null); setResearchOpen(true); }}><span className="output-file-icon"><span className="operation-pulse" /></span><span><strong>In corso · {formatElapsed(researchSeconds)}</strong><small>{researchProgress ? `${researchProgress.done}/${researchProgress.total} articoli` : "Ricerca fonti…"}</small><em>{researchResult?.label || "—"}</em></span></button></div>}{outputFiles.news.length ? outputFiles.news.map(file => <div key={file.name} className="output-result"><button type="button" className="output-result-open" disabled={researchLoading} onClick={() => void openSavedEdition(file.name)}><span className="output-file-icon"><Newspaper size={22} /></span><span><strong>{({ ai: "AI News", papers: "Paper scientifici", science: "Scienza e Curiosità" } as Record<string, string>)[file.name.match(/-news-(\w+)\.md$/)?.[1] ?? ""] ?? file.name}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt?.replace(/^.*?Data:\s*\S+\s*/, "") || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder: "News", name: file.name })}>Elimina</button></div>) : !researchLoading && <p>Nessun risultato.</p>}</div> : outputFolder === "analyze" || outputFolder === "audio" ? <div className="output-results">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => { const folder = outputFolder === "analyze" ? "Analyze" as const : "Audio" as const; return <div key={file.name} className="output-result"><button type="button" className="output-result-open" onClick={() => setCompactOpen({ folder, name: file.name })}>{file.thumb ? <img src={file.thumb} alt="" /> : outputFolder === "audio" ? <span className="output-file-icon"><AudioLines size={22} /></span> : null}<span><strong>{file.name.replace(/\.md$/i, "").replace(/^[\dTZ-]+-(?=.)/, "")}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{file.excerpt || "—"}</em></span></button><button className="output-delete" onClick={() => setOutputDelete({ folder, name: file.name })}>Elimina</button></div>; }) : <p>Nessun risultato.</p>}</div> : <div className="output-gallery">{outputFiles[outputFolder].length ? outputFiles[outputFolder].map(file => <div key={file.name} className="output-item-wrap">{outputFolder === "compactChat" ? <button type="button" className="output-item" onClick={() => setCompactOpen({ folder: "Compatta_chat", name: file.name })}><span className="output-file-icon"><FileText size={24} /></span><span>{file.name}</span></button> : <a href={file.url} target="_blank" rel="noreferrer" className="output-item">{file.image ? <img src={file.url} alt={file.name} /> : <span className="output-file-icon"><FileText size={24} /></span>}<span>{file.name}</span></a>}<button className="output-delete" onClick={() => setOutputDelete({ folder: outputFolder === "images" ? "Image" : outputFolder === "compactChat" ? "Compatta_chat" : outputFolder.toUpperCase() as "OCR" | "YOLO", name: file.name })}>Elimina</button></div>) : <p>Nessun file disponibile.</p>}</div>}</section>}</div></Modal>}
@@ -2215,23 +2508,40 @@ export default function App() {
           <details className="settings-row">
             <summary><span>Modelli locali</span><ChevronDown size={15} /></summary>
             <div className="settings-body">
-              {localOllamaModels.length ? localOllamaModels.map(model => {
-                const profile = { ...defaultOllamaProfile(model), ...ollamaProfiles[model.id] };
-                const extendedOutput = model.id === "qwen3:14b";
-                return <div className="settings-line settings-model" key={model.id}>
-                  <span title={model.id}>{model.name.replace(/\s*\(locale\)$/i, "")}</span>
-                  <span className="settings-pair">
-                    <select aria-label={`Contesto ${model.name}`} title="Contesto" value={profile.numCtx} onChange={event => updateOllamaProfile(model, { numCtx: Number(event.target.value) as OllamaProfile["numCtx"] })}><option value={4096}>ctx 4096</option><option value={8192}>ctx 8192</option></select>
-                    <select aria-label={`Output ${model.name}`} title="Token di output" value={profile.maxTokens} onChange={event => updateOllamaProfile(model, { maxTokens: Number(event.target.value) as OllamaProfile["maxTokens"] })}><option value={256}>out 256</option><option value={512}>out 512</option><option value={1024}>out 1024</option>{extendedOutput && <><option value={2048}>out 2048</option><option value={4096}>out 4096</option></>}</select>
-                  </span>
-                </div>;
-              }) : <p className="settings-empty">Nessun modello Ollama locale.</p>}
-              <div className="settings-line settings-model">
-                <span title="Qwen/Qwen3-VL-2B-Instruct · Analyze">Qwen3-VL 2B</span>
-                <span className="settings-pair">
-                  <select aria-label="Output Qwen3-VL 2B" title="Token di output" value={settings.visionMaxTokens ?? 1024} onChange={event => setSettings({ ...settings, visionMaxTokens: Number(event.target.value) as NonNullable<ChatSettings["visionMaxTokens"]> })}><option value={256}>out 256</option><option value={512}>out 512</option><option value={1024}>out 1024</option></select>
-                </span>
+              <table className="models-table">
+                <thead><tr><th>Modello</th><th>Contesto</th><th>Output</th></tr></thead>
+                <tbody>
+                  {localOllamaModels.map(model => {
+                    const profile = { ...defaultOllamaProfile(model), ...ollamaProfiles[model.id] };
+                    const extendedOutput = model.id === "qwen3:14b";
+                    return <tr key={model.id}>
+                      <td title={model.id}>{shortModelName(model)}</td>
+                      <td><select aria-label={`Contesto ${model.name}`} value={profile.numCtx} onChange={event => updateOllamaProfile(model, { numCtx: Number(event.target.value) as OllamaProfile["numCtx"] })}><option value={4096}>4096</option><option value={8192}>8192</option></select></td>
+                      <td><select aria-label={`Output ${model.name}`} value={profile.maxTokens} onChange={event => updateOllamaProfile(model, { maxTokens: Number(event.target.value) as OllamaProfile["maxTokens"] })}><option value={256}>256</option><option value={512}>512</option><option value={1024}>1024</option>{extendedOutput && <><option value={2048}>2048</option><option value={4096}>4096</option></>}</select></td>
+                    </tr>;
+                  })}
+                  <tr>
+                    <td title="Qwen/Qwen3-VL-2B-Instruct · Analyze">Qwen3-VL 2B</td>
+                    <td className="models-na">—</td>
+                    <td><select aria-label="Output Qwen3-VL 2B" value={settings.visionMaxTokens ?? 1024} onChange={event => setSettings({ ...settings, visionMaxTokens: Number(event.target.value) as NonNullable<ChatSettings["visionMaxTokens"]> })}><option value={256}>256</option><option value={512}>512</option><option value={1024}>1024</option></select></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+          <details className="settings-row agent-settings">
+            <summary><span>Agente</span><ChevronDown size={15} /></summary>
+            <div className="settings-body">
+              <div className="settings-line"><span>Modello</span><DropUpSelect options={agentModelOptions} value={agentConfig?.model} onChange={(model) => void saveAgentConfig({ model })} /></div>
+              <div className="agent-folders">
+                {agentConfig?.writable.map((folder) => <div key={folder} className="agent-folder"><code title={folder}>{folder}</code><button type="button" className="icon-button" onClick={() => void saveAgentConfig({ writable: agentConfig.writable.filter((item) => item !== folder) })} aria-label={`Rimuovi ${folder}`}><X size={14} /></button></div>)}
+                {agentConfig && !agentConfig.writable.length && <span className="agent-folder-empty">Nessuna cartella scrivibile</span>}
               </div>
+              <form className="agent-folder-add" onSubmit={(event) => { event.preventDefault(); const folder = agentFolderDraft.trim().replace(/\\/g, "/").replace(/\/+$/, ""); if (!folder || !agentConfig || agentConfig.writable.includes(folder)) return; void saveAgentConfig({ writable: [...agentConfig.writable, folder] }).then((ok) => { if (ok) setAgentFolderDraft(""); }); }}>
+                <input value={agentFolderDraft} onChange={(event) => setAgentFolderDraft(event.target.value)} placeholder="cartella/relativa" aria-label="Cartella scrivibile" disabled={!agentConfig} />
+                <button type="submit" className="settings-small-button" disabled={!agentConfig || !agentFolderDraft.trim()}>Aggiungi</button>
+              </form>
+              {agentConfigError && <p className="agent-settings-error">{agentConfigError}</p>}
             </div>
           </details>
           <LocalModelCookbook models={models} onChoose={(id) => { chooseModel(id); setSettingsOpen(false); }} />

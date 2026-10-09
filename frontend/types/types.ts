@@ -1,3 +1,5 @@
+import type { AgentApproval, AgentTranscript } from "./agent";
+
 export type ChatRole = "user" | "assistant" | "system";
 
 export interface ChatAttachment {
@@ -50,13 +52,22 @@ export interface ChatMessage {
   /** Note salvate in OUTPUT (es. Analyze), apribili dal pulsante "Apri in Output". */
   outputNotes?: { folder: "Analyze"; name: string }[];
   audio?: { status: "transcribing" | "complete" | "error"; fileName: string };
+  /** Trascrizione di un video caricato o di un link (chat Video). */
+  video?: { status: "transcribing" | "complete" | "error"; name: string; url?: string };
   /** Lavoro in corso mostrato nel messaggio stesso (titolo + tempo che scorre). */
   pending?: { title: string; detail?: string; startedAt: number; image?: string };
   /** Righe tecniche (tempi, modello, dispositivo) mostrate solo dal pulsante Logs. */
   logs?: string[];
   /** Messaggio-segnaposto creato da \chat: card di benvenuto dello strumento della chat (ocr, yolo, transcribe…). */
   welcomeCard?: string;
+  /** Trascrizione della chat Agente (piano, passi, approvazioni). */
+  agent?: AgentView;
 }
+
+/** Approvazione come mostrata in chat: errore dell'ultima azione e annullamento dopo l'applicazione. */
+export type AgentApprovalView = AgentApproval & { error?: string; undone?: boolean };
+/** AgentTranscript del contratto + cartelle scrivibili ricevute in "start" e stato locale delle approvazioni. */
+export type AgentView = Omit<AgentTranscript, "approvals"> & { approvals: AgentApprovalView[]; writable?: string[] };
 
 export interface DiagnosticEvent {
   at: string;

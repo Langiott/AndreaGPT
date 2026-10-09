@@ -48,7 +48,20 @@ export interface SocialOptions {
 }
 
 export function createSocial(options: SocialOptions) {
-  const model = process.env.SOCIAL_MODEL || process.env.CANDIDATURE_MODEL || "qwen2.5-coder:7b";
+  // Ogni PC ha modelli Ollama diversi: si usa il primo installato, così il riassunto non si blocca su un modello mancante.
+  const preferiti = [...new Set([process.env.SOCIAL_MODEL, "qwen3:8b", "qwen2.5:7b", "qwen2.5-coder:7b", process.env.CANDIDATURE_MODEL].filter((nome): nome is string => Boolean(nome?.trim())))];
+  let model = preferiti[0];
+  let sceltoAlle = 0;
+  async function scegliModello() {
+    if (Date.now() - sceltoAlle < 5 * 60_000) return model;
+    try {
+      const response = await upstreamFetch(`${options.ollamaUrl}/api/tags`, { dispatcher: ollamaTransport, signal: AbortSignal.timeout(10_000) });
+      const installati = new Set(((await response.json()) as { models?: Array<{ name: string }> }).models?.map(item => item.name) ?? []);
+      const trovato = preferiti.find(nome => installati.has(nome) || installati.has(`${nome}:latest`));
+      if (trovato) { model = trovato; sceltoAlle = Date.now(); }
+    } catch { /* Ollama non raggiungibile: resta il modello precedente */ }
+    return model;
+  }
   const limite = Number(process.env.SOCIAL_LIMITE) || 30;
   const file = path.join(options.dataDir, "post.json");
   let posts: SocialPost[] | undefined;
@@ -109,6 +122,7 @@ export function createSocial(options: SocialOptions) {
   async function riassunto(post: SocialPost) {
     const testo = [`Autore: @${post.author}`, post.caption && `Didascalia:\n${post.caption.slice(0, 4000)}`, post.transcript && `Trascrizione del video:\n${post.transcript.slice(0, 12000)}`].filter(Boolean).join("\n\n");
     const system = "Riassumi in italiano un post Instagram salvato da chi legge per capirlo bene senza riguardarlo. Usa solo didascalia e trascrizione, non inventare. Formato Markdown:\n**In breve:** una o due frasi.\n**Punti chiave:** elenco puntato con i concetti, i passaggi o i consigli concreti (numeri, nomi, strumenti citati).\nSe il post cita link, prodotti, libri o risorse aggiungi **Risorse citate:** in elenco. Niente introduzioni, niente conclusioni.";
+    const model = await scegliModello();
     const response = await upstreamFetch(`${options.ollamaUrl}/api/chat`, { dispatcher: ollamaTransport, method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, stream: false, think: false, keep_alive: "15m", options: { temperature: 0.2, num_ctx: 8192, num_predict: 700 }, messages: [{ role: "system", content: system }, { role: "user", content: testo }] }), signal: AbortSignal.timeout(300_000) });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status} (modello ${model}).`);
     return ((await response.json() as { message?: { content?: string } }).message?.content || "").trim();
@@ -165,7 +179,7 @@ export function createSocial(options: SocialOptions) {
   }
 
   return {
-    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), sessioneFine: cookie().slice(-4), modello: model, limite } }; },
+    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), sessioneFine: cookie().slice(-4), modello: await scegliModello(), limite } }; },
     sincronizza(scelta: { fonti?: unknown; limite?: unknown } = {}) {
       if (stato.running) return;
       const fonti = Array.isArray(scelta.fonti) ? scelta.fonti.filter((item): item is Fonte => item === "saved" || item === "liked") : [];
