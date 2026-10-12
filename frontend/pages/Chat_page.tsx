@@ -340,9 +340,9 @@ function isChatListModel(model: ModelInfo) {
 }
 
 const DEFAULT_INSTRUCTIONS: CustomInstruction[] = [
-  { id: "generali", title: "Generali", enabled: true, text: "Rispondi in italiano.\nSii chiaro, concreto e accurato.\nNiente parolacce o frasi volgari non richieste." },
-  { id: "brain", title: "Brain", enabled: true, text: "Usa solo fonti pertinenti.\nCita solo cio che supporta davvero la risposta.\nNon inventare se le fonti sono parziali." },
-  { id: "codice", title: "Codice", enabled: true, text: "Produci codice completo, sicuro e leggibile.\nSpiega le decisioni importanti.\nIncludi test e comandi quando servono." },
+  { id: "generali", title: "Generali", enabled: false, text: "Rispondi in italiano.\nSii chiaro, concreto e accurato.\nNiente parolacce o frasi volgari non richieste." },
+  { id: "brain", title: "Brain", enabled: false, text: "Usa solo fonti pertinenti.\nCita solo cio che supporta davvero la risposta.\nNon inventare se le fonti sono parziali." },
+  { id: "codice", title: "Codice", enabled: false, text: "Produci codice completo, sicuro e leggibile.\nSpiega le decisioni importanti.\nIncludi test e comandi quando servono." },
 ];
 
 export default function App() {
@@ -412,6 +412,7 @@ export default function App() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(() => document.fullscreenElement !== null);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [instructionsInfoOpen, setInstructionsInfoOpen] = useState(false);
   const [customInstructions, setCustomInstructions] = useState<CustomInstruction[]>(() => loadCustomInstructions());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [outputOpen, setOutputOpen] = useState(false);
@@ -2449,9 +2450,9 @@ export default function App() {
 
 
       {instructionsOpen && (
-        <Modal title="Istruzioni" className="fit-modal" onClose={() => setInstructionsOpen(false)}>
+        <Modal title="Istruzioni" className="fit-modal" actions={<button className="icon-button" onClick={() => setInstructionsInfoOpen(value => !value)} aria-label="Info" title="Info" aria-expanded={instructionsInfoOpen}><Info size={17} /></button>} onClose={() => { setInstructionsOpen(false); setInstructionsInfoOpen(false); }}>
           <div className="instructions-panel editor">
-            <p>Le istruzioni attive vengono inviate al modello. La cartella <code>ISTRUZIONI</code> resta come copia fisica leggibile nel progetto.</p>
+            {instructionsInfoOpen && <p>Le istruzioni attive vengono inviate al modello. La cartella <code>ISTRUZIONI</code> resta come copia fisica leggibile nel progetto.</p>}
             <div className="instruction-actions">
               <button onClick={() => setCustomInstructions((current) => [...current, { id: createId(), title: "Nuova istruzione", text: "", enabled: true }])}>Aggiungi istruzione</button>
               <button onClick={() => setCustomInstructions(DEFAULT_INSTRUCTIONS)}>Ripristina base</button>
@@ -2673,11 +2674,14 @@ function loadCustomInstructions(): CustomInstruction[] {
   try {
     const saved = JSON.parse(localStorage.getItem("andreagpt-custom-instructions") ?? "null");
     if (!Array.isArray(saved)) return DEFAULT_INSTRUCTIONS;
-    return saved.map((item): CustomInstruction => ({
+    // Una tantum: Caveman eliminata e tutte le istruzioni deselezionate (nuovo predefinito).
+    const resetDefaults = localStorage.getItem("andreagpt-instructions-default-v2") !== "1";
+    if (resetDefaults) localStorage.setItem("andreagpt-instructions-default-v2", "1");
+    return saved.filter(item => !/caveman/i.test(`${item?.id ?? ""} ${item?.title ?? ""}`)).map((item): CustomInstruction => ({
       id: typeof item.id === "string" ? item.id : createId(),
       title: typeof item.title === "string" ? item.title.slice(0, 80) : "Istruzione",
       text: typeof item.text === "string" ? item.text.slice(0, 4000) : "",
-      enabled: item.enabled !== false,
+      enabled: !resetDefaults && item.enabled !== false,
     }));
   } catch {
     return DEFAULT_INSTRUCTIONS;

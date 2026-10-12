@@ -48,7 +48,7 @@ Debug wireless · Associa  → 192.168.2.220:40495
 
 PC_Personale
 Debug wireless · IP+porta → 192.168.2.220:42723
-Debug wireless · Associa  → 
+Debug wireless · Associa  → 192.168.2.220:40495
 --------------------------------------------------------------------------------
 NUOVE FUNZIONALITA':
 - VideoEditor testuale
@@ -62,3 +62,16 @@ NUOVE FUNZIONALITA':
 - Modalità “Spiegami questo punto”: mentre guardi un video o ascolti una lezione, interrompi e chiedi «questo non l’ho capito». AndreaGPT usa quel preciso passaggio, lo spiega e conserva l’annotazione sul momento corrispondente.
 - Simula conversazione con un tema stimolante 
 - estensione chrome personalizzata (autoclicliker e comprensione dei UI)
+--------------------------------------------------------------------------------
+App	            Alternativa 	Link
+PhotoCraft	    Photoshop	    https://github.com/storytold/photocraft
+VectorCraft	    Illustrator	    https://github.com/storytold/vectorcraft
+FilmCraft	    Premiere	    https://github.com/storytold/filmcraft
+LightCraft	    Lightroom	    https://github.com/storytold/lightcraft
+PrintCraft	    Acrobat Pro	    https://github.com/storytold/printcraft
+EffectCraft	    After Effects	https://github.com/storytold/effectcraft
+DesignCraft	    InDesign	    https://github.com/storytold/designcraft
+OnlyOffice      Word            https://github.com/ONLYOFFICE
+
+
+
