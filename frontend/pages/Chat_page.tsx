@@ -33,6 +33,7 @@ import {
   Minimize,
   MessageSquarePlus,
   Bookmark,
+  Briefcase,
   FileText,
   Folder,
   Globe2,
@@ -92,6 +93,7 @@ const BrainGraph = lazy(() => import("../components/BrainGraph").then(module => 
 const EmbeddingSpace = lazy(() => import("../components/EmbeddingSpace").then(module => ({ default: module.EmbeddingSpace })));
 const FotoPanel = lazy(() => import("../components/FotoPanel").then(module => ({ default: module.FotoPanel })));
 const SocialPanel = lazy(() => import("../components/SocialPanel").then(module => ({ default: module.SocialPanel })));
+const CandidaturePanel = lazy(() => import("../components/CandidaturePanel").then(module => ({ default: module.CandidaturePanel })));
 const CodePanel = lazy(() => import("../components/CodePanel").then(module => ({ default: module.CodePanel })));
 const AgentRun = lazy(() => import("../components/AgentRun").then(module => ({ default: module.AgentRun })));
 const ConvertPanel = lazy(() => import("../components/ConvertPanel").then(module => ({ default: module.ConvertPanel })));
@@ -389,6 +391,7 @@ export default function App() {
   const [mentionQuery, setMentionQuery] = useState("");
   const [brainOpen, setBrainOpen] = useState(false);
   const [socialOpen, setSocialOpen] = useState(false);
+  const [candidatureOpen, setCandidatureOpen] = useState(false);
   const [fotoOpen, setFotoOpen] = useState(false);
   const [codeOpen, setCodeOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
@@ -2202,6 +2205,7 @@ export default function App() {
           {modelsCollapsed && <img className="sidebar-mascot" src={mascotUrl} alt="Mascotte AndreaGPT" />}
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Archivio Brain</button>
           <button className="sidebar-action" onClick={() => setSocialOpen(true)}><Bookmark size={17} /> Social</button>
+          <button className="sidebar-action" onClick={() => setCandidatureOpen(true)}><Briefcase size={17} /> Candidature</button>
           <button className="sidebar-action" onClick={() => setFotoOpen(true)}><Image size={17} /> Foto</button>
           <button className="sidebar-action" onClick={() => setCodeOpen(true)}><Code2 size={17} /> Code</button>
           <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output</button>
@@ -2419,6 +2423,7 @@ export default function App() {
 
       {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" wide closeOnBackdrop={false} onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><FotoPanel /></Suspense></Modal>}
       {socialOpen && <Modal title="Social" className="fit-modal" wide onClose={() => setSocialOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><SocialPanel /></Suspense></Modal>}
+      {candidatureOpen && <Modal title="Candidature" className="fit-modal" wide onClose={() => setCandidatureOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CandidaturePanel /></Suspense></Modal>}
       {codeOpen && <Modal title="Code" className="fit-modal code-modal" wide onClose={() => setCodeOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CodePanel /></Suspense></Modal>}
       {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal title="Archivio Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
