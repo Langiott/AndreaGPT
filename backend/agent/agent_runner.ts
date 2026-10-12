@@ -187,19 +187,32 @@ function stepDetail(result: unknown) {
 export function compactMessages(messages: AgentMessage[], budget: number) {
   let size = JSON.stringify(messages).length;
   if (size <= budget) return;
-  const toolIndexes = messages.flatMap((m, i) => m.role === "tool" && m.content !== OMITTED ? [i] : []);
-  for (const i of toolIndexes.slice(0, -2)) {
-    size -= messages[i].content.length - OMITTED.length;
+  const assistantIndexes = messages.flatMap((m, i) => m.role === "assistant" && m.tool_calls?.length ? [i] : []);
+  const recentStart = assistantIndexes.at(-2) ?? assistantIndexes.at(-1) ?? messages.length;
+  const toolIndexes = messages.flatMap((m, i) => i < recentStart && m.role === "tool" && m.content !== OMITTED ? [i] : []);
+  for (const i of toolIndexes) {
+    if (messages[i].content.length <= OMITTED.length) continue;
     messages[i] = { ...messages[i], content: OMITTED };
+    size = JSON.stringify(messages).length;
     if (size <= budget) return;
   }
   // Poi gli argomenti lunghi delle vecchie chiamate (contenuti di file proposti).
-  const assistantIndexes = messages.flatMap((m, i) => m.role === "assistant" && m.tool_calls?.length ? [i] : []);
-  for (const i of assistantIndexes.slice(0, -1)) {
+  for (const i of assistantIndexes.slice(0, -2)) {
     messages[i] = { ...messages[i], tool_calls: messages[i].tool_calls!.map(call => {
       const args = typeof call.function.arguments === "string" ? call.function.arguments : JSON.stringify(call.function.arguments);
       return args.length > 500 ? { function: { name: call.function.name, arguments: { omesso: "argomenti lunghi omessi" } } } : call;
     }) };
+    if (JSON.stringify(messages).length <= budget) return;
+  }
+  // Il costo include anche ruoli, nomi e chiamate: omettere il testo non basta
+  // nelle sessioni lunghe. Rimuovi scambi completi, conservando gli ultimi due.
+  while (JSON.stringify(messages).length > budget) {
+    const exchanges = messages.flatMap((m, i) => m.role === "assistant" && m.tool_calls?.length ? [i] : []);
+    if (exchanges.length <= 2) break;
+    const start = exchanges[0];
+    let end = start + 1;
+    while (end < messages.length && messages[end].role === "tool") end++;
+    messages.splice(start, end - start);
   }
 }
 

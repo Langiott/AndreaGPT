@@ -2416,7 +2416,7 @@ export default function App() {
         </Modal>
       )}
 
-      {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" wide onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><FotoPanel /></Suspense></Modal>}
+      {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" wide closeOnBackdrop={false} onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><FotoPanel /></Suspense></Modal>}
       {socialOpen && <Modal title="Social" className="fit-modal" wide onClose={() => setSocialOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><SocialPanel /></Suspense></Modal>}
       {codeOpen && <Modal title="Code" className="fit-modal code-modal" wide onClose={() => setCodeOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><CodePanel /></Suspense></Modal>}
       {citeOpen && <Modal title="Archivio Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
@@ -2742,8 +2742,8 @@ async function readHealth() {
   return response.json() as Promise<{ providers?: { searxng?: boolean; web?: boolean } }>;
 }
 
-function Modal({ title, onClose, onBack, children, headerSlot, actions, wide = false, compact = false, className = "" }: { title: React.ReactNode; onClose: () => void; onBack?: () => void; children: React.ReactNode; headerSlot?: string; actions?: React.ReactNode; wide?: boolean; compact?: boolean; className?: string }) {
-  return <div className={`modal-backdrop${compact ? " compact-backdrop" : ""}`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={`modal ${wide ? "wide" : ""} ${compact ? "compact-modal" : ""} ${className}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} onClick={(event) => event.stopPropagation()}><header>{onBack && <button className="modal-back" aria-label="Indietro" onClick={onBack}><ArrowLeft size={17} /></button>}<h2>{title}</h2>{headerSlot && <div id={headerSlot} className="modal-header-slot" />}{actions && <div className="modal-actions">{actions}</div>}<button className="icon-button" aria-label="Chiudi" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
+function Modal({ title, onClose, onBack, children, headerSlot, actions, wide = false, compact = false, closeOnBackdrop = true, className = "" }: { title: React.ReactNode; onClose: () => void; onBack?: () => void; children: React.ReactNode; headerSlot?: string; actions?: React.ReactNode; wide?: boolean; compact?: boolean; closeOnBackdrop?: boolean; className?: string }) {
+  return <div className={`modal-backdrop${compact ? " compact-backdrop" : ""}`} onClick={(event) => { if (closeOnBackdrop && event.target === event.currentTarget) onClose(); }}><section className={`modal ${wide ? "wide" : ""} ${compact ? "compact-modal" : ""} ${className}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} onClick={(event) => event.stopPropagation()}><header>{onBack && <button className="modal-back" aria-label="Indietro" onClick={onBack}><ArrowLeft size={17} /></button>}<h2>{title}</h2>{headerSlot && <div id={headerSlot} className="modal-header-slot" />}{actions && <div className="modal-actions">{actions}</div>}<button className="icon-button" aria-label="Chiudi" onClick={onClose}><X size={19} /></button></header><div className="modal-body">{children}</div></section></div>;
 }
 
 function loadMessages(): ChatMessage[] {

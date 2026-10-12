@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Check, CheckCheck, ChevronLeft, ChevronRight, ImagePlus, Link2, Maximize, Minimize, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronLeft, ChevronRight, Link2, Maximize, Minimize, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
 import { userErrorMessage } from "../utils/errors";
 
 type Passo = "" | "collegamento" | "elenco" | "analisi" | "volti";
@@ -25,15 +25,28 @@ const data = (secondi?: number) => secondi ? new Date(secondi * 1000).toLocaleDa
 const thumb = (id: number) => `/media/foto/thumbs/${id}.jpg`;
 const volto = (id: number) => `/media/foto/volti/${id}.jpg`;
 
+type RiepilogoFoto = Pick<Stato, "foto" | "categorie">;
+let riepilogoMemoria: RiepilogoFoto | undefined;
+function riepilogoSalvato(): RiepilogoFoto | undefined {
+  if (riepilogoMemoria) return riepilogoMemoria;
+  try {
+    const saved = JSON.parse(leggi("foto.riepilogo"));
+    if (typeof saved?.foto === "number" && saved.categorie && typeof saved.categorie === "object" && !Array.isArray(saved.categorie)
+      && Object.values(saved.categorie).every(value => typeof value === "number")) return saved;
+  } catch { /* riepilogo non ancora disponibile */ }
+  return undefined;
+}
+
 export function FotoPanel() {
   const [stato, setStato] = useState<Stato>();
+  const [riepilogo, setRiepilogo] = useState<RiepilogoFoto | undefined>(riepilogoSalvato);
   const [persone, setPersone] = useState<Persona[]>([]);
   const [foto, setFoto] = useState<Foto[]>([]);
   const [totale, setTotale] = useState(0);
   const [q, setQ] = useState("");
   const [cerca, setCerca] = useState("");
   const [persona, setPersona] = useState<number>();
-  const [menuPersona, setMenuPersona] = useState<{ id: number; x: number; y: number }>();
+  const [scegliProfilo, setScegliProfilo] = useState<number>();
   const [categoria, setCategoria] = useState("");
   const [aperta, setAperta] = useState<number>();
   const [selezione, setSelezione] = useState<Set<number>>(new Set());
@@ -56,16 +69,23 @@ export function FotoPanel() {
   }, [testata, intero]);
 
   const ricaricaStato = useCallback(async () => {
-    try { setStato(await api<Stato>("/api/foto/stato")); } catch (caught) { setError(userErrorMessage(caught, "Stato non disponibile.")); }
+    try {
+      const nuovo = await api<Stato>("/api/foto/stato");
+      setStato(nuovo);
+      riepilogoMemoria = { foto: nuovo.foto, categorie: nuovo.categorie };
+      setRiepilogo(riepilogoMemoria);
+      try { localStorage.setItem("foto.riepilogo", JSON.stringify(riepilogoMemoria)); } catch { /* storage non disponibile */ }
+    } catch (caught) { setError(userErrorMessage(caught, "Stato non disponibile.")); }
   }, []);
   const ricaricaPersone = useCallback(async () => {
-    try { setPersone((await api<{ persone: Persona[] }>("/api/foto/persone")).persone); } catch { /* indice ancora vuoto */ }
+    try { setPersone((await api<{ persone: Persona[] }>("/api/foto/persone")).persone.sort((a, b) => (a.nome || "\uffff").localeCompare(b.nome || "\uffff", "it", { sensitivity: "base", numeric: true }) || a.id - b.id)); } catch { /* indice ancora vuoto */ }
   }, []);
   const carica = useCallback(async (offset: number) => {
-    const params = new URLSearchParams({ q: cerca, offset: String(offset), limit: String(PAGINA) });
+    const params = new URLSearchParams({ q: "", offset: String(offset), limit: String(PAGINA) });
+    if (cerca) params.set("persone", cerca);
     if (persona) params.set("persona", String(persona));
     // Con una persona scelta valgono tutte le sue foto, anche quelle classificate come screenshot o schermo.
-    else if (categoria) params.set("categoria", categoria);
+    else if (categoria && !cerca) params.set("categoria", categoria);
     try {
       const result = await api<{ foto: Foto[]; totale: number }>(`/api/foto/lista?${params}`);
       setFoto(prev => offset ? [...prev, ...result.foto] : result.foto);
@@ -113,21 +133,18 @@ export function FotoPanel() {
     });
   }
   const selezionata = persone.find(item => item.id === persona);
-  const visibili = persone;
-  const categorie = Object.entries(stato?.categorie ?? {});
+  const visibili = persone.filter(item => !cerca || item.nome.toLocaleLowerCase().includes(cerca.toLocaleLowerCase()));
+  const categorie = Object.entries(riepilogo?.categorie ?? {});
 
   const comandi = (
     <div className="foto-testata">
-      <label className="foto-cerca"><Search size={14} /><input type="search" value={q} placeholder="Cerca…" aria-label="Cerca foto" onChange={event => setQ(event.target.value)} />{q && <button type="button" aria-label="Pulisci" onClick={() => setQ("")}><X size={13} /></button>}</label>
+      <label className="foto-cerca"><Search size={14} /><input type="search" value={q} placeholder="Cerca persone…" aria-label="Cerca persone" onChange={event => { setQ(event.target.value); setPersona(undefined); setScegliProfilo(undefined); }} />{q && <button type="button" aria-label="Pulisci" onClick={() => setQ("")}><X size={13} /></button>}</label>
       <button type="button" className="foto-tasto foto-icona" onClick={() => setIntero(!intero)} aria-label={intero ? "Riduci" : "Schermo intero"} title={intero ? "Riduci" : "Schermo intero"}>{intero ? <Minimize size={14} /> : <Maximize size={14} />}</button>
       <button type="button" className={`foto-tasto${collega ? " active" : ""}`} onClick={() => setCollega(!collega)} aria-expanded={collega} title={stato?.collegato ? `Collegato · ${stato.dispositivo}` : "Non collegato"}>
         <span className={`foto-punto${stato?.collegato ? " ok" : ""}`} /><Link2 size={14} /><span className="foto-etichetta">Collega</span>
       </button>
-      <button type="button" className="foto-tasto" disabled={!stato?.collegato || stato.running} onClick={() => azione(async () => { await api("/api/foto/analizza", {}); await ricaricaStato(); })} title="Nuove: foto nuove e cancellate dal telefono">
-        <ImagePlus size={14} /><span className="foto-etichetta">Nuove</span>
-      </button>
-      <button type="button" className="foto-tasto go" disabled={!stato || stato.running} onClick={() => azione(async () => { await api("/api/foto/aggiorna", {}); await ricaricaStato(); })} title="Aggiorna: ricontrolla le persone">
-        <RefreshCw size={14} className={stato?.running && stato.passo === "volti" ? "spin" : undefined} /><span className="foto-etichetta">Aggiorna</span>
+      <button type="button" className="foto-tasto go" disabled={!stato?.collegato || stato.running} onClick={() => azione(async () => { await api("/api/foto/aggiorna", {}); await ricaricaStato(); })} title="Aggiorna foto nuove, eliminate e persone">
+        <RefreshCw size={14} className={stato?.running ? "spin" : undefined} /><span className="foto-etichetta">Aggiorna</span>
       </button>
     </div>
   );
@@ -141,15 +158,15 @@ export function FotoPanel() {
 
       {categorie.length > 0 && (
         <Schede>
-          <button type="button" role="tab" aria-selected={!categoria} className={!categoria ? "active" : ""} onClick={() => { setCategoria(""); setPersona(undefined); }}>Tutte {stato?.foto ?? ""}</button>
+          <button type="button" role="tab" aria-selected={!categoria} className={!categoria ? "active" : ""} onClick={() => { setCategoria(""); setPersona(undefined); }}>Tutte {riepilogo?.foto ?? ""}</button>
           {categorie.map(([nome, n]) => <button key={nome} type="button" role="tab" aria-selected={categoria === nome} className={categoria === nome ? "active" : ""} onClick={() => { setCategoria(categoria === nome ? "" : nome); setPersona(undefined); }}>{nome} {n}</button>)}
         </Schede>
       )}
 
-      {categoria === "persone" && persone.length > 0 && (
+      {(categoria === "persone" || !!cerca) && persone.length > 0 && (
         <div className={`foto-volti${tuttiVolti ? " tutti" : ""}`} role="list">
           {visibili.slice(0, tuttiVolti ? undefined : VOLTI_RIGA).concat(!tuttiVolti && visibili.slice(VOLTI_RIGA).some(item => item.id === persona) ? visibili.filter(item => item.id === persona) : []).map(item => (
-            <button key={item.id} type="button" role="listitem" className={`foto-volto${persona === item.id ? " active" : ""}`} onClick={() => setPersona(persona === item.id ? undefined : item.id)} onContextMenu={event => { event.preventDefault(); setMenuPersona({ id: item.id, x: event.clientX, y: event.clientY }); }} title={`${item.nome || "Senza nome"} · ${item.n}`}>
+            <button key={item.id} type="button" role="listitem" className={`foto-volto${persona === item.id ? " active" : ""}`} onClick={() => { setScegliProfilo(undefined); setPersona(persona === item.id ? undefined : item.id); }} onContextMenu={event => { event.preventDefault(); setQ(""); setCategoria("persone"); setPersona(item.id); setSelezione(new Set()); setScegliProfilo(item.id); }} title={`${item.nome || "Senza nome"} · ${item.n}`}>
               <img src={volto(item.copertina)} alt="" loading="lazy" />
               <span>{item.nome || "?"}</span>
             </button>
@@ -158,22 +175,24 @@ export function FotoPanel() {
         </div>
       )}
       {selezionata && <SchedaPersona key={selezionata.id} persona={selezionata} persone={persone} onCambio={async (via) => { if (via) setPersona(undefined); await ricaricaPersone(); }} onErrore={setError} />}
-      {menuPersona && (() => { const item = persone.find(personaItem => personaItem.id === menuPersona.id); if (!item) return null; return <div className="foto-contesto" style={{ left: menuPersona.x, top: menuPersona.y }} onMouseLeave={() => setMenuPersona(undefined)}>
-        <button type="button" onClick={() => { setCategoria("persone"); setPersona(item.id); setMenuPersona(undefined); window.setTimeout(() => document.querySelector(".foto-persona")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); }}>Apri profilo</button>
-      </div>; })()}
+      {scegliProfilo === persona && scegliProfilo && <div className="foto-profilo-scelta" role="status"><span>Scegli una foto di {selezionata?.nome || "questa persona"} per il profilo.</span><button type="button" aria-label="Annulla scelta foto profilo" title="Annulla" onClick={() => setScegliProfilo(undefined)}><X size={14} /></button></div>}
 
       {(cerca || persona || categoria) && <small className="foto-conta">{totale} foto</small>}
       <div className="foto-griglia">
         {foto.map((item, index) => (
           <button key={item.id} type="button" className={selezione.has(item.id) ? "scelta" : undefined} aria-pressed={selezione.size ? selezione.has(item.id) : undefined}
             onClick={() => {
+              if (scegliProfilo === persona && scegliProfilo) {
+                void azione(async () => { await api(`/api/foto/persone/${scegliProfilo}`, { copertina: item.id }); setScegliProfilo(undefined); await ricaricaPersone(); });
+                return;
+              }
               if (tocco.current.lungo) { tocco.current.lungo = false; return; }
               if (selezione.size) { alterna(item.id); return; }
               window.clearTimeout(tocco.current.timer);
               tocco.current.timer = window.setTimeout(() => setAperta(index), 230);
             }}
-            onDoubleClick={() => { window.clearTimeout(tocco.current.timer); if (!selezione.size) alterna(item.id); }}
-            onTouchStart={() => { window.clearTimeout(tocco.current.timer); tocco.current.timer = window.setTimeout(() => { tocco.current.lungo = true; alterna(item.id); navigator.vibrate?.(15); }, 450); }}
+            onDoubleClick={() => { window.clearTimeout(tocco.current.timer); if (!scegliProfilo && !selezione.size) alterna(item.id); }}
+            onTouchStart={() => { if (scegliProfilo) return; window.clearTimeout(tocco.current.timer); tocco.current.timer = window.setTimeout(() => { tocco.current.lungo = true; alterna(item.id); navigator.vibrate?.(15); }, 450); }}
             onTouchMove={() => window.clearTimeout(tocco.current.timer)}
             onTouchEnd={() => { if (!tocco.current.lungo) window.clearTimeout(tocco.current.timer); }}
             onContextMenu={event => event.preventDefault()}>
@@ -259,7 +278,13 @@ function Avvisi({ voci }: { voci: string[] }) {
 }
 
 function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<void> }) {
-  const [indirizzo, setIndirizzo] = useState(stato?.ip ? `${stato.ip}:${stato.porta}` : leggi("foto.indirizzo"));
+  const [indirizzo, setIndirizzo] = useState(stato?.ip && stato.porta ? `${stato.ip}:${stato.porta}` : leggi("foto.indirizzo"));
+  const indirizzoModificato = useRef(false);
+  useEffect(() => {
+    if (!indirizzoModificato.current && stato?.ip && stato.porta) {
+      setIndirizzo(`${stato.ip}:${stato.porta}`);
+    }
+  }, [stato?.ip, stato?.porta]);
   const [associazione, setAssociazione] = useState("");
   const [codice, setCodice] = useState("");
   const [associato, setAssociato] = useState(false);
@@ -281,12 +306,11 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
   return (
     <form className="foto-collega" onSubmit={event => { event.preventDefault(); void invia(); }}>
       <div className="foto-collega-riga">
-        <label className="lungo"><span>Debug wireless</span><input inputMode="decimal" value={indirizzo} onChange={event => setIndirizzo(soloIndirizzo(event.target.value))} /></label>
+        <label className="lungo"><span>Debug wireless</span><input inputMode="decimal" value={indirizzo} onChange={event => { indirizzoModificato.current = true; setIndirizzo(soloIndirizzo(event.target.value)); }} /></label>
         <label><span>Indirizzo accoppiamento</span><input inputMode="decimal" value={associazione} onChange={event => setAssociazione(soloIndirizzo(event.target.value))} /></label>
         <label className="corto"><span>Codice autenticazione</span><input inputMode="numeric" value={codice} onChange={event => setCodice(event.target.value.replace(/\D/g, "").slice(0, 6))} /></label>
         <button type="submit" className="go" disabled={busy || (!indirizzoValido(indirizzo) && !puoAssociare)}>{busy ? "…" : puoAssociare && !indirizzoValido(indirizzo) ? "Associa" : "Collega"}</button>
       </div>
-      <small>La porta cambia dopo una disconnessione. Usa IP e porta attuali della schermata Debug wireless; se il PC risulta associato non serve ripetere il codice.</small>
       {associato && <small className="foto-associato">Associato ✓</small>}
       {error && <p className="cand-error">{error}</p>}
     </form>
@@ -319,10 +343,7 @@ function SchedaPersona({ persona, persone, onCambio, onErrore }: { persona: Pers
       <input ref={input} value={nome} placeholder="Nome" maxLength={60} onChange={event => setNome(event.target.value)} />
       <button type="submit" className="go" disabled={nome.trim() === persona.nome}>Salva</button>
       {altre.length > 0 && (
-        <select value="" onChange={event => { if (event.target.value) void invia({ unisci: Number(event.target.value) }, true); }} aria-label="Unisci a">
-          <option value="">Unisci a…</option>
-          {altre.map(item => <option key={item.id} value={item.id}>{item.nome || `? (${item.n})`}</option>)}
-        </select>
+        <PersonaPicker persone={altre} label="Unisci a…" onChange={value => { if (typeof value === "number") void invia({ unisci: value }, true); }} />
       )}
       <button type="button" className="foto-elimina" onClick={() => setElimina(true)}><Trash2 size={14} /> Elimina</button>
       {elimina && <Dialogo volto={persona.copertina} titolo={`Eliminare ${persona.nome || "questa persona"}?`} testo="Volti ignorati anche nelle foto nuove." conferma="Elimina" onOk={() => { setElimina(false); void invia({ nascondi: true }, true); }} onAnnulla={() => setElimina(false)} />}
@@ -369,7 +390,7 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
           {dettaglio.volti.length > 0 && (
             <div className="foto-facce">
               {dettaglio.volti.map(faccia => (
-                <label key={faccia.id} className="foto-faccia">
+                <div key={faccia.id} className="foto-faccia">
                   <img src={volto(faccia.id)} alt="" />
                   {nuovo?.volto === faccia.id ? (
                     <span className="foto-nuovo">
@@ -378,7 +399,7 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
                       <button type="button" aria-label="Annulla" onClick={() => setNuovo(undefined)}><X size={14} /></button>
                     </span>
                   ) : <PersonaPicker volto={faccia} persone={persone} onChange={value => void assegna(faccia, String(value))} />}
-                </label>
+                </div>
               ))}
             </div>
           )}
@@ -390,20 +411,55 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
   );
 }
 
-function PersonaPicker({ volto: faccia, persone, onChange }: { volto: Volto; persone: Persona[]; onChange: (value: number | "") => void }) {
+function PersonaPicker({ volto: faccia, persone, label, onChange }: { volto?: Volto; label?: string; persone: Persona[]; onChange: (value: number | "no" | "nuova") => void }) {
   const [aperto, setAperto] = useState(false);
   const [cerca, setCerca] = useState("");
-  const scelta = persone.find(item => item.id === faccia.persona);
-  const filtrate = persone.filter(item => (item.nome || "").toLocaleLowerCase().includes(cerca.toLocaleLowerCase()));
-  return <div className="foto-persona-picker">
+  const scelta = persone.find(item => item.id === faccia?.persona);
+  const filtrate = persone.filter(item => (item.nome || "").toLocaleLowerCase().includes(cerca.trim().toLocaleLowerCase())).slice(0, 5);
+  const contenitore = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [posizione, setPosizione] = useState({ sopra: false, altezza: 320 });
+  useLayoutEffect(() => {
+    if (!aperto) return;
+    const misura = () => {
+      if (!contenitore.current || !menu.current) return;
+      const rect = contenitore.current.getBoundingClientRect();
+      let limiteAlto = 0;
+      let limiteBasso = window.innerHeight;
+      for (let nodo = contenitore.current.parentElement; nodo; nodo = nodo.parentElement) {
+        if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(nodo).overflowY)) {
+          const bordo = nodo.getBoundingClientRect();
+          limiteAlto = Math.max(limiteAlto, bordo.top);
+          limiteBasso = Math.min(limiteBasso, bordo.bottom);
+        }
+      }
+      const sopra = Math.max(0, rect.top - limiteAlto - 12);
+      const sotto = Math.max(0, limiteBasso - rect.bottom - 12);
+      const necessaria = menu.current.scrollHeight;
+      const apriSopra = sotto < necessaria && sopra > sotto;
+      setPosizione({ sopra: apriSopra, altezza: apriSopra ? sopra : sotto });
+    };
+    misura();
+    window.addEventListener("resize", misura);
+    window.addEventListener("scroll", misura, true);
+    return () => { window.removeEventListener("resize", misura); window.removeEventListener("scroll", misura, true); };
+  }, [aperto, cerca, persone.length]);
+  useEffect(() => {
+    if (!aperto) return;
+    const chiudi = (event: PointerEvent) => { if (!contenitore.current?.contains(event.target as Node)) setAperto(false); };
+    document.addEventListener("pointerdown", chiudi);
+    return () => document.removeEventListener("pointerdown", chiudi);
+  }, [aperto]);
+  return <div ref={contenitore} className={`foto-persona-picker${faccia ? " foto-picker-volto" : ""}`}>
     <button type="button" className="foto-persona-trigger" onClick={() => setAperto(!aperto)} aria-expanded={aperto}>
-      {scelta?.nome || faccia.nome || "?"} <span>⌄</span>
+      {label || scelta?.nome || faccia?.nome || "?"}{!faccia && <span>⌄</span>}
     </button>
-    {aperto && <div className="foto-persona-menu">
+    {aperto && <div ref={menu} className={`foto-persona-menu${posizione.sopra ? " sopra" : ""}`} style={{ maxHeight: posizione.altezza }}>
       <input autoFocus type="search" placeholder="Cerca persona…" value={cerca} onChange={event => setCerca(event.target.value)} />
       <div className="foto-persona-options">
-        {!faccia.persona && <button type="button" onClick={() => { onChange(""); setAperto(false); }}>?</button>}
-        {filtrate.map(item => <button type="button" key={item.id} className={item.id === faccia.persona ? "active" : ""} onClick={() => { onChange(item.id); setAperto(false); }}>{item.nome || `Senza nome (${item.n})`}</button>)}
+        {filtrate.map(item => <button type="button" key={item.id} className={item.id === faccia?.persona ? "active" : ""} onClick={() => { onChange(item.id); setAperto(false); }}>{item.nome || `Senza nome (${item.n})`}</button>)}
+        {!filtrate.length && <small>Nessuna persona trovata.</small>}
+        {faccia && <div className="foto-persona-menu-azioni"><button type="button" onClick={() => { onChange("nuova"); setAperto(false); }}>Nuova persona…</button><button type="button" onClick={() => { onChange("no"); setAperto(false); }}>Ignora</button></div>}
       </div>
     </div>}
   </div>;

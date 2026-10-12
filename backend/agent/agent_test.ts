@@ -9,7 +9,52 @@ import type { AgentEvent } from "../../frontend/types/agent";
 import { AgentWorkspace, unifiedDiff } from "./agent_workspace";
 import { loadAgentConfig, saveAgentConfig, validateWritable } from "./agent_config";
 import { runCheck } from "./agent_checks";
-import { runAgent, textToolCalls, type AgentChat, type AgentDecision } from "./agent_runner";
+import { compactMessages, runAgent, textToolCalls, type AgentChat, type AgentDecision, type AgentMessage } from "./agent_runner";
+
+test("contesto agente: gli scambi vecchi rientrano nel budget senza separare chiamate e risultati", () => {
+  const messages: AgentMessage[] = [{ role: "system", content: "Regole" }, { role: "user", content: "Richiesta da conservare" }];
+  for (let i = 0; i < 30; i++) {
+    messages.push({ role: "assistant", content: "", tool_calls: [{ function: { name: "read_file", arguments: { file: `file${i}.ts` } } }] });
+    messages.push({ role: "tool", tool_name: "read_file", content: `risultato ${i}` });
+  }
+  const recent = structuredClone(messages.slice(-4));
+  compactMessages(messages, 1500);
+  assert.ok(JSON.stringify(messages).length <= 1500);
+  assert.equal(messages[0].content, "Regole");
+  assert.equal(messages[1].content, "Richiesta da conservare");
+  assert.deepEqual(messages.slice(-4), recent);
+  for (let i = 2; i < messages.length; i += 2) {
+    assert.equal(messages[i].role, "assistant");
+    assert.equal(messages[i + 1].role, "tool");
+  }
+});
+
+test("contesto agente: sotto budget nessuna modifica", () => {
+  const messages: AgentMessage[] = [{ role: "system", content: "Regole" }, { role: "user", content: "Domanda" }];
+  const before = structuredClone(messages);
+  compactMessages(messages, 1500);
+  assert.deepEqual(messages, before);
+});
+
+test("contesto agente: mantiene gli ultimi due scambi anche con argomenti lunghi e risultati multipli", () => {
+  const messages: AgentMessage[] = [{ role: "system", content: "Regole" }, { role: "user", content: "Richiesta" }];
+  for (let i = 0; i < 5; i++) {
+    messages.push({ role: "assistant", content: "", tool_calls: [
+      { function: { name: "edit_file", arguments: { file: `file${i}.ts`, new_text: "x".repeat(700) } } },
+      { function: { name: "read_file", arguments: { file: `file${i}.ts` } } },
+    ] });
+    messages.push({ role: "tool", tool_name: "edit_file", content: "approved" }, { role: "tool", tool_name: "read_file", content: "\\\"\n".repeat(100) });
+  }
+  const recent = structuredClone(messages.slice(-6));
+  compactMessages(messages, 3500);
+  assert.ok(JSON.stringify(messages).length <= 3500);
+  assert.deepEqual(messages.slice(-6), recent);
+  for (let i = 2; i < messages.length; i += 3) {
+    assert.equal(messages[i].tool_calls?.length, 2);
+    assert.equal(messages[i + 1].role, "tool");
+    assert.equal(messages[i + 2].role, "tool");
+  }
+});
 
 async function setup(t: { after(fn: () => unknown): void }) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "andreagpt-agent-"));

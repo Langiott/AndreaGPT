@@ -509,6 +509,11 @@ def vettori():
 def lista(req):
     q = (req.get("q") or "").strip()
     filtri, args = [], []
+    if req.get("persone"):
+        ricerca = req["persone"].strip().casefold()
+        ids = [r["id"] for r in db.execute("SELECT id, nome FROM persone WHERE nascosta=0") if ricerca in (r["nome"] or "").casefold()]
+        filtri.append(f"f.id IN (SELECT foto FROM volti WHERE persona IN ({','.join('?' for _ in ids) or 'NULL'}))")
+        args.extend(ids)
     if req.get("persona"):
         filtri.append("f.id IN (SELECT foto FROM volti WHERE persona=?)")
         args.append(int(req["persona"]))
@@ -543,6 +548,16 @@ def dettaglio(req):
         raise ValueError("Foto non trovata.")
     volti = db.execute("SELECT v.id, v.persona, v.x, v.y, v.w, v.h, v.confermato, p.nome FROM volti v LEFT JOIN persone p ON p.id = v.persona WHERE v.foto=?", (r["id"],)).fetchall()
     return {**dict(r), "volti": [dict(v) for v in volti]}
+
+
+def copertina(req):
+    persona, foto = int(req["id"]), int(req["foto"])
+    volto = db.execute("SELECT id FROM volti WHERE persona=? AND foto=? ORDER BY qualita DESC LIMIT 1", (persona, foto)).fetchone()
+    if not volto:
+        raise ValueError("La foto non contiene questa persona.")
+    db.execute("UPDATE persone SET copertina=? WHERE id=?", (volto["id"], persona))
+    db.commit()
+    return {"ok": True}
 
 
 def rinomina(req):
@@ -595,7 +610,7 @@ def sposta_volto(req):
 
 
 AZIONI = {"candidates": candidate, "recheck": ricontrolla, "remove": rimuovi, "analyze": analizza, "group": raggruppa, "known": noti, "summary": riepilogo, "people": persone, "list": lista, "detail": dettaglio,
-          "rename": rinomina, "hide": nascondi, "merge": unisci, "face": sposta_volto}
+          "cover": copertina, "rename": rinomina, "hide": nascondi, "merge": unisci, "face": sposta_volto}
 
 
 def gestisci(req):

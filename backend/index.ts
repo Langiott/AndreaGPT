@@ -1218,16 +1218,17 @@ app.post("/api/foto/analizza", (_request, response) => { foto.analizza(); respon
 app.post("/api/foto/aggiorna", (_request, response) => { foto.ricontrolla(); response.json({ avviata: true }); });
 app.post("/api/foto/ferma", (request, response) => { console.log(`Foto: stop richiesto da ${request.ip} (${request.headers["user-agent"] ?? "?"}) ${request.headers.referer ?? ""}`); foto.ferma(); response.json({ ok: true }); });
 app.get("/api/foto/lista", async (request, response) => {
-  const { q, persona, categoria, offset, limit } = request.query;
-  try { response.json(await foto.lista({ q: String(q ?? "").slice(0, 200), persona: Number(persona) || undefined, categoria: categoria ? String(categoria) : undefined, offset: Number(offset) || 0, limit: Math.min(Number(limit) || 120, 300) })); }
+  const { q, persona, persone, categoria, offset, limit } = request.query;
+  try { response.json(await foto.lista({ q: String(q ?? "").slice(0, 200), persone: String(persone ?? "").slice(0, 200), persona: Number(persona) || undefined, categoria: categoria ? String(categoria) : undefined, offset: Number(offset) || 0, limit: Math.min(Number(limit) || 120, 300) })); }
   catch (error) { fotoErrore(response, error, "Ricerca non riuscita."); }
 });
 app.get("/api/foto/persone", async (_request, response) => { try { response.json(await foto.persone()); } catch (error) { fotoErrore(response, error, "Persone non disponibili."); } });
 app.post("/api/foto/persone/:id", async (request, response) => {
   const id = Number(request.params.id);
-  const { nome, nascondi, mostra, unisci } = request.body ?? {};
+  const { nome, nascondi, mostra, unisci, copertina } = request.body ?? {};
   try {
-    if (nascondi || mostra) await foto.nascondi(id, Boolean(mostra));
+    if (copertina) await foto.copertina(id, Number(copertina));
+    else if (nascondi || mostra) await foto.nascondi(id, Boolean(mostra));
     else if (unisci) await foto.unisci(id, Number(unisci));
     else await foto.rinomina(id, String(nome ?? ""));
     response.json({ ok: true });

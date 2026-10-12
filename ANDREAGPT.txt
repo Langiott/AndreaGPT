@@ -1,8 +1,9 @@
+SITI UTILI
 Da questo PC: http://127.0.0.1:3000 (oppure http://localhost:3000)
 Dal telefono o da un altro dispositivo in ufficio: http://192.168.2.156:3000
 Dal PC di casa (PC2): http://192.168.1.106:3000
-
 --------------------------------------------------------------------------------
+GITHUB
 cd /Desktop/AndreaGPT
 git status
 git add -A
@@ -15,7 +16,6 @@ git status
 git add src server package.json package-lock.json
 git commit -m "Aggiornato 28/09  AM"
 git push -u origin stabile
-
 --------------------------------------------------------------------------------
 git add -A
 git status
@@ -24,23 +24,21 @@ git push origin stabile
 --------------------------------------------------------------------------------
 git pull private stabile
 --------------------------------------------------------------------------------
-
-Quella è la schermata sbagliata. "Aggiungi un sito" lì serve a togliere l'audio a un sito, quindi premi Annulla. Il permesso che serve si dà dai flag di Chrome:
-
-Nella barra degli indirizzi di Chrome, dove scrivi i siti, scrivi esattamente chrome://flags e premi invio.
-Nella casella di ricerca in alto scrivi insecure origins.
-Compare "Insecure origins treated as secure". Nel riquadro di testo sotto scrivi http://192.168.2.156:3000.
-Nel menu a tendina accanto metti Enabled.
-In basso compare il pulsante Relaunch: premilo e Chrome si riavvia.
-Apri http://192.168.2.156:3000 e attiva Modalità audio. Quando Chrome ti chiede il microfono, scegli Consenti.
-
+PERMESSI AUDIO TELEFONO
+Il permesso per gestire audio da telefono ci serve una flag di Chrome:
+- Nella barra degli indirizzi di Chrome, dove scrivi i siti, scrivi esattamente chrome://flags e premi invio.
+- Nella casella di ricerca in alto scrivi insecure origins.
+- Compare "Insecure origins treated as secure". Nel riquadro di testo sotto scrivi http://192.168.2.156:3000.
+- Nel menu a tendina accanto metti Enabled.
+- In basso compare il pulsante Relaunch: premilo e Chrome si riavvia.
+- Apri http://192.168.2.156:3000 e attiva Modalità audio. Quando Chrome ti chiede il microfono, scegli Consenti.
 --------------------------------------------------------------------------------
 ATTIVA MODALITA' SVILUPPATORE NOTHING 
-
-INFO_SULLO_SMARTPHONE → NOTHING_OS_4.1 → Numero build (premi 7 volte )
-Impostazioni → Sistema → Opzioni sviluppatore → Debug wireless e Debug usb( attiva l'interruttore)
-clicca Debug wireless → 192.168.2.220:42723
-
+-INFO_SULLO_SMARTPHONE → NOTHING_OS_4.1 → Numero build (premi 7 volte )
+-Impostazioni → Sistema → Opzioni sviluppatore → Debug wireless e Debug usb( attiva l'interruttore)
+-clicca Debug wireless → 192.168.2.220:42723
+--------------------------------------------------------------------------------
+DEBUG SESSION ASSOCIA
 PC1:192.168.2.156:3000
 PC2:192.168.1.106:3000
 
@@ -51,3 +49,16 @@ Debug wireless · Associa  → 192.168.2.220:40495
 PC_Personale
 Debug wireless · IP+porta → 192.168.2.220:42723
 Debug wireless · Associa  → 
+--------------------------------------------------------------------------------
+NUOVE FUNZIONALITA':
+- VideoEditor testuale
+- Registra schermo e registra azione ripetitiva, gli insegni mostrando ciò che fai, senza dover descrivere ogni passaggio tecnico.
+- Utilizza regola osservate ( molto compleso)
+- Usa regole e migliora procedimento 
+- Crea una mini app o landing page 
+- Regole per ogni tipo di chat (Foto,Analize,) cercando di focalizzare il modello, forse troppa latenza
+- Usa la tua voce per aprire convesazione o settare un impostazione ( apre e chude finestre), esegue azione e non testo
+- Foto → modello 3D: fotografi un oggetto da più angolazioni e ottieni un modello da ruotare, misurare ed esportare. Una sfida su ricostruzione geometrica e visualizzazione.
+- Modalità “Spiegami questo punto”: mentre guardi un video o ascolti una lezione, interrompi e chiedi «questo non l’ho capito». AndreaGPT usa quel preciso passaggio, lo spiega e conserva l’annotazione sul momento corrispondente.
+- Simula conversazione con un tema stimolante 
+- estensione chrome personalizzata (autoclicliker e comprensione dei UI)

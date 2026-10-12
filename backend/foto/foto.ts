@@ -221,10 +221,14 @@ export function createFoto(options: FotoOptions) {
       return { associato: Boolean(codice), collegato: true, indirizzo: `${trovato.conf.ip}:${trovato.conf.porta}` };
     },
     analizza,
-    ricontrolla: () => avvia(ricontrollaPersone),
+    ricontrolla: () => avvia(async () => {
+      await esegui();
+      if (!fermare) await ricontrollaPersone();
+    }),
     ferma() { fermare = true; },
     lista: (query: Record<string, unknown>) => indice("list", query),
     persone: () => indice("people"),
+    copertina: (id: number, foto: number) => indice("cover", { id, foto }),
     dettaglio: (id: number) => indice("detail", { id }),
     rinomina: (id: number, nome: string) => indice("rename", { id, nome }),
     nascondi: (id: number, mostra = false) => indice("hide", { id, mostra }),

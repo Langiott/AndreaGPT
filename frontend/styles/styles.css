@@ -2660,9 +2660,24 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .foto-persona-trigger { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
 .foto-persona-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: min(240px, 72vw); padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 12px 30px #0008; }
 .foto-persona-menu input { width: 100%; margin-bottom: 5px; box-sizing: border-box; }
+.foto-persona-menu { box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
+.foto-persona-menu.sopra { top: auto; bottom: calc(100% + 6px); }
+.foto-persona-menu > input { flex-shrink: 0; }
+.foto-persona-menu .foto-persona-options { min-height: 0; }
+.foto-picker-volto { min-width: 140px; color: #111; }
+.foto-picker-volto .foto-persona-trigger, .foto-persona-menu { color: #111; background: #fbf5e9; }
+.foto-persona-menu input { padding: 7px 8px; border: 1px solid #d9d3c7; border-radius: 6px; background: #fbf5e9; color: #111; font: inherit; font-size: 13px; }
+.foto-persona .foto-persona-picker { flex: 0 1 240px; }
+.foto-profilo-scelta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; line-height: 1.4; }
+.foto-profilo-scelta button { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.foto-profilo-scelta button:hover { background: var(--line); }
 .foto-persona-options { max-height: 260px; overflow-y: auto; display: grid; gap: 3px; }
 .foto-persona-options button { width: 100%; padding: 8px 9px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .foto-persona-options button:hover, .foto-persona-options button.active { background: var(--ink); color: var(--panel); }
+.foto-persona-menu .foto-persona-options button { color: #111; font-size: 13px; padding: 6px 8px; }
+.foto-persona-menu .foto-persona-options button:hover, .foto-persona-menu .foto-persona-options button.active { color: #111; background: #e9e1d3; }
+.foto-persona-menu-azioni { display: grid; gap: 5px; margin-top: 5px; }
+.foto-persona-menu .foto-persona-menu-azioni button { border: 1px solid #d9d3c7; border-radius: 8px; background: #f5eedf; }
 .foto-persona button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--panel); font: inherit; font-size: 12px; cursor: pointer; }
 .foto-persona button.go { border-color: var(--lime); background: var(--lime); font-weight: 700; }
 .foto-persona button:disabled { opacity: .45; cursor: not-allowed; }
@@ -2782,7 +2797,8 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .foto-schede-riga::-webkit-scrollbar { display: none; }
 .foto-freccia { flex: 0 0 auto; display: grid; place-items: center; width: 30px; border: 0; border-bottom: 1px solid var(--line); background: var(--panel); color: inherit; cursor: pointer; }
 .foto-freccia:hover { color: var(--lime); }
-.foto-modal .foto-schede { position: sticky; top: -23px; z-index: 2; background: var(--panel); }
+.foto-modal > .modal-body { padding-top: 4px; }
+.foto-modal .foto-schede { position: sticky; top: -4px; z-index: 2; background: var(--panel); }
 .foto-modal .foto-schede .cand-tabs { position: static; }
 .foto-avvisi { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid rgba(242, 193, 78, .5); border-radius: 10px; background: rgba(242, 193, 78, .08); color: inherit; font-size: 12px; }
 .foto-avvisi > svg { flex: 0 0 auto; margin-top: 1px; color: #f2c14e; }
@@ -2791,7 +2807,7 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
 .foto-avvisi li button { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; text-decoration: underline; cursor: pointer; }
 .foto-avvisi-chiudi { flex: 0 0 auto; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
 .foto-avvisi-chiudi:hover { background: var(--lime-soft); }
-@media (max-width: 850px) { .foto-modal .foto-schede { top: -16px; } }
+@media (max-width: 850px) { .foto-modal .foto-schede { top: -4px; } }
 /* Foto: collegamento su una riga, testo ben leggibile */
 .foto-collega-riga { display: flex; align-items: flex-end; gap: 8px; }
 .foto-collega-riga label { flex: 1 1 0; min-width: 0; display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
