@@ -19,7 +19,7 @@ git push -u origin stabile
 --------------------------------------------------------------------------------
 git add -A
 git status
-git commit -m "Aggiorna 12/10  AM"
+git commit -m "Aggiorna 12/10  AM V1"
 git push origin stabile
 --------------------------------------------------------------------------------
 git pull private stabile
