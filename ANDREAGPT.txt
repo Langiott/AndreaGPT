@@ -39,6 +39,13 @@ ATTIVA MODALITA' SVILUPPATORE NOTHING
 -clicca Debug wireless → 192.168.2.220:42723
 --------------------------------------------------------------------------------
 DEBUG SESSION ASSOCIA
+Impostazioni → Sistema → Opzioni sviluppatore
+→ Debug wireless(Accedi il Wifi) → Associa dispositivo con codice
+→ Indirizzo IP e porta
+
+
+
+
 PC1:192.168.2.156:3000
 PC2:192.168.1.106:3000
 
@@ -72,6 +79,6 @@ PrintCraft	    Acrobat Pro	    https://github.com/storytold/printcraft
 EffectCraft	    After Effects	https://github.com/storytold/effectcraft
 DesignCraft	    InDesign	    https://github.com/storytold/designcraft
 OnlyOffice      Word            https://github.com/ONLYOFFICE
-
-
-
+--------------------------------------------------------------------------------
+powershell.exe -NoProfile -File ".\Attiva-Accesso-AndreaGPT.ps1"
+--------------------------------------------------------------------------------

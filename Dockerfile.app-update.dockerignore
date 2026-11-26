@@ -1,0 +1,12 @@
+**
+!package.json
+!package-lock.json
+!dist
+!dist/**
+!backend
+!backend/**
+!frontend
+!frontend/config
+!frontend/config/**
+**/__pycache__
+*.pyc

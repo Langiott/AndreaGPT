@@ -1,5 +1,6 @@
 ﻿$ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+if (Test-Path -LiteralPath (Join-Path $projectRoot 'runtime\andreagpt-isolamento.lock')) { exit 1 }
 $comfyRoot = Join-Path $projectRoot "runtime\ComfyUI"
 $python = Join-Path $comfyRoot ".venv\Scripts\python.exe"
 $stdoutLog = Join-Path $comfyRoot "andreagpt-comfy.log"
@@ -29,8 +30,9 @@ if ($missing) {
   exit 2
 }
 
+$mainScript = Join-Path $comfyRoot "main.py"
 $process = Start-Process -FilePath $python `
-  -ArgumentList @("main.py", "--listen", "127.0.0.1", "--port", "8188", "--lowvram") `
+  -ArgumentList @(('"' + $mainScript + '"'), "--listen", "127.0.0.1", "--port", "8188", "--lowvram") `
   -WorkingDirectory $comfyRoot `
   -WindowStyle Hidden `
   -RedirectStandardOutput $stdoutLog `

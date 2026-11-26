@@ -1,4 +1,4 @@
-export interface Collegamento { ip: string; porta: number }
+export interface Collegamento { ip: string; porta: number; seriale?: string }
 type Adb = (args: string[], timeout?: number) => Promise<string>;
 
 export function serviziFoto(output: string, ip: string) {

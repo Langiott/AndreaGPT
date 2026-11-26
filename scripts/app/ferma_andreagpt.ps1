@@ -15,6 +15,12 @@ function Write-Stop([string]$Message) {
 
 $failed = $false
 Write-Stop "Arresto AndreaGPT."
+$adbStateFile = Join-Path $projectRoot 'runtime\adb-bridge.json'
+if (Test-Path -LiteralPath $adbStateFile) {
+  $adbState = Get-Content -LiteralPath $adbStateFile -Raw | ConvertFrom-Json
+  $adbProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($adbState.pid)" -ErrorAction SilentlyContinue
+  if ($adbProcess.CommandLine -like '*adb_bridge.mjs*') { Stop-Process -Id $adbState.pid -ErrorAction SilentlyContinue }
+}
 $telemetryPidFile = Join-Path $projectRoot 'OUTPUT\Log\host-telemetry.pid'
 if (Test-Path -LiteralPath $telemetryPidFile) {
   $telemetryPid = [int](Get-Content -LiteralPath $telemetryPidFile)

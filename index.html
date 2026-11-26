@@ -2,14 +2,60 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#080a08" />
-    <meta name="description" content="AndreaGPT - workspace AI con modelli NVIDIA" />
-    <link rel="icon" type="image/png" href="/andreagpt-logo-128.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="AndreaGPT - spazio di lavoro con chat, collezioni e strumenti locali" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="AndreaGPT" />
+    <link rel="icon" type="image/png" href="/andreagpt-app-192.png" />
+    <link rel="apple-touch-icon" href="/andreagpt-app-192.png" />
+    <link rel="manifest" href="/app.webmanifest" crossorigin="use-credentials" />
     <title>AndreaGPT</title>
+    <style>
+      html { background: #000; }
+      #app-start { position: fixed; inset: 0; z-index: 1000; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; background: #000; color: #f0f0f0; color-scheme: dark; text-align: center; font: 15px/1.5 system-ui, sans-serif; }
+      #app-start img { display: block; border-radius: 10px; }
+      #app-start p { margin: 0 0 10px; }
+      #app-start button { padding: 10px 18px; border: 1px solid #555; border-radius: 10px; background: #202020; color: inherit; font: inherit; cursor: pointer; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="app-start" aria-label="Avvio di AndreaGPT" role="region">
+      <img src="/andreagpt-app-192.png" width="40" height="40" alt="" decoding="async" />
+      <div id="app-start-notice" hidden>
+        <p id="app-start-status" role="status"></p>
+        <button id="app-start-retry" type="button">Riprova</button>
+      </div>
+      <noscript>Attiva JavaScript per aprire AndreaGPT.</noscript>
+    </div>
+    <script>
+      (() => {
+        const screen = document.getElementById('app-start');
+        const status = document.getElementById('app-start-status');
+        const retry = document.getElementById('app-start-retry');
+        const notice = document.getElementById('app-start-notice');
+        const showRetry = (message) => {
+          notice.hidden = false;
+          status.textContent = message;
+        };
+        const onError = (event) => {
+          const element = event.target;
+          if (element === window || element.tagName === 'SCRIPT' || element.rel === 'modulepreload' || element.rel === 'stylesheet') {
+            clearTimeout(timer);
+            showRetry('Il caricamento si è interrotto.');
+          }
+        };
+        const timer = setTimeout(() => showRetry('Il caricamento sta richiedendo più tempo del previsto.'), 10000);
+        retry.addEventListener('click', () => location.reload());
+        window.addEventListener('error', onError, true);
+        document.addEventListener('andreagpt:ready', () => {
+          clearTimeout(timer);
+          window.removeEventListener('error', onError, true);
+          screen.remove();
+        }, { once: true });
+      })();
+    </script>
     <script type="module" src="/frontend/main.tsx"></script>
   </body>
 </html>

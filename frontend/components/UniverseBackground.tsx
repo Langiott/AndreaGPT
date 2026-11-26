@@ -11,9 +11,9 @@ export function UniverseBackground({ images, pinnedId }: { images: { id: string;
     if (pinnedIndex >= 0 || images.length < 2) return;
     let active = true;
     const next = (slides.current + 1) % images.length;
-    const preload = new Image();
-    preload.src = images[next].url;
     const timer = window.setTimeout(async () => {
+      const preload = new Image();
+      preload.src = images[next].url;
       try {
         await preload.decode();
         if (active) setSlides({ current: next, previous: slides.current });

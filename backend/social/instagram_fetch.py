@@ -8,9 +8,9 @@ Usa le API web di www.instagram.com, le stesse del browser da cui viene il cooki
 import json
 import sys
 import time
-from urllib.parse import unquote
-
-import requests
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlencode
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 API = "https://www.instagram.com/api/v1/"
 FEEDS = {"saved": "feed/saved/posts/", "liked": "feed/liked/"}
@@ -45,28 +45,48 @@ def parse_cookie(raw):
     return cookies if "sessionid" in cookies else {"sessionid": raw}
 
 
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class AuthenticationError(ValueError):
+    pass
+
+
 class Instagram:
     def __init__(self, cookies):
-        self.session = requests.Session()
-        self.session.headers.update(HEADERS)
-        for name, value in cookies.items():
-            self.session.cookies.set(name, value, domain=".instagram.com")
+        self.opener = build_opener(NoRedirect())
+        self.headers = {**HEADERS, "Cookie": "; ".join(f"{name}={value}" for name, value in cookies.items())}
         if cookies.get("csrftoken"):
-            self.session.headers["X-CSRFToken"] = cookies["csrftoken"]
+            self.headers["X-CSRFToken"] = cookies["csrftoken"]
 
     def get(self, path, params=None, app=False):
-        headers = {"User-Agent": APP_AGENT} if app else None
-        response = self.session.get((APP_API if app else API) + path, params=params or {}, headers=headers, timeout=30, allow_redirects=False)
-        if response.status_code in (301, 302, 401, 403):
-            raise ValueError("Sessione Instagram scaduta o non valida: copia di nuovo sessionid dal browser.")
-        if response.status_code == 429:
-            raise ValueError("Instagram ha limitato le richieste: riprova più tardi.")
+        headers = {**self.headers, "User-Agent": APP_AGENT} if app else self.headers
+        url = (APP_API if app else API) + path
+        if params:
+            url += "?" + urlencode(params)
         try:
-            data = response.json()
+            with self.opener.open(Request(url, headers=headers), timeout=30) as response:
+                status = response.status
+                data = json.load(response)
+        except HTTPError as error:
+            error.close()
+            if error.code in (301, 302, 303, 307, 308, 401, 403):
+                raise AuthenticationError("Instagram chiede di accedere di nuovo. Verifica la sessione nel browser e aggiorna INSTAGRAM_SESSIONID.") from None
+            if error.code == 429:
+                raise ValueError("Instagram ha limitato le richieste. Riprova più tardi.") from None
+            raise ValueError(f"Richiesta Instagram non riuscita (HTTP {error.code}).") from None
+        except (URLError, TimeoutError):
+            raise ValueError("Connessione a Instagram non disponibile.") from None
         except ValueError:
-            raise ValueError(f"Risposta non valida da Instagram (HTTP {response.status_code}).")
+            raise ValueError(f"Risposta non valida da Instagram (HTTP {status}).") from None
+        if not isinstance(data, dict):
+            raise ValueError("Risposta Instagram con formato inatteso.")
         if data.get("status") != "ok":
-            raise ValueError(data.get("message") or f"Errore Instagram (HTTP {response.status_code}).")
+            if data.get("message") in ("login_required", "challenge_required", "checkpoint_required"):
+                raise AuthenticationError("Instagram richiede una verifica dell’account nel browser.")
+            raise ValueError(f"Instagram ha rifiutato l’accesso al feed (HTTP {status}).")
         return data
 
 
@@ -110,6 +130,7 @@ def fetch(request):
     both = bool(request.get("both"))
     sources = ["saved"] if both else request.get("sources") or list(FEEDS)
     posts, errors, by_code, seen = [], [], {}, {}
+    authentication_required = False
     for source in sources:
         params, count, pages = {}, 0, 0
         try:
@@ -149,8 +170,9 @@ def fetch(request):
                 params = {"max_id": data["next_max_id"]}
                 time.sleep(2)  # ritmo umano tra le pagine: evita il blocco temporaneo dell'account
         except Exception as error:
+            authentication_required |= isinstance(error, AuthenticationError)
             errors.append(f"{'Salvati' if source == 'saved' else 'Mi piace'}: {error}")
-    return {"user": user, "posts": posts, "errors": errors, "seen": {code: sorted(found) for code, found in seen.items()}}
+    return {"user": user, "posts": posts, "errors": errors, "authRequired": authentication_required, "seen": {code: sorted(found) for code, found in seen.items()}}
 
 
 def main():
@@ -158,7 +180,7 @@ def main():
         result = fetch(json.loads(sys.stdin.buffer.read().decode("utf-8-sig")))
     except Exception as error:
         result = {"error": str(error)}
-    print(json.dumps(result, ensure_ascii=False))
+    sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False).encode("utf-8") + b"\n")
 
 
 if __name__ == "__main__":

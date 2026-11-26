@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fetch as upstreamFetch } from "undici";
 import { ollamaTransport } from "../config/config";
+import { beginWork } from "../background_work";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,7 +67,7 @@ export function createSocial(options: SocialOptions) {
   const file = path.join(options.dataDir, "post.json");
   let posts: SocialPost[] | undefined;
   let scrittura = Promise.resolve();
-  const stato = { running: false, passo: "" as Passo, corrente: "", fatti: 0, totale: 0, utente: "", ultimo: "", errori: [] as string[] };
+  const stato = { running: false, passo: "" as Passo, corrente: "", fatti: 0, totale: 0, utente: "", ultimo: "", errori: [] as string[], authRequired: false };
 
   async function carica() {
     if (posts) return posts;
@@ -82,13 +83,19 @@ export function createSocial(options: SocialOptions) {
   const cookie = () => process.env.INSTAGRAM_SESSIONID?.trim() || "";
 
   function scarica(request: Record<string, unknown>) {
-    return new Promise<{ user?: string; posts?: Elencato[]; errors?: string[]; seen?: Record<string, Fonte[]>; error?: string }>((resolve, reject) => {
+    return new Promise<{ user?: string; posts?: Elencato[]; errors?: string[]; seen?: Record<string, Fonte[]>; error?: string; authRequired?: boolean }>((resolve, reject) => {
       const child = spawn(options.python, [options.fetchScript], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       let out = "", err = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
       const timer = setTimeout(() => child.kill(), 45 * 60_000);
       child.stdout.on("data", chunk => { out += chunk; });
       child.stderr.on("data", chunk => { err = (err + chunk).slice(-2000); });
-      child.on("error", reject);
+      child.on("error", () => {
+        clearTimeout(timer);
+        reject(new Error("Python non disponibile per Instagram. Controlla il percorso configurato in WHISPER_PYTHON."));
+      });
+      child.stdin.on("error", () => { /* l'esito del processo fornisce l'errore al chiamante */ });
       child.on("close", () => {
         clearTimeout(timer);
         try { resolve(JSON.parse(out.trim().split("\n").at(-1) || "")); }
@@ -154,13 +161,15 @@ export function createSocial(options: SocialOptions) {
 
   async function esegui(fonti: Fonte[], max: number) {
     const lista = await carica();
-    Object.assign(stato, { errori: [], fatti: 0, totale: 0, passo: "lista", corrente: "" });
+    Object.assign(stato, { errori: [], fatti: 0, totale: 0, passo: "lista", corrente: "", authRequired: false });
     const sessione = cookie();
     if (!sessione) throw new Error("INSTAGRAM_SESSIONID mancante nel file .env.");
-    const result = await scarica({ cookie: sessione, sources: fonti, both: fonti.length === 2, limit: max, known: lista.map(post => post.id) });
+    const both = fonti.length === 2;
+    const result = await scarica({ cookie: sessione, sources: fonti, both, limit: max, known: lista.map(post => post.id) });
     if (result.error) throw new Error(result.error);
     stato.utente = result.user || "";
     stato.errori = result.errors ?? [];
+    stato.authRequired = result.authRequired ?? false;
     // Post già analizzati ritrovati in un altro feed: si aggiunge la fonte (es. salvato che ora ha anche il mi piace).
     let aggiornati = false;
     for (const post of lista) {
@@ -175,19 +184,23 @@ export function createSocial(options: SocialOptions) {
       await elabora(item, lista);
       stato.fatti++;
     }
-    stato.ultimo = new Date().toISOString();
+    if (stato.errori.length < (both ? 1 : fonti.length)) stato.ultimo = new Date().toISOString();
   }
 
   return {
-    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), sessioneFine: cookie().slice(-4), modello: await scegliModello(), limite } }; },
+    async elenco() { return { posts: (await carica()).filter(post => !post.hidden), stato: { ...stato, sessione: Boolean(cookie()), modello: await scegliModello(), limite } }; },
     sincronizza(scelta: { fonti?: unknown; limite?: unknown } = {}) {
       if (stato.running) return;
       const fonti = Array.isArray(scelta.fonti) ? scelta.fonti.filter((item): item is Fonte => item === "saved" || item === "liked") : [];
       const max = Math.min(Math.max(Math.floor(Number(scelta.limite)) || limite, 1), 500);
       stato.running = true;
+      const finish = beginWork("Social", "Sincronizzazione Instagram");
       void esegui(fonti.length ? fonti : ["saved", "liked"], max)
         .catch(error => { stato.errori = [error instanceof Error ? error.message : String(error), ...stato.errori]; })
-        .finally(() => { Object.assign(stato, { running: false, passo: "", corrente: "" }); });
+        .finally(() => {
+          Object.assign(stato, { running: false, passo: "", corrente: "" });
+          finish(stato.errori.length ? "error" : "done");
+        });
     },
     async rigenera(id: string) {
       const post = (await carica()).find(item => item.id === id);

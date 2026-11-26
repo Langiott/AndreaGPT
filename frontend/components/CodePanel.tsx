@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ChevronRight, RefreshCw, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, RefreshCw } from "lucide-react";
+import { SearchField } from "./SearchField";
+import type { CodeNode } from "../../backend/code/code_tree";
 import { userErrorMessage } from "../utils/errors";
 
-interface CodeNode { name: string; path: string; summary?: string; lines?: number; children?: CodeNode[] }
 interface Albero { root: string; children: CodeNode[]; files: number }
 
 // Tiene solo i rami che contengono un file (o una cartella) che corrisponde alla ricerca.
 function filtra(nodes: CodeNode[], query: string): CodeNode[] {
   if (!query) return nodes;
   return nodes.flatMap(node => {
-    const match = `${node.path} ${node.summary ?? ""}`.toLowerCase().includes(query);
+    const text = `${node.path} ${node.summary ?? ""}`.toLowerCase();
+    const match = query.split(/\s+/).every(word => text.includes(word));
     if (!node.children) return match ? [node] : [];
     const children = match ? node.children : filtra(node.children, query);
     return children.length ? [{ ...node, children }] : [];
@@ -39,26 +41,21 @@ export function CodePanel() {
   const nodi = useMemo(() => filtra(albero?.children ?? [], q), [albero, q]);
   const toggle = (key: string) => setAperti(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
-  const rami = (nodes: CodeNode[], prefix: string) => nodes.map((node, index) => {
-    const last = index === nodes.length - 1;
-    const guida = `${prefix}${last ? "└── " : "├── "}`;
-    if (!node.children) return (
-      <div key={node.path} className="code-row code-file" title={node.path} style={{ "--code-indent": `${guida.length}ch` } as CSSProperties}>
-        <span className="code-guide">{guida}</span>
-        <span className="code-name">{node.name}</span>
-        {node.summary && <span className="code-summary">{node.summary}</span>}
-        <span className="code-lines">{node.lines}</span>
-      </div>
-    );
+  const rami = (nodes: CodeNode[]) => nodes.map(node => {
     const open = Boolean(q) || aperti.has(node.path);
     return (
-      <div key={node.path}>
-        <button type="button" className="code-row code-dir" onClick={() => toggle(node.path)} aria-expanded={open}>
-          <span className="code-guide">{guida}</span>
-          <ChevronRight size={13} className={open ? "code-chevron open" : "code-chevron"} />
+      <div key={node.path} className="code-branch">
+        {node.children ? <>
+          <button type="button" className="code-row code-dir" onClick={() => toggle(node.path)} aria-expanded={open}>
+            <ChevronRight size={13} className={open ? "code-chevron open" : "code-chevron"} />
+            <span className="code-name">{node.name}</span>
+          </button>
+          {open && <div className="code-children">{rami(node.children)}</div>}
+        </> : <div className="code-row code-file" title={node.path}>
           <span className="code-name">{node.name}</span>
-        </button>
-        {open && rami(node.children, `${prefix}${last ? "    " : "│   "}`)}
+          {node.summary && <span className="code-summary">{node.summary}</span>}
+          <span className="code-lines">{node.lines}</span>
+        </div>}
       </div>
     );
   });
@@ -66,14 +63,14 @@ export function CodePanel() {
   return (
     <div className="code-panel">
       <div className="code-bar">
-        <label className="code-search"><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Cerca file o descrizione" /></label>
+        <SearchField className="code-search" label="Cerca file o descrizione" value={query} onChange={setQuery} />
         <span className="code-count">{albero ? `${albero.files} file` : ""}</span>
         <button type="button" className="icon-button" onClick={() => void carica()} disabled={busy} aria-label="Aggiorna"><RefreshCw size={15} className={busy ? "spin" : undefined} /></button>
       </div>
       {error && <p className="code-error">{error}</p>}
       {albero && <div className="code-tree">
         <div className="code-row code-root"><span className="code-name">{albero.root}</span></div>
-        {rami(nodi, "")}
+        <div className="code-children">{rami(nodi)}</div>
         {!nodi.length && <p className="code-empty">Nessun file.</p>}
       </div>}
     </div>

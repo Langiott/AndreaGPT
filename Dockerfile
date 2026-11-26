@@ -11,7 +11,15 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # docTR è il motore OCR principale; Tesseract resta disponibile solo come fallback.
-RUN apt-get update \
+# In alcune reti l'HTTP verso i mirror Debian (porta 80) viene rifiutato.
+# Usa HTTPS anche per i repository ereditati dall'immagine base e ritenta i download.
+RUN set -eux; \
+ sed -i \
+   -e 's|http://deb.debian.org|https://deb.debian.org|g' \
+   -e 's|http://security.debian.org|https://security.debian.org|g' \
+   /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
+ printf 'Acquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-andreagpt-retries; \
+ apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && apt-get install -y --no-install-recommends git python3 python3-venv tesseract-ocr tesseract-ocr-ita poppler-utils libgl1 ffmpeg pandoc libreoffice-writer \
  && python3 -m venv /opt/doctr \
@@ -29,7 +37,7 @@ ENV TURBOVEC_PYTHON=/opt/doctr/bin/python
 ENV VISION_PYTHON=/opt/doctr/bin/python
 # Foto: ADB recente (il pacchetto Debian non ha "adb pair" per il debug wireless), volti FaceNet, HEIC.
 # Layer separato: non invalida la cache dell'installazione grande qui sopra.
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
+RUN echo "deb https://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list \
  && apt-get update && apt-get install -y --no-install-recommends -t bookworm-backports adb \
  && rm -rf /var/lib/apt/lists/* \
  && PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/doctr/bin/pip install --no-cache-dir --no-deps facenet-pytorch pillow-heif

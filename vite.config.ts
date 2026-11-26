@@ -1,8 +1,22 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { gzipSync } from "node:zlib";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: "andreagpt-compressed-assets",
+    apply: "build",
+    generateBundle: {
+      order: "post",
+      handler(_options, bundle) {
+        for (const asset of Object.values(bundle)) {
+          if (!/^assets\/.+\.(js|css)$/.test(asset.fileName)) continue;
+          const source = asset.type === "chunk" ? asset.code : asset.source;
+          this.emitFile({ type: "asset", fileName: `${asset.fileName}.gz`, source: gzipSync(source, { level: 9 }) });
+        }
+      },
+    },
+  }],
   server: {
     port: 5173,
     // OUTPUT e i dati del backend cambiano di continuo (lock, log): non vanno osservati dal frontend.

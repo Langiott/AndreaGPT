@@ -1,0 +1,12 @@
+# Aggiornamento del solo codice usando il runtime AI gia' installato localmente.
+# Build completa/nuova installazione: usare Dockerfile.
+ARG RUNTIME_IMAGE=andreagpt-andreagpt:latest
+FROM ${RUNTIME_IMAGE}
+USER root
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY dist ./dist
+COPY backend ./backend
+COPY frontend/config ./frontend/config
+USER node

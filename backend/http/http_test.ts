@@ -23,7 +23,7 @@ test("HTTP: streaming locale, limiti, origini e cronologia Brain bloccata al clo
     }
     if (req.url?.startsWith("/search")) {
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ results: [{ title: "Latest technical AI research benchmark", url: "https://example.test/paper", content: "technical AI research method benchmark results", publishedDate: "2026-09-23" }] }));
+      res.end(JSON.stringify({ results: [{ title: "Latest technical AI research benchmark", url: "https://example.test/paper", content: "technical AI research method benchmark results", publishedDate: new Date().toISOString().slice(0, 10) }] }));
       return;
     }
     let body = "";

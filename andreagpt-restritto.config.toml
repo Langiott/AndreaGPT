@@ -1,0 +1,41 @@
+# Profilo CLI facoltativo. Apri Codex dalla cartella AndreaGPT.
+# Il profilo diventa effettivo quando viene caricato da una nuova sessione compatibile.
+default_permissions = "andreagpt-solo-codice"
+approval_policy = "never"
+
+[shell_environment_policy]
+inherit = "core"
+ignore_default_excludes = false
+exclude = ["*PASSWORD*", "*PASSWD*", "*COOKIE*", "*SESSIONID*", "*CREDENTIAL*"]
+
+[permissions.andreagpt-solo-codice]
+description = "Modifica il codice di AndreaGPT e blocca l'accesso ai segreti e ai dati dell'app."
+extends = ":workspace"
+
+[permissions.andreagpt-solo-codice.filesystem]
+":root" = "deny"
+":minimal" = "read"
+":tmpdir" = "deny"
+":slash_tmp" = "deny"
+glob_scan_max_depth = 6
+
+[permissions.andreagpt-solo-codice.filesystem.":workspace_roots"]
+"." = "write"
+".env" = "deny"
+".env.*" = "deny"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+".aws" = "deny"
+"runtime" = "deny"
+"data" = "deny"
+"ANDREA-BRAIN" = "deny"
+"OCR" = "deny"
+"OUTPUT" = "deny"
+"DRAW" = "deny"
+".tmp" = "deny"
+"**/*.log" = "deny"
+
+[permissions.andreagpt-solo-codice.network]
+enabled = false

@@ -1,0 +1,47 @@
+.system-panel { display: grid; gap: 12px; min-width: 0; }
+.system-card { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+.system-card h3, .system-card p, .system-chart { margin: 0; }
+.system-card h3 { font-size: 14px; overflow-wrap: anywhere; }
+.system-card p { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.system-overview { display: flex; justify-content: space-between; align-items: start; gap: 10px; }
+.system-overview h3 { font-size: 16px; margin-bottom: 3px; }
+.system-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+.system-status i { width: 7px; height: 7px; border-radius: 50%; background: #399a5c; }
+.system-status.stale i { background: #bf7a32; }
+.system-message { margin: 0; padding: 10px 13px; border-radius: 8px; background: var(--lime-soft); font-size: 12px; }
+.system-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.system-metrics > .system-card { display: grid; grid-template-rows: auto minmax(2.8em, auto) auto; gap: 7px; }
+.system-metrics header, .system-metrics h3 { display: flex; align-items: center; gap: 6px; }
+.system-metrics header { justify-content: space-between; }
+.system-metrics h3 svg { flex-shrink: 0; color: var(--lime); }
+.system-reading { font-size: clamp(14px, 2vw, 20px); white-space: nowrap; }
+.system-chart-plot { position: relative; height: 60px; overflow: hidden; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 25%); }
+.system-chart-scale { position: absolute; z-index: 1; inset: 2px 2px auto auto; padding: 0 2px; background: var(--panel); color: var(--muted); font-size: 9px; }
+.system-chart-bar { position: absolute; bottom: 0; transform: translateX(-50%); min-width: 1px; border-radius: 2px 2px 0 0; background: var(--lime); opacity: .65; }
+.system-temperature .system-chart-bar { background: #b47037; opacity: .9; }
+.system-chart figcaption { display: flex; justify-content: space-between; margin-top: 4px; color: var(--muted); font-size: 9px; }
+.system-chart-empty { display: grid; place-items: center; min-height: 73px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); text-align: center; font-size: 10px; }
+.system-details { display: grid; gap: 10px; }
+.system-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 12px; margin: 0; font-size: 12px; }
+.system-details dt, .system-disk small { color: var(--muted); }
+.system-details dd { margin: 0; overflow-wrap: anywhere; }
+.system-details ul { display: grid; gap: 7px; padding: 0; margin: 0; list-style: none; font-size: 12px; }
+.system-details li, .system-disk > div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.system-details li strong { white-space: nowrap; }
+.system-disk { display: grid; gap: 5px; font-size: 12px; }
+.system-disk progress { width: 100%; height: 7px; accent-color: var(--lime); }
+
+@media (max-width: 850px) {
+  .system-modal > .modal-body { padding-inline: 10px; }
+  .system-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-temperature { grid-column: 1 / -1; }
+  .system-card { padding: 10px; }
+  .system-overview { flex-direction: column; gap: 6px; }
+  .system-metrics h3 { font-size: 12px; }
+}
+
+@media (max-width: 360px) {
+  .system-metrics header { flex-wrap: wrap; }
+  .system-details dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .system-details dd + dt { margin-top: 4px; }
+}

@@ -35,6 +35,27 @@ quando serve.
 
 
 
+## Mainboard personale
+
+Apri **Mainboard personale → Chatbot** per scrivere al Segretario. La conversazione è condivisa tra PC e telefono e salvata nel database SQLite del server. **Report** resta separato e mostra azioni, sezioni ed errori. Le schede, i filtri e le tabelle restano nella Mainboard. Le richieste sono elaborate una per volta: per riferirti a una voce, scrivi il suo titolo.
+
+- La Mainboard usa solo Ollama locale. Puoi cambiare il modello dal suo pulsante o impostare il valore iniziale con `OFFICE_MODEL`. Per una garanzia aggiuntiva, avvia Ollama sul PC con `OLLAMA_NO_CLOUD=1`.
+- Non usa Telegram, ricerche Web o workflow esterni. Puoi continuare a usare Internet nella chat normale. Le schede Email, GitHub e Domotica restano archivi locali. Le foto si cercano nell’indice locale.
+- Esempio: «Quali documenti scadono nei prossimi 90 giorni?». Se il Segretario propone una cancellazione, invia il comando di conferma mostrato. I link nella chat aprono la relativa scheda.
+- Il database non è cifrato. Per il passaggio al mini PC, includi `data/tools/office/office.sqlite` (volume Docker `tools-data`) nel backup a server fermo, insieme ai volumi e alle cartelle degli altri strumenti. Non condividere il backup.
+
+### Accesso da Android con Tailscale
+
+1. Installa Tailscale su Windows e Android e accedi con il tuo account. Mantieni il tailnet privato e, nelle regole di accesso, consenti la porta HTTPS del PC solo ai dispositivi autorizzati. Non condividere il nodo con altri utenti.
+2. In `.env` lascia `APP_BIND_ADDRESS=127.0.0.1` e `LAN_ACCESS=0`. Non creare un inoltro della porta `3000` sul router. Non esporre il container o il suo backend con altri proxy: l'app si fida dell'identità inserita da Tailscale Serve sulle richieste verso la porta locale.
+3. Su Windows, esegui `tailscale serve --bg http://127.0.0.1:3001` se hai `APP_PORT=3001`; altrimenti sostituisci la porta con quella in `.env`. Se richiesto, abilita HTTPS. Non usare **Funnel**. Copia il solo nome host mostrato da `tailscale serve status`, senza `https://` o slash.
+4. In `.env` imposta `ANDREA_TAILSCALE_HOST` a quel nome esatto, e `ANDREA_TAILSCALE_LOGIN` al tuo login Tailscale esatto. Ricrea AndreaGPT con `docker compose up -d --no-deps --no-build --pull never andreagpt` dopo aver installato la versione aggiornata.
+5. Da Android con Tailscale connesso, apri `https://<nome-host>/?office=chat`. Prova con il Wi-Fi spento, usando la rete mobile. Se ricevi un 403, verifica host, account e regole Tailscale; non attivare l'accesso LAN per aggirarlo.
+
+Il PC deve restare acceso. Tailscale cifra il traffico tra i dispositivi; il server e Ollama restano a casa. L’accesso remoto non è una modalità offline: da fuori serve una connessione Internet.
+
+Su Windows, `Avvia-AndreaGPT.bat` riusa le immagini già installate. Per una ricompilazione esplicita esegui `docker compose up -d --build` quando Docker può raggiungere i registri e i repository delle dipendenze.
+
 ## Brain: come funziona
 
 Brain è l'archivio documentale interrogabile da AndreaGPT. Non è un modello

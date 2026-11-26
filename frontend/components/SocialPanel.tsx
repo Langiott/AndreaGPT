@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ExternalLink, RefreshCw, Trash2, Wand2 } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { userErrorMessage } from "../utils/errors";
@@ -6,7 +7,7 @@ import { userErrorMessage } from "../utils/errors";
 type Fonte = "saved" | "liked";
 interface Post { id: string; url: string; author: string; caption: string; takenAt?: string; sources: Fonte[]; images: string[]; transcript?: string; summary?: string; error?: string }
 type Passo = "lista" | "media" | "trascrizione" | "riassunto" | "salvataggio" | "";
-interface Stato { running: boolean; passo: Passo; corrente: string; fatti: number; totale: number; utente: string; ultimo: string; errori: string[]; sessione: boolean; sessioneFine: string; modello: string; limite: number }
+interface Stato { running: boolean; passo: Passo; corrente: string; fatti: number; totale: number; utente: string; ultimo: string; errori: string[]; sessione: boolean; authRequired: boolean; modello: string; limite: number }
 type Scelta = "liked" | "saved" | "entrambi";
 const SCELTE: Array<{ key: Scelta; label: string; fonti: Fonte[] }> = [{ key: "liked", label: "Mi piace", fonti: ["liked"] }, { key: "saved", label: "Salvati", fonti: ["saved"] }, { key: "entrambi", label: "Entrambi", fonti: ["saved", "liked"] }];
 const leggi = (key: string) => { try { return localStorage.getItem(key) || ""; } catch { return ""; } };
@@ -29,7 +30,7 @@ const data = (iso?: string) => iso ? new Date(iso).toLocaleDateString("it-IT", {
 // Titolo della riga: la frase "In breve" del riassunto, altrimenti l'inizio della didascalia.
 const titolo = (post: Post) => (post.summary?.match(/In breve:\**\s*(.+)/)?.[1] ?? post.caption.split("\n")[0] ?? "").replace(/\*+/g, "").slice(0, 140) || "Senza testo";
 
-export function SocialPanel() {
+export function SocialPanel({ onStart }: { onStart: () => void }) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [stato, setStato] = useState<Stato>();
   const [tab, setTab] = useState<Tab>("tutti");
@@ -38,6 +39,7 @@ export function SocialPanel() {
   const [error, setError] = useState("");
   const [scelta, setScelta] = useState<Scelta>(() => (SCELTE.find(item => item.key === leggi("social.fonti"))?.key ?? "entrambi"));
   const [limite, setLimite] = useState(() => leggi("social.limite"));
+  const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
 
   const ricarica = useCallback(async () => {
     try { const result = await api<{ posts: Post[]; stato: Stato }>("/api/social"); setPosts(result.posts); setStato(result.stato); }
@@ -45,6 +47,7 @@ export function SocialPanel() {
   }, []);
 
   useEffect(() => { void ricarica(); }, [ricarica]);
+  useEffect(() => { setHeaderActions(document.getElementById("social-modal-actions")); }, []);
   useEffect(() => {
     if (!stato?.running) return;
     const timer = window.setInterval(() => void ricarica(), 2000);
@@ -58,7 +61,10 @@ export function SocialPanel() {
     finally { setBusy(undefined); }
   }
 
-  const sincronizza = () => esegui("sync", () => api("/api/social/sincronizza", { method: "POST", body: { fonti: SCELTE.find(item => item.key === scelta)?.fonti, limite: Number(limite) || undefined } }));
+  const sincronizza = () => {
+    onStart();
+    return esegui("sync", () => api("/api/social/sincronizza", { method: "POST", body: { fonti: SCELTE.find(item => item.key === scelta)?.fonti, limite: Number(limite) || undefined } }));
+  };
   const scegli = (key: Scelta) => { setScelta(key); scrivi("social.fonti", key); };
   const cambiaLimite = (value: string) => { const pulito = value.replace(/\D/g, "").slice(0, 3); setLimite(pulito); scrivi("social.limite", pulito); };
   const rigenera = (post: Post) => esegui(post.id, () => api(`/api/social/${post.id}/riassunto`, { method: "POST", body: {} }));
@@ -66,19 +72,23 @@ export function SocialPanel() {
 
   const visibili = posts.filter(post => inTab(post, tab));
   const conteggio = (key: Tab) => posts.filter(post => inTab(post, key)).length;
+  const syncButton = <button type="button" className="social-sync" onClick={sincronizza} disabled={!!busy || !stato?.sessione || stato.running}>
+    <RefreshCw size={15} className={stato?.running ? "spin" : undefined} /> Sincronizza
+  </button>;
 
   return (
     <div className="social-panel">
+      {headerActions ? createPortal(syncButton, headerActions) : syncButton}
       <div className="social-bar">
         <div className="cand-status">
-          <span className={stato?.sessione ? "ok" : "ko"}>{stato?.sessione ? stato.utente ? `@${stato.utente}` : "Sessione" : "INSTAGRAM_SESSIONID mancante in .env"}</span>
-          {stato?.sessione && <span className="social-key" title="INSTAGRAM_SESSIONID"><span aria-hidden="true">••••••••••••</span>{stato.sessioneFine}</span>}
+          <span className={stato?.sessione && !stato.authRequired ? "ok" : "ko"}>{stato?.authRequired ? "Accesso da rinnovare" : stato?.sessione ? stato.utente ? `@${stato.utente}` : "Sessione configurata" : "INSTAGRAM_SESSIONID mancante in .env"}</span>
+          <a className="social-instagram-link" href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer"
+            onClick={() => { if (stato?.sessione && !stato.authRequired && !stato.running && !busy) void sincronizza(); }}><ExternalLink size={13} /> Apri Instagram</a>
           {stato?.ultimo && <span>Ultimo {new Date(stato.ultimo).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>}
         </div>
         <div className="cand-actions social-opzioni">
           {SCELTE.map(item => <label key={item.key} className="social-check"><input type="checkbox" checked={scelta === item.key} disabled={stato?.running} onChange={() => scegli(item.key)} />{item.label}</label>)}
           <label className="social-check">Max<input type="text" inputMode="numeric" className="social-max" value={limite} placeholder={String(stato?.limite ?? 30)} disabled={stato?.running} onChange={event => cambiaLimite(event.target.value)} /></label>
-          <button type="button" className="go" onClick={sincronizza} disabled={!!busy || !stato?.sessione || stato.running}><RefreshCw size={15} className={stato?.running ? "spin" : undefined} /> Sincronizza</button>
         </div>
       </div>
       {stato?.running && <Avanzamento stato={stato} />}

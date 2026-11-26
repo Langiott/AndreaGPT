@@ -11,6 +11,9 @@ import { promisify } from "node:util";
 import type { Response } from "express";
 import { JsonLineWorker } from "../utils/json_line_worker";
 import { recuperaFoto, type Collegamento } from "./foto_connection";
+import { bridgeAdb } from "./foto_bridge";
+import { createFotoQr } from "./foto_qr";
+import { beginWork } from "../background_work";
 
 const execFileAsync = promisify(execFile);
 const ESTENSIONI = ["jpg", "jpeg", "png", "heic", "webp"];
@@ -46,6 +49,8 @@ export function createFoto(options: FotoOptions) {
   const indice = <T>(op: string, extra: Record<string, unknown> = {}) => (["analyze", "group", "recheck"].includes(op) ? analisi : consulta).request<T>({ dir: options.dataDir, op, ...extra });
 
   async function adb(args: string[], timeout = 20_000) {
+    const remote = await bridgeAdb(args, timeout);
+    if (remote !== undefined) return remote.toString('utf8');
     await fs.mkdir(adbEnv.HOME, { recursive: true });
     const { stdout, stderr } = await execFileAsync(adbBin, args, { env: adbEnv, timeout, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
     return `${stdout}${stderr}`;
@@ -56,7 +61,7 @@ export function createFoto(options: FotoOptions) {
   }
 
   async function dispositivi() {
-    const out = await adb(["devices"]).catch(() => "");
+    const out = await adb(["devices"]);
     return out.split("\n").slice(1).map(line => line.trim().split(/\s+/)).filter(parts => parts.length >= 2).map(([seriale, tipo]) => ({ seriale, tipo }));
   }
 
@@ -69,6 +74,7 @@ export function createFoto(options: FotoOptions) {
 
   async function recuperaSeriale(ricollega: boolean) {
     const conf = await salvato();
+    if (conf?.seriale) return (await dispositivi()).find(item => item.seriale === conf.seriale && item.tipo === 'device')?.seriale;
     if (!conf) return (await dispositivi()).find(item => item.tipo === "device")?.seriale;
     const trovato = await recuperaFoto(conf, adb, ricollega);
     if (trovato && trovato.conf.porta !== conf.porta) {
@@ -178,9 +184,14 @@ export function createFoto(options: FotoOptions) {
     if (stato.running) return;
     stato.running = true;
     fermare = false;
+    const finish = beginWork("Foto", "Indicizzazione foto");
+    let failed = false;
     void lavoro()
-      .catch(error => { avvisa(error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error)); })
-      .finally(() => { Object.assign(stato, { running: false, passo: "" }); });
+      .catch(error => { failed = true; avvisa(error instanceof Error ? error.message.split("\n")[0].slice(0, 120) : String(error)); })
+      .finally(() => {
+        Object.assign(stato, { running: false, passo: "" });
+        finish(fermare ? "cancelled" : failed ? "error" : "done");
+      });
   }
   const analizza = () => avvia(esegui);
 
@@ -188,7 +199,19 @@ export function createFoto(options: FotoOptions) {
   const controllo = minuti > 0 ? setInterval(() => { void salvato().then(conf => { if (conf && !stato.running) analizza(); }); }, minuti * 60_000) : undefined;
   controllo?.unref();
 
+  const qr = createFotoQr(adb);
   return {
+    qr,
+    async dispositiviWindows() { return dispositivi(); },
+    async collegaDispositivo(serial: string) {
+      const devices = await dispositivi();
+      const selected = devices.find(d => d.seriale === serial);
+      if (!selected || selected.tipo !== 'device') throw new Error(selected?.tipo === 'unauthorized' ? 'Sblocca il telefono e autorizza il debug USB per questo PC.' : 'Dispositivo non collegato. Controlla il cavo o il debug wireless.');
+      await fs.mkdir(options.dataDir, { recursive: true });
+      await fs.writeFile(fileCollegamento, JSON.stringify({ ip: '', porta: 0, seriale: serial }));
+      analizza();
+      return { collegato: true };
+    },
     async stato() {
       const ritenta = Date.now() - ultimoTentativo > 60_000;
       if (ritenta) ultimoTentativo = Date.now();
@@ -241,6 +264,8 @@ export function createFoto(options: FotoOptions) {
       const ext = path.extname(remoto).slice(1).toLowerCase();
       const dispositivo = MIME[ext] ? await seriale(false) : undefined;
       if (!dispositivo) { response.redirect(`/media/foto/thumbs/${id}.jpg`); return; }
+      const remote = await bridgeAdb(['-s', dispositivo, 'exec-out', `cat '${remoto.replace(/'/g, "'\\''")}'`], 120000);
+      if (remote !== undefined) { response.setHeader('Content-Type', MIME[ext]); response.setHeader('Cache-Control', 'private, max-age=3600'); response.send(remote); return; }
       const child = spawn(adbBin, ["-s", dispositivo, "exec-out", `cat '${remoto.replace(/'/g, "'\\''")}'`], { env: adbEnv, windowsHide: true });
       response.setHeader("Content-Type", MIME[ext]);
       response.setHeader("Cache-Control", "private, max-age=3600");
@@ -248,6 +273,6 @@ export function createFoto(options: FotoOptions) {
       child.on("error", () => response.destroy());
       response.on("close", () => child.kill());
     },
-    close() { clearInterval(controllo); analisi.close(); consulta.close(); },
+    close() { qr.close(); clearInterval(controllo); analisi.close(); consulta.close(); },
   };
 }

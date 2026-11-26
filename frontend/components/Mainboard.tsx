@@ -273,6 +273,10 @@ export function Mainboard({ currentActivity }: { currentActivity?: Operation | n
       setOpen(value => !value);
     };
     const rightClick = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable], .message-content, .office-note, .collection-notes")) {
+        lastRightClick = 0;
+        return;
+      }
       event.preventDefault();
       const now = Date.now();
       if (now - lastRightClick <= 500) {

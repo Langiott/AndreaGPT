@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { FotoCollegamento } from './FotoCollegamento';
 import { AlertTriangle, Check, CheckCheck, ChevronLeft, ChevronRight, Link2, Maximize, Minimize, RefreshCw, Search, Square, Trash2, X } from "lucide-react";
 import { userErrorMessage } from "../utils/errors";
+import { SearchField } from "./SearchField";
 
 type Passo = "" | "collegamento" | "elenco" | "analisi" | "volti";
 interface Stato { running: boolean; passo: Passo; fatti: number; totale: number; foto: number; errori: string[]; ultimo: string; collegato: boolean; dispositivo: string; ip: string; porta: number | ""; categorie: Record<string, number> }
@@ -10,7 +12,7 @@ interface Foto { id: number; data: number; categoria: string }
 interface Volto { id: number; persona: number | null; nome: string | null; confermato: number }
 interface Dettaglio { id: number; remoto: string; scattata: number; categoria: string; tag: string; testo: string; volti: Volto[] }
 
-const PAGINA = 120;
+const PAGINA = 72;
 const VOLTI_RIGA = 10;
 const PASSI: Record<Passo, string> = { "": "", collegamento: "Collego…", elenco: "Leggo la galleria…", analisi: "Analisi", volti: "Raggruppo i volti…" };
 
@@ -57,8 +59,12 @@ export function FotoPanel() {
   const [error, setError] = useState("");
   const [tuttiVolti, setTuttiVolti] = useState(false);
   const [intero, setIntero] = useState(() => leggi("foto.intero") === "1");
-  const fattiVisti = useRef(0);
   const fondo = useRef<HTMLDivElement>(null);
+  const fotoCaricate = useRef(0);
+  const caricamento = useRef<{ filtro: string; chiamata?: symbol }>({ filtro: "" });
+  const [aggiornamento, setAggiornamento] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const versioneIndice = useRef("");
   // Comandi nell'intestazione della finestra, accanto al titolo (slot della Modal).
   const [testata, setTestata] = useState<HTMLElement | null>(null);
   useEffect(() => { setTestata(document.getElementById("foto-modal-actions")); }, []);
@@ -80,7 +86,12 @@ export function FotoPanel() {
   const ricaricaPersone = useCallback(async () => {
     try { setPersone((await api<{ persone: Persona[] }>("/api/foto/persone")).persone.sort((a, b) => (a.nome || "\uffff").localeCompare(b.nome || "\uffff", "it", { sensitivity: "base", numeric: true }) || a.id - b.id)); } catch { /* indice ancora vuoto */ }
   }, []);
+  const filtro = JSON.stringify([cerca, persona, categoria]);
   const carica = useCallback(async (offset: number) => {
+    const corrente = caricamento.current;
+    if (corrente.filtro !== filtro || corrente.chiamata) return;
+    const chiamata = Symbol();
+    corrente.chiamata = chiamata;
     const params = new URLSearchParams({ q: "", offset: String(offset), limit: String(PAGINA) });
     if (cerca) params.set("persone", cerca);
     if (persona) params.set("persona", String(persona));
@@ -88,34 +99,57 @@ export function FotoPanel() {
     else if (categoria && !cerca) params.set("categoria", categoria);
     try {
       const result = await api<{ foto: Foto[]; totale: number }>(`/api/foto/lista?${params}`);
-      setFoto(prev => offset ? [...prev, ...result.foto] : result.foto);
+      if (caricamento.current !== corrente) return;
+      setFoto(prev => {
+        if (!offset) return result.foto;
+        const presenti = new Set(prev.map(item => item.id));
+        return [...prev, ...result.foto.filter(item => !presenti.has(item.id))];
+      });
+      fotoCaricate.current = offset + result.foto.length;
       setTotale(result.totale);
-    } catch (caught) { setError(userErrorMessage(caught, "Ricerca non riuscita.")); }
-  }, [cerca, persona, categoria]);
+      setRevision(value => value + 1);
+    } catch (caught) {
+      if (caricamento.current === corrente) setError(userErrorMessage(caught, "Ricerca non riuscita."));
+    } finally { if (corrente.chiamata === chiamata) corrente.chiamata = undefined; }
+  }, [cerca, persona, categoria, filtro]);
 
   useEffect(() => { void ricaricaStato(); void ricaricaPersone(); }, [ricaricaStato, ricaricaPersone]);
-  useEffect(() => { void carica(0); }, [carica]);
+  useEffect(() => {
+    caricamento.current = { filtro };
+    fotoCaricate.current = 0;
+    setFoto([]);
+    setTotale(0);
+    fondo.current?.closest(".modal-body")?.scrollTo({ top: 0 });
+    void carica(0);
+    return () => { caricamento.current = { filtro: "" }; };
+  }, [carica, filtro]);
   useEffect(() => { if (categoria === "persone") void ricaricaPersone(); }, [categoria, ricaricaPersone]);
   useEffect(() => { const timer = window.setTimeout(() => setCerca(q.trim()), 350); return () => window.clearTimeout(timer); }, [q]);
   useEffect(() => {
     const timer = window.setInterval(() => void ricaricaStato(), stato?.running ? 2000 : 20000);
     return () => window.clearInterval(timer);
   }, [stato?.running, ricaricaStato]);
-  // Durante l'analisi griglia e volti si aggiornano a blocchi; alla fine un'ultima volta.
   useEffect(() => {
     if (!stato) return;
-    if (!stato.running || stato.fatti - fattiVisti.current >= 40) {
-      if (fattiVisti.current !== stato.fatti || !stato.running) { void carica(0); void ricaricaPersone(); }
-      fattiVisti.current = stato.running ? stato.fatti : 0;
-    }
-  }, [stato?.running, stato?.fatti]); // eslint-disable-line react-hooks/exhaustive-deps
+    const versione = `${stato.foto}:${stato.ultimo}`;
+    if (versioneIndice.current && versioneIndice.current !== versione) setAggiornamento(true);
+    if (versioneIndice.current !== versione && !stato.running) void ricaricaPersone();
+    versioneIndice.current = versione;
+  }, [stato, ricaricaPersone]);
   useEffect(() => {
     const nodo = fondo.current;
-    if (!nodo || foto.length >= totale) return;
-    const osservatore = new IntersectionObserver(entries => { if (entries[0].isIntersecting) void carica(foto.length); }, { rootMargin: "600px" });
+    if (!nodo || !fotoCaricate.current || fotoCaricate.current >= totale) return;
+    const osservatore = new IntersectionObserver(entries => { if (entries[0].isIntersecting) void carica(fotoCaricate.current); }, { root: nodo.closest(".modal-body"), rootMargin: "0px 0px 1400px" });
     osservatore.observe(nodo);
     return () => osservatore.disconnect();
-  }, [foto.length, totale, carica]);
+  }, [revision, totale, carica]);
+
+  function aggiornaGriglia() {
+    caricamento.current = { filtro };
+    setAggiornamento(false);
+    fondo.current?.closest(".modal-body")?.scrollTo({ top: 0 });
+    void carica(0);
+  }
 
   async function azione(task: () => Promise<unknown>) {
     setError("");
@@ -129,7 +163,12 @@ export function FotoPanel() {
       await api("/api/foto/elimina", { ids });
       setSelezione(new Set());
       setAperta(undefined);
-      await Promise.all([carica(0), ricaricaPersone(), ricaricaStato()]);
+      const rimossi = new Set(ids);
+      setFoto(current => current.filter(item => !rimossi.has(item.id)));
+      fotoCaricate.current = Math.max(0, fotoCaricate.current - ids.length);
+      setTotale(current => Math.max(0, current - ids.length));
+      setRevision(value => value + 1);
+      await Promise.all([ricaricaPersone(), ricaricaStato()]);
     });
   }
   const selezionata = persone.find(item => item.id === persona);
@@ -138,8 +177,8 @@ export function FotoPanel() {
 
   const comandi = (
     <div className="foto-testata">
-      <label className="foto-cerca"><Search size={14} /><input type="search" value={q} placeholder="Cerca persone…" aria-label="Cerca persone" onChange={event => { setQ(event.target.value); setPersona(undefined); setScegliProfilo(undefined); }} />{q && <button type="button" aria-label="Pulisci" onClick={() => setQ("")}><X size={13} /></button>}</label>
-      <button type="button" className="foto-tasto foto-icona" onClick={() => setIntero(!intero)} aria-label={intero ? "Riduci" : "Schermo intero"} title={intero ? "Riduci" : "Schermo intero"}>{intero ? <Minimize size={14} /> : <Maximize size={14} />}</button>
+      <SearchField className="foto-cerca" label="Cerca persone" value={q} onChange={value => { setQ(value); setPersona(undefined); setScegliProfilo(undefined); }} />
+      <button type="button" className="foto-tasto foto-icona foto-intero-toggle" onClick={() => setIntero(!intero)} aria-label={intero ? "Riduci" : "Schermo intero"} title={intero ? "Riduci" : "Schermo intero"}>{intero ? <Minimize size={14} /> : <Maximize size={14} />}</button>
       <button type="button" className={`foto-tasto${collega ? " active" : ""}`} onClick={() => setCollega(!collega)} aria-expanded={collega} title={stato?.collegato ? `Collegato · ${stato.dispositivo}` : "Non collegato"}>
         <span className={`foto-punto${stato?.collegato ? " ok" : ""}`} /><Link2 size={14} /><span className="foto-etichetta">Collega</span>
       </button>
@@ -155,6 +194,7 @@ export function FotoPanel() {
       {collega && <Collega stato={stato} onFatto={async () => { setCollega(false); await ricaricaStato(); }} />}
       {stato?.running && <Avanzamento stato={stato} onFerma={() => azione(() => api("/api/foto/ferma", {}))} />}
       <Avvisi voci={[...(error ? [error] : []), ...(stato?.errori ?? [])]} />
+      {aggiornamento && <button type="button" className="foto-tasto foto-griglia-aggiorna" onClick={aggiornaGriglia}>Aggiorna griglia</button>}
 
       {categorie.length > 0 && (
         <Schede>
@@ -192,17 +232,19 @@ export function FotoPanel() {
               tocco.current.timer = window.setTimeout(() => setAperta(index), 230);
             }}
             onDoubleClick={() => { window.clearTimeout(tocco.current.timer); if (!scegliProfilo && !selezione.size) alterna(item.id); }}
-            onTouchStart={() => { if (scegliProfilo) return; window.clearTimeout(tocco.current.timer); tocco.current.timer = window.setTimeout(() => { tocco.current.lungo = true; alterna(item.id); navigator.vibrate?.(15); }, 450); }}
+            onTouchStart={() => { if (scegliProfilo) return; tocco.current.lungo = false; window.clearTimeout(tocco.current.timer); tocco.current.timer = window.setTimeout(() => { tocco.current.lungo = true; alterna(item.id); navigator.vibrate?.(15); }, 450); }}
             onTouchMove={() => window.clearTimeout(tocco.current.timer)}
             onTouchEnd={() => { if (!tocco.current.lungo) window.clearTimeout(tocco.current.timer); }}
+            onTouchCancel={() => { tocco.current.lungo = false; window.clearTimeout(tocco.current.timer); }}
             onContextMenu={event => event.preventDefault()}>
-            <img src={thumb(item.id)} alt="" loading="lazy" draggable={false} />
+            <img src={thumb(item.id)} alt="" loading={index < 12 ? "eager" : "lazy"} decoding="async" draggable={false} />
             {selezione.has(item.id) && <span className="foto-spunta"><Check size={14} /></span>}
           </button>
         ))}
       </div>
       {!foto.length && <p className="cand-empty">{stato?.foto ? "Nessuna foto." : "Vuoto."}</p>}
-      <div ref={fondo} />
+      <div ref={fondo} aria-hidden="true" />
+      {fotoCaricate.current < totale && <button type="button" className="foto-tasto" onClick={() => void carica(fotoCaricate.current)}>Carica altre foto</button>}
       {selezione.size > 0 && (
         <div className="foto-selezione">
           <strong>{selezione.size}</strong>
@@ -305,6 +347,8 @@ function Collega({ stato, onFatto }: { stato?: Stato; onFatto: () => Promise<voi
   }
   return (
     <form className="foto-collega" onSubmit={event => { event.preventDefault(); void invia(); }}>
+      <FotoCollegamento onFatto={onFatto} />
+      <p>Collegamento manuale (facoltativo)</p>
       <div className="foto-collega-riga">
         <label className="lungo"><span>Debug wireless</span><input inputMode="decimal" value={indirizzo} onChange={event => { indirizzoModificato.current = true; setIndirizzo(soloIndirizzo(event.target.value)); }} /></label>
         <label><span>Indirizzo accoppiamento</span><input inputMode="decimal" value={associazione} onChange={event => setAssociazione(soloIndirizzo(event.target.value))} /></label>
@@ -354,6 +398,7 @@ function SchedaPersona({ persona, persone, onCambio, onErrore }: { persona: Pers
 function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, onElimina }: { id: number; persone: Persona[]; onChiudi: () => void; onPrecedente?: () => void; onSuccessiva?: () => void; onCambio: () => Promise<void>; onElimina: (id: number) => void }) {
   const [dettaglio, setDettaglio] = useState<Dettaglio>();
   const [originale, setOriginale] = useState(false);
+  const gesto = useRef<{ x: number; y: number } | undefined>(undefined);
   const ricarica = useCallback(async () => { try { setDettaglio(await api<Dettaglio>(`/api/foto/${id}`)); } catch { setDettaglio(undefined); } }, [id]);
   useEffect(() => { setOriginale(false); setDettaglio(undefined); void ricarica(); }, [ricarica]);
   useEffect(() => {
@@ -376,7 +421,20 @@ function Visore({ id, persone, onChiudi, onPrecedente, onSuccessiva, onCambio, o
   // Portale sul body: dentro la Modal un antenato con transform sposterebbe il position: fixed.
   return createPortal(
     <div className="foto-visore" role="dialog" aria-modal="true" onClick={event => { if (event.target === event.currentTarget) onChiudi(); }}>
-      <div className="foto-visore-img">
+      <div className="foto-visore-img" onTouchStart={event => {
+        const contatto = event.touches[0];
+        gesto.current = event.touches.length === 1 && !(event.target instanceof Element && event.target.closest("button")) ? { x: contatto.clientX, y: contatto.clientY } : undefined;
+      }} onTouchCancel={() => { gesto.current = undefined; }} onTouchEnd={event => {
+        const inizio = gesto.current;
+        gesto.current = undefined;
+        const fine = event.changedTouches[0];
+        if (!inizio || !fine || event.touches.length) return;
+        const orizzontale = fine.clientX - inizio.x;
+        if (Math.abs(orizzontale) > 55 && Math.abs(orizzontale) > Math.abs(fine.clientY - inizio.y) * 1.5) {
+          if (orizzontale < 0) onSuccessiva?.();
+          else onPrecedente?.();
+        }
+      }}>
         <img src={thumb(id)} alt="" className={originale ? "nascosta" : undefined} />
         <img src={`/api/foto/${id}/originale`} alt="" className={originale ? undefined : "nascosta"} onLoad={() => setOriginale(true)} />
         {onPrecedente && <button type="button" className="foto-nav sx" aria-label="Precedente" onClick={onPrecedente}><ChevronLeft size={22} /></button>}

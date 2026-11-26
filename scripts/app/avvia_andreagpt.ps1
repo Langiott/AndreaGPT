@@ -1,5 +1,10 @@
 ﻿$ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$isolationLock = Join-Path $projectRoot "runtime\andreagpt-isolamento.lock"
+if (Test-Path -LiteralPath $isolationLock) {
+  Write-Host 'AndreaGPT in isolamento. Usa Proteggi-AndreaGPT.ps1 -RipristinaAvvio per sbloccarla.'
+  exit 1
+}
 $logRoot = Join-Path $projectRoot "runtime\logs"
 $startupLog = Join-Path $logRoot "andreagpt-startup.log"
 $stateFile = Join-Path $logRoot "andreagpt-state.json"
@@ -43,6 +48,8 @@ function Invoke-Compose([string[]]$Arguments) {
 
 try {
   Write-Startup "Avvio AndreaGPT."
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'avvia_adb.ps1')
+  if ($LASTEXITCODE -ne 0) { Write-Startup 'ATTENZIONE: collegamento telefoni Windows non disponibile.' }
   Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-File', ('"' + (Join-Path $PSScriptRoot 'telemetria_windows.ps1') + '"'))
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker non è disponibile nel PATH." }
   & docker info *> $null
@@ -60,19 +67,19 @@ try {
     if (-not $dockerReady) { throw "Docker non è diventato operativo entro 120 secondi." }
   }
 
-  Write-Startup "Avvio o aggiornamento dei container."
-  try {
-    Invoke-Compose @("up", "-d", "--build", "--remove-orphans")
-  } catch {
-    $buildOutput = [string]$_.Exception.Data["ComposeOutput"]
-    if ($buildOutput -notmatch '(?is)lookup\s+registry-1\.docker\.io[^\r\n]*no such host') { throw }
-    Write-Startup "ATTENZIONE: Docker non risolve il DNS di Docker Hub. Tento l'avvio con le immagini locali, senza download."
-    Write-Startup "Le ultime modifiche al codice non sono state compilate: verra' usata la versione gia' disponibile."
-    try {
-      Invoke-Compose @("up", "-d", "--no-build", "--pull", "never", "--remove-orphans")
-    } catch {
-      throw "Avvio con immagini locali non riuscito. Ripristina la connessione/DNS di Docker Desktop e riprova. Dettaglio: $($_.Exception.Message)"
-    }
+  $images = & docker compose --project-directory $projectRoot -f $composeFile config --images
+  if ($LASTEXITCODE -ne 0 -or -not $images) { throw "Configurazione Docker Compose non valida." }
+  $localImages = $true
+  foreach ($image in $images) {
+    & docker image inspect $image *> $null
+    if ($LASTEXITCODE -ne 0) { $localImages = $false; break }
+  }
+  if ($localImages) {
+    Write-Startup "Avvio con le immagini locali, senza build o download."
+    Invoke-Compose @("up", "-d", "--no-build", "--pull", "never")
+  } else {
+    Write-Startup "Immagini mancanti: build e avvio dei container."
+    Invoke-Compose @("up", "-d", "--build")
   }
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $comfyStarter
   if ($LASTEXITCODE -eq 3) { Write-Startup "ComfyUI non installato in runtime\ComfyUI: generazione immagini non disponibile, il resto funziona." }
