@@ -13,6 +13,7 @@
     "test": "tsx --test backend/*.test.ts backend/utils/*.test.ts backend/brain/*_test.ts backend/agent/*_test.ts backend/retrieval/*_test.ts backend/search/*_test.ts backend/grounding/*_test.ts backend/context/*_test.ts backend/router/*_test.ts backend/model/*_test.ts backend/http/*_test.ts backend/news/*_test.ts backend/candidature/*_test.ts backend/foto/*_test.ts frontend/utils/*_test.ts",
     "brain": "tsx backend/brain/brain_cli.ts",
     "smoke:local": "tsx scripts/test/smoke_locale.ts",
+    "test:office-llm": "tsx scripts/test/office_llm.ts",
     "benchmark:router": "tsx scripts/benchmark/benchmark_router.ts",
     "benchmark:retrieval": "tsx scripts/benchmark/benchmark_retrieval.ts",
     "valuta:brain": "tsx scripts/benchmark/valuta_retrieval.ts"
@@ -35,6 +36,7 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "latest",
     "remark-math": "^6.0.0",
+    "sharp": "^0.34.4",
     "tsx": "latest",
     "typescript": "^5.9.3",
     "undici": "^8.10.2",

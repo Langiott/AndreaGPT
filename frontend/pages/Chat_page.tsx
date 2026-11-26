@@ -393,6 +393,21 @@ export default function App() {
     const office = new URLSearchParams(location.search).get("office");
     return office === "chat" ? "chat" : office !== null ? "report" : null;
   });
+  // I link "Apri nella Mainboard" delle risposte aprono la Mainboard sul punto giusto senza ricaricare la pagina.
+  useEffect(() => {
+    const open = (event: MouseEvent) => {
+      const anchor = (event.target as Element | null)?.closest?.("a[href]");
+      const href = anchor?.getAttribute("href") ?? "";
+      if (!href.startsWith("/?office=") || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey) return;
+      event.preventDefault();
+      history.pushState(history.state, "", href);
+      const office = new URL(href, location.href).searchParams.get("office");
+      setPersonalBoardView(null);
+      window.setTimeout(() => setPersonalBoardView(office === "chat" ? "chat" : "report"), 0);
+    };
+    document.addEventListener("click", open);
+    return () => document.removeEventListener("click", open);
+  }, []);
   const [codeOpen, setCodeOpen] = useState(false);
   const [brainGraphOpen, setBrainGraphOpen] = useState(false);
   const [embeddingOpen, setEmbeddingOpen] = useState(false);
@@ -1793,9 +1808,10 @@ export default function App() {
         for (const line of lines) {
           const data = line.trim().replace(/^data:\s*/, "");
           if (!data || data === "[DONE]") continue;
-          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; webSources?: WebCitation[]; metrics?: Record<string, number>; diagnostics?: DiagnosticTrace; tokenTrace?: TokenTrace; error?: string };
+          let event: { choices?: Array<{ delta?: { content?: string } }>; brainSources?: BrainCitation[]; webSources?: WebCitation[]; metrics?: Record<string, number>; diagnostics?: DiagnosticTrace; tokenTrace?: TokenTrace; error?: string; officeAction?: boolean };
           try { event = JSON.parse(data); } catch { continue; }
             if (event.error) throw new Error(event.error);
+            if (event.officeAction) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, modelName: "Azione · Mainboard", modelProvider: undefined } : message));
             if (event.metrics) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, metrics: event.metrics } : message));
             if (event.tokenTrace) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, tokenTrace: event.tokenTrace, tokenBranches: undefined } : message));
             if (event.diagnostics) setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, diagnostics: event.diagnostics } : message));
@@ -2510,7 +2526,7 @@ export default function App() {
       {yoloLiveOpen && <Suspense fallback={<div className="thinking" role="status">Apertura fotocamera…</div>}><YoloLive onClose={() => setYoloLiveOpen(false)} /></Suspense>}
 
       <Mainboard currentActivity={activeOperation ? { label: activeOperation.label, startedAt: new Date(activeOperation.startedAt).toISOString(), status: "running" } : null} />
-      {ocrDocument && <Modal mobilePage wide title="Documento OCR" className="ocr-document-modal" onClose={() => setOcrDocumentId("")}
+      {ocrDocument && <Modal mobilePage wide title="Documento OCR" className="ocr-document-modal" onBack={() => setOcrDocumentId("")} onClose={() => setOcrDocumentId("")}
         footer={<button type="button" className="ocr-document-button" onClick={() => saveTextResult(plainOcrText(ocrDocument.content), "risultato-ocr.txt")}><Download size={16} /> Scarica TXT</button>}>
         <textarea value={plainOcrText(ocrDocument.content)} onChange={(event) => {
           const content = event.target.value;
@@ -2555,7 +2571,7 @@ export default function App() {
       {citeOpen && <Modal mobilePage title="Brain" className="brain-archive-modal" wide onClose={() => setCiteOpen(null)}><Suspense fallback={<div className="thinking">Apro il documento…</div>}><BrainDocumentReader source={citeOpen.source} focus={citeOpen} backLabel="Torna alla chat" onBack={() => setCiteOpen(null)} /></Suspense></Modal>}
       {brainOpen && <Modal mobilePage title="Brain" className="brain-archive-modal" headerSlot="brain-modal-actions" wide onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }}><Suspense fallback={<div className="thinking">Caricamento archivio…</div>}><BrainPanel showInfo={false} locked={loading} source={brainSource} onSource={setBrainSource} onClose={() => { setBrainOpen(false); void refreshBrainPaths(); }} onOpenGraph={() => { setBrainOpen(false); setBrainGraphOpen(true); }} onOpenEmbedding={() => { setBrainOpen(false); setEmbeddingOpen(true); }} /></Suspense></Modal>}
       {outputOpen && !compactOpen && <Modal mobilePage hideMobileBack title="Output" className="output-modal fit-modal" wide={Boolean(outputFolder)} compact={!outputFolder}
-        actions={outputFolder && <button type="button" className="output-back" onClick={() => setOutputFolder(null)}>Cartelle</button>}
+        onBack={outputFolder ? () => setOutputFolder(null) : undefined}
         onClose={() => { setOutputOpen(false); setOutputFolder(null); }}>
         <Suspense fallback={<div className="thinking" role="status">Caricamento risultati…</div>}><OutputPanel folder={outputFolder} files={outputFiles} onFolder={setOutputFolder} onDelete={setOutputDelete}
           onDocument={setCompactOpen} onEdition={name => void openSavedEdition(name)}

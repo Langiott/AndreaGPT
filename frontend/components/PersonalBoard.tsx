@@ -27,7 +27,7 @@ const archives = [
   { kind: "note", title: "Note", icon: Notebook },
 ] as const;
 const statuses = { queued: "In coda", running: "In corso", done: "Completata", error: "Da verificare" };
-type Snapshot = { today: string; timeZone: string; entries: RecordItem[]; jobs: Job[]; chat: Job[]; jobCount: number; latestFailure?: Job; model: string };
+type Snapshot = { today: string; timeZone: string; entries: RecordItem[]; renewals?: { id: string; title: string; renewal: string; days: number; amount?: number | null; currency?: string | null }[]; jobs: Job[]; chat: Job[]; jobCount: number; latestFailure?: Job; model: string };
 type Tab = "log" | "collections" | Entry["kind"];
 const linkedTab = (params: URLSearchParams): Tab => {
   const section = params.get("office");
@@ -345,6 +345,8 @@ export function PersonalBoard({ models, startInChat }: { models: ModelInfo[]; st
     <button type="button" aria-pressed={!chatOpen && tab === "log"} onClick={() => selectTab("log")}><Activity size={14} /> Vedi Report</button>
     <button className="office-model" type="button" disabled={!snapshot} aria-expanded={settings} title={snapshot?.model}
       onClick={() => { if (snapshot) { setError(""); setModel(snapshot.model); setSettings(!settings); } }}>Modello</button>
+    {chatOpen && <button type="button" className="office-chat-clear" disabled={busy || !chat.length || !!active} title="Cancella conversazione" aria-label="Cancella conversazione"
+      onClick={() => setConfirmation({ title: "Cancella conversazione", description: "Cancellare tutti i messaggi del Chatbot? Le voci salvate e il Report restano.", label: "Cancella", action: () => void mutate("/chat", "DELETE") })}><Trash2 size={15} /></button>}
   </nav>;
 
   const crew = <div className={`office-crew${tab === "appointment" ? "" : " compact-crew"}`} aria-label="Squadra">
@@ -361,6 +363,7 @@ export function PersonalBoard({ models, startInChat }: { models: ModelInfo[]; st
 
   return <div className={`personal-board${chatOpen ? " chat-open" : ""}`}>
     {headerActions ? createPortal(toolbar, headerActions) : toolbar}
+    {snapshot?.renewals?.length ? <p className="office-renewals" role="status">{snapshot.renewals.map(item => <span key={item.id}>{item.title} · {item.days === 0 ? "oggi" : item.days === 1 ? "domani" : `tra ${item.days} giorni`}{item.amount != null ? ` · ${money(item.amount, item.currency)}` : ""}</span>)}</p> : null}
     {confirmation && <OfficeConfirmation request={confirmation} onCancel={() => setConfirmation(undefined)} />}
     {!chatOpen && tab !== "collections" && <SearchField label={tab === "log" ? "Cerca nel report" : `Cerca in ${labels[tab]}`} maxLength={160} value={query} onChange={value => { setQuery(value); setOffset(0); }} />}
     {!chatOpen && tab !== "collections" && command}

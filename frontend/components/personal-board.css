@@ -210,3 +210,8 @@
 @media (min-width: 360px) and (max-width: 600px) {
   .collection-gallery:has(figure + figure) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Rinnovi abbonamenti imminenti. */
+.office-renewals { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; padding: 6px 9px; border: 1px solid var(--office-accent); border-radius: 7px; font: 600 12px/1.4 system-ui, sans-serif; }
+.office-renewals span::before { content: "⟳ "; }
+.office-chat-clear { margin-left: auto; }

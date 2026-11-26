@@ -3116,3 +3116,33 @@ button.output-item { width: 100%; padding: 0; font: inherit; text-align: left; c
   .research-toolbar > button:nth-child(n)::before { display: none; }
   .research-toolbar > button:nth-child(n)::after { font-size: 10px; }
 }
+
+/* Messaggi compatti: meno spazio sprecato. Con Tempi/Logs nel footer restano come prima. */
+.chat-surface .message { margin-bottom: 10px; }
+.chat-surface .message-content { padding: 6px 11px; line-height: 1.5; font-size: var(--chat-font-size); }
+.chat-surface .message-content p { margin: 0 0 6px; }
+.chat-surface .message-content ul, .chat-surface .message-content ol { margin: 4px 0 6px; }
+.chat-surface .message:has(.message-footer:not(:empty)) { margin-bottom: 20px; }
+.chat-surface .message:has(.message-footer:not(:empty)) .message-content { padding: 12px 15px; line-height: 1.75; }
+.chat-surface .message:has(.message-footer:not(:empty)) .message-content p { margin: 0 0 13px; }
+@media (max-width: 720px) {
+  .chat-surface .message-list { padding: 10px 8px 14px; }
+  .chat-surface .message { margin-bottom: 7px; }
+  .chat-surface .message-content, .chat-surface .message.user .message-content { padding: 5px 10px; line-height: 1.45; font-size: var(--chat-font-size); }
+  .chat-surface .message:has(.message-footer:not(:empty)) { margin-bottom: 15px; }
+  .chat-surface .message:has(.message-footer:not(:empty)) .message-content { padding: 10px 11px; line-height: 1.58; }
+}
+
+/* Formule nei documenti: più grandi, contrastate, scorrevoli su telefono. */
+.brain-document-content .katex { font-size: 1.18em; color: inherit; }
+.brain-document-content .katex-display { margin: .9em 0; padding: 8px 10px; border-radius: 8px; background: rgba(127,127,127,.08); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.brain-document-content .katex-display > .katex { font-size: 1.22em; white-space: nowrap; }
+.brain-document-content .katex-error { color: inherit; font-family: var(--mono, monospace); background: rgba(127,127,127,.12); padding: 0 3px; border-radius: 4px; }
+.message-content .katex { font-size: 1.12em; }
+@media (max-width: 720px) {
+  .brain-document-content .katex-display > .katex { font-size: 1.08em; }
+}
+
+/* Grandezza font dalle impostazioni anche per tutta la sidebar. */
+.sidebar :is(.section-summary, .count, .history-delete) { font-size: calc(var(--chat-font-size, 16px) * .65); }
+.sidebar .sidebar-action :is(span, small) { font-size: inherit; }

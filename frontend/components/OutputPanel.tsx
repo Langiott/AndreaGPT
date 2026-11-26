@@ -57,7 +57,7 @@ export function OutputPanel({ folder, files, onFolder, onDelete, onDocument, onE
             {file.thumb ? <img src={file.thumb} alt="" loading="lazy" /> : icon}
             <span><strong>{title}</strong><small>{new Date(file.updatedAt).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" })}</small><em>{(isNews ? file.excerpt?.replace(/^.*?Data:\s*\S+\s*/, "") : file.excerpt) || "—"}</em></span>
           </button> : folder === "compactChat" ? <button type="button" className="output-item" onClick={open}>{icon}<span>{file.name}</span></button> : <a href={file.url} className="output-item" target="_blank" rel="noreferrer" title={file.name}>
-            {file.image ? <img src={file.url} alt="" loading="lazy" /> : icon}<span>{file.name}</span>
+            {file.image ? <img src={file.thumb ?? file.url} alt="" loading="lazy" decoding="async" /> : icon}<span>{file.name}</span>
           </a>}
           <button type="button" className="output-delete" onClick={() => onDelete({ folder: storage, name: file.name })} aria-label={`Elimina ${file.name}`}>Elimina</button>
         </div>;

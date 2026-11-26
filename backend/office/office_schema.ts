@@ -41,6 +41,9 @@ export const intentSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("catalogItem"), category: z.enum(catalogCategories).nullish(), title: name.nullish(), collection: name.nullish() }),
   z.object({ action: z.literal("photos"), query: name, documents: z.boolean().optional() }),
   z.object({ action: z.literal("clarify"), message: z.string().trim().min(1).max(300) }),
+  z.object({ action: z.literal("migrateCards") }),
+  z.object({ action: z.literal("cardSet"), set: z.string().trim().regex(/^[A-Za-z]{1,4}\d{1,3}$/), collection: name.nullish() }),
+  z.object({ action: z.literal("undo") }),
   ...collectionIntents,
 ]);
 export const planSchema = z.object({ actions: z.array(intentSchema).min(1).max(12) });
@@ -61,7 +64,8 @@ export type Entry = z.infer<typeof entrySchema>;
 export type Price = z.infer<typeof priceSchema> & { checkedAt: string };
 export type RecordItem = Entry & { id: string; price?: Price };
 export type Match = { title: string; url: string; snippet: string; candidate?: { amount: number; currency: string } };
-export type Result = { message: string; cardId?: string; sources?: Match[]; photos?: number[]; view?: string; confirmation?: { code: string; description: string }; steps?: Result[];
+export type Undo = { type: "entry"; id: string } | { type: "item"; id: string } | { type: "collection"; id: string };
+export type Result = { message: string; undo?: Undo[]; undone?: boolean; cardId?: string; sources?: Match[]; photos?: number[]; view?: string; confirmation?: { code: string; description: string }; steps?: Result[];
   catalogDraft?: { category: typeof catalogCategories[number]; imageIds: string[]; collection?: string };
 };
 export type Role = "secretary" | "executor" | "keeper" | "director";

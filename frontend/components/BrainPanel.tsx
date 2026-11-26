@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronDown, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, MoreHorizontal, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database, FileText, Folder, GitBranch, ListTree, Maximize2, Minimize2, MoreHorizontal, Pencil, RotateCcw, Save, Search, Trash2, Undo2, Upload, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -338,7 +338,7 @@ export function BrainDocumentReader({ source, focus, onBack, onClose, url, backL
 
   return <section className="brain-document-reader" ref={readerRef}>
     <div className="brain-document-toolbar">
-      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel} aria-label={backLabel}><ArrowLeft size={17} /></button>
+      <button type="button" className="brain-document-back" onClick={onBack} title={backLabel} aria-label={backLabel}><ChevronLeft size={19} /></button>
       <div className="brain-document-heading"><FileText size={16} /><strong title={fileDocument?.source ?? source}>{fileDocument?.name ?? source.split("/").at(-1)}</strong><small>{fileDocument?.extension.replace(".", "").toUpperCase() || "Documento"}</small></div>
       <div className="brain-document-actions">
         <div className="brain-document-search" role="search">
@@ -405,6 +405,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
     for (const item of matching) { const parts = item.id.split("/"); const group = parts[0] === "progetti" && parts[1] ? parts[1] : "Documenti personali"; map.set(group, [...(map.get(group) ?? []), item]); }
     return [...map.entries()].sort(([a], [b]) => a === b ? 0 : a === "Documenti personali" ? -1 : b === "Documenti personali" ? 1 : a.localeCompare(b));
   }, [status?.sources, query]);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const warningCount = status?.errors?.length ?? 0;
   useEffect(() => { if (!warningCount) setDismissedWarnings(false); }, [warningCount]);
   async function saveDocument(target: string, content: string) {
@@ -421,7 +422,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
   }
   useEffect(() => { void refresh().catch(caught => setError(String(caught.message))); }, []);
   useEffect(() => { setHeaderToolbarTarget(document.getElementById("brain-modal-actions")); }, []);
-  useEffect(() => { if (!busy && !status?.indexing && !status?.turboVec?.building) return; const timer = window.setInterval(() => void refresh().catch(() => undefined), 800); return () => window.clearInterval(timer); }, [busy, status?.indexing, status?.turboVec?.building]);
+  useEffect(() => { if (!busy && !status?.indexing && !status?.turboVec?.building) return; const timer = window.setInterval(() => void refresh().catch(() => undefined), 2000); return () => window.clearInterval(timer); }, [busy, status?.indexing, status?.turboVec?.building]);
   async function run(action: "index" | "import") {
     setBusy(true); setError("");
     try { const response = await fetch(`/api/brain/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "import" ? { url: url.trim() } : {}) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Operazione Brain fallita."); await refresh(); }
@@ -450,7 +451,7 @@ export function BrainPanel({ locked, source, onSource, onOpenGraph, onOpenEmbedd
     <div className="brain-secondary-grid"><details className="brain-import"><summary><span><GitBranch size={15} />Carica repository</span><ChevronDown size={15} /></summary><form className="brain-github" onSubmit={event => { event.preventDefault(); void run("import"); }}><GitBranch size={17} aria-hidden="true" /><input aria-label="Repository o profilo GitHub pubblico" type="url" required maxLength={500} value={url} onChange={event => setUrl(event.target.value)} placeholder="Repository o profilo GitHub pubblico" /><button className="primary-action" disabled={busy || locked || !url.trim()}>Importa</button></form></details>
     {!!status?.errors?.length && !dismissedWarnings && <details className="brain-warning"><summary><span>Warning ({status.errors.length})</span><ChevronDown size={15} /></summary><ul className="brain-source-list">{status.errors.map((item, index) => <li key={`${item.path}-${index}`}><strong>{item.path}</strong>: {item.error}</li>)}</ul><button type="button" className="brain-warning-dismiss" onClick={() => setDismissedWarnings(true)}>Nascondi warning</button></details>}
     </div>
-    <details className="brain-browser" open><summary><span><Folder size={17} />File e ricerca</span><small>{status?.files ?? 0} file</small></summary><div className="brain-browser-body"><label className="brain-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Cerca file o progetto…" /></label><div className="brain-explorer">{groups.map(([group, items]) => <details className="brain-group" key={group} open={Boolean(query) || source.includes(group)}><summary><ChevronRight size={15} /><Folder size={18} /><span><strong>{group}</strong><small>{items.length} file · {items.reduce((sum, item) => sum + (item.chunks ?? 0), 0)} estratti</small></span></summary><div className="brain-files">{items.map(item => <div className="brain-file-row" key={item.id}><button type="button" className="brain-file-label" onClick={() => setOpenDocument(item.id)} title={`Apri ${item.id}`}><FileText size={15} /><span>{item.id.split("/").slice(-1)[0]}</span><small>{item.chunks ?? 0}</small></button><div className="brain-file-actions"><button type="button" className="delete" onClick={() => setDeleteTarget(item.id)} title="Rimuovi dall’indice Brain" aria-label={`Elimina ${item.id}`}><Trash2 size={13} /></button></div></div>)}</div></details>)}{status && !groups.length && <p className="empty-search">Nessun file trovato.</p>}</div></div></details>
+    <details className="brain-browser" open><summary><span><Folder size={17} />File e ricerca</span><small>{status?.files ?? 0} file</small></summary><div className="brain-browser-body"><label className="brain-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Cerca file o progetto…" /></label><div className="brain-explorer">{groups.map(([group, items]) => <details className="brain-group" key={group} open={Boolean(query) || source.includes(group)} onToggle={event => { const open = event.currentTarget.open; setOpenGroups(current => { const next = new Set(current); if (open) next.add(group); else next.delete(group); return next; }); }}><summary><ChevronRight size={15} /><Folder size={18} /><span><strong>{group}</strong><small>{items.length} file · {items.reduce((sum, item) => sum + (item.chunks ?? 0), 0)} estratti</small></span></summary>{(query || openGroups.has(group) || source.includes(group)) && <div className="brain-files">{items.slice(0, query ? 300 : items.length).map(item => <div className="brain-file-row" key={item.id}><button type="button" className="brain-file-label" onClick={() => setOpenDocument(item.id)} title={`Apri ${item.id}`}><FileText size={15} /><span>{item.id.split("/").slice(-1)[0]}</span><small>{item.chunks ?? 0}</small></button><div className="brain-file-actions"><button type="button" className="delete" onClick={() => setDeleteTarget(item.id)} title="Rimuovi dall’indice Brain" aria-label={`Elimina ${item.id}`}><Trash2 size={13} /></button></div></div>)}</div>}</details>)}{status && !groups.length && <p className="empty-search">Nessun file trovato.</p>}</div></div></details>
     {status?.turboVec?.error && <p className="brain-note">TurboVec non disponibile: {status.turboVec.error}. La ricerca JSON continua a funzionare.</p>}
     </>}
   </section>;
