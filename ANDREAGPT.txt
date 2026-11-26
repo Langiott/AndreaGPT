@@ -82,3 +82,65 @@ OnlyOffice      Word            https://github.com/ONLYOFFICE
 --------------------------------------------------------------------------------
 powershell.exe -NoProfile -File ".\Attiva-Accesso-AndreaGPT.ps1"
 --------------------------------------------------------------------------------
+Limiti, prima di tutto
+
+Velocità: le azioni dirette rispondono subito (0,1 s), quelle che passano dal modello in 5–30 s. Una risposta di conversazione richiede 20–40 s, una ricerca web 40–120 s. È il limite di un 8B su questo PC senza scheda video dedicata.
+Qualità dei testi: spiegazioni, mail e traduzioni sono buone. Ricette e liste a volte contengono cose senza senso, per esempio «Ovalette» e «Zuccherini» nella lista della spesa.
+Prezzi delle carte: spesso rispondono «non affidabile» e danno solo le fonti, perché i risultati di ricerca mescolano edizioni e gradazioni diverse.
+Riassunto dei link: non funziona con i siti che mostrano prima i cookie (ANSA) o che bloccano i lettori automatici.
+Doppioni vecchi: nell'archivio restano i doppioni creati durante le prove (2 Spotify, 2 dentisti, 2 Interstellar); cancellali dalla Mainboard. Da ora le aggiunte uguali vengono rifiutate.
+Due risultati insieme: con «trovami il documento del passaporto» il risultato è giusto, ma compare anche una riga inutile «0 elementi trovati».
+Errori trovati e corretti
+
+Azioni inventate dalla chat: quando una richiesta finiva nella chat, il modello copiava lo stile delle azioni e scriveva «Aggiunto», «Annullato» o un prezzo senza aver fatto niente. Ora le risposte delle azioni non gli vengono più passate.
+Abbonamenti e appuntamenti: il modello non riusciva a crearli e scriveva date finte come «YYYY-MM-03». Ora il rinnovo e la data sono corretti, anche per un annuale come «15 marzo» → 2027.
+Ricerca web: «cerca sul web / su internet» prima cercava nelle collezioni; ora attiva la ricerca web vera, con le fonti in fondo.
+Frasi non riconosciute: «che note ho?», «quali documenti scadono», «crea la collezione…», «elimina l'abbonamento…», «segna che…», «ricordami di…» e «quali carte ho di One Piece?» ora vanno all'archivio.
+Domande di seguito: «e all'anno?» dopo il totale mensile ora funziona.
+Nota salvata come carte: «salva una nota: … artbook di One Piece» veniva salvata come due carte; ora è una nota.
+Titolo abbreviato: «Dark Side of the Moon» non trovava la voce salvata come «Dark Side of the Moon dei Pink Floyd»; ora la trova.
+Riassunto di Wikipedia: prima era pieno di dati spazzatura; ora è pulito.
+Carte mancanti di un set: l'elenco di 118 codici ora è compatto («001–093, 095–119»).
+Identità: prima si presentava come «Qwen di Alibaba»; ora si presenta come AndreaGPT e sa elencare cosa può fare.
+Cosa può fare il chatbot
+
+Carte e collezioni
+
+Salvare una o più carte: «salva la carta One Piece Luffy OP01-024», «salva Nami OP01-016 e Zoro OP01-025 di One Piece»
+Elencare le carte: «quali carte ho (di One Piece)?»
+Verificare se hai una carta: «ce l'ho Kaido?»
+Carte mancanti di un set: «quali carte mi mancano del set OP01?»
+Prezzo di una carta, salvato solo dopo la tua conferma: «quanto vale la carta Shanks OP01-120?»
+Creare, rinominare o eliminare una collezione: «crea la collezione Vinili»
+Aggiungere un oggetto a una collezione: «aggiungi Dark Side of the Moon alla collezione Vinili»
+Aggiungere una nota a un oggetto: «aggiungi a Dark Side of the Moon la nota prima stampa»
+Contare gli oggetti: «quante cose ho nella collezione Vinili?»
+Spostare le vecchie carte nelle collezioni: «sposta le carte nelle collezioni»
+Abbonamenti
+
+Aggiungere: «aggiungi abbonamento Netflix 13,99 al mese, rinnovo il 12»
+Elencare: «che abbonamenti ho?»
+Spesa mensile o annua: «quanto spendo al mese?», poi «e all'anno?»
+Cambiare il rinnovo: «il rinnovo di Netflix è il 5 dicembre»
+Eliminare: «elimina l'abbonamento Spotify»
+Gli avvisi di rinnovo compaiono da soli nella Mainboard
+Note, appuntamenti, documenti, film
+
+Salvare una nota: «salva una nota: …»
+Promemoria: «ricordami di chiamare Marco domani»
+Appuntamento: «segna dentista venerdì alle 17:30»
+Elencare: «che note ho?», «che appuntamenti ho?»
+Scadenza di un documento: «segna che il passaporto scade il 10 marzo 2027»
+Documenti in scadenza: «quali documenti scadono nei prossimi 6 mesi?»
+Cercare un documento: «trovami il documento del passaporto»
+Film da vedere: «aggiungi i film Arrival e Contact», «che film devo vedere?»
+Web e link
+
+Ricerca web con fonti: «cerca sul web …»
+Riassunto di un link, salvato tra le note: «riassumi https://…»
+Solo riassunto: «riassumi https://… senza salvare»
+Riassunto dentro una collezione: «riassumi https://… nella collezione X»
+Sempre disponibili
+
+Annullare l'ultima azione: «annulla»
+Conversazione normale: spiegazioni, mail, traduzioni, calcoli, idee, riassunto della chat

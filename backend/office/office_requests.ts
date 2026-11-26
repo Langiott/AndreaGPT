@@ -24,6 +24,8 @@ export const notCollectible = /\b(?:cart[ae]|card)\s+(?:di\s+credito|di\s+debito
 export type DirectPlan = Intent | { actions: Intent[] };
 
 function cardIntent(text: string, hasImage: boolean): DirectPlan | undefined {
+  // "salva una nota: … artbook di One Piece" è una nota, non una carta.
+  if (/^\s*\S+\s+(?:una\s+|la\s+|come\s+)?(?:not[ae]|promemoria|appuntament\w*|abbonament\w*|film|documento)\b/iu.test(text)) return;
   const word = cardWord.exec(text) ?? addVerb.exec(text);
   if (!word) return;
   const game = cardGame(text);
@@ -71,7 +73,7 @@ export function directQuery(text: string): Intent | undefined {
     const query = cleanTitle([inCollections[1], inCollections[2]].filter(Boolean).join(" ").replace(/^\s*(?:mi|me)\b/iu, " ").trim());
     return { action: "searchCollections", query: query || undefined } as Intent;
   }
-  const list = /^\s*(?:mostra\w*|elenc\w*|fammi\s+vedere|vedi)\s+(?:tutte\s+)?(?:le\s+)?(?:mie\s+)?cart[ae]\b(.*)$/iu.exec(text);
+  const list = /^\s*(?:mostra\w*|elenc\w*|fammi\s+vedere|vedi|(?:quali|che)(?=\s+cart[ae]\s+(?:ho|possiedo)\b))\s+(?:tutte\s+)?(?:le\s+)?(?:mie\s+)?cart[ae]\b(.*)$/iu.exec(text);
   if (list && !notCollectible.test(text)) {
     let rest = list[1];
     for (const [pattern] of cardGames) rest = rest.replace(pattern, " ");

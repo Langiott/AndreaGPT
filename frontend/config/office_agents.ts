@@ -1,5 +1,6 @@
 import type { Role } from "../../backend/office/office_schema";
 import artwork from "../../img/Squadra Agenti per Dashboard UI.webp";
+import smallArtwork from "../../img/agenti-sidebar.webp";
 
 const agents = [
   { id: "secretary", name: "Segretario", character: "Morty", description: "Interpreta e smista le richieste", crop: [0, 168], face: [82, 142] },
@@ -13,6 +14,12 @@ export const officeAgents = agents.map(agent => ({
   portrait: {
     aspectRatio: `${agent.crop[1]} / 330`,
     backgroundImage: `url("${artwork}")`,
+    backgroundSize: "auto 145.455%",
+    backgroundPosition: `${100 * agent.crop[0] / (720 - agent.crop[1])}% top`,
+  },
+  sidebarPortrait: {
+    aspectRatio: `${agent.crop[1]} / 330`,
+    backgroundImage: `url("${smallArtwork}")`,
     backgroundSize: "auto 145.455%",
     backgroundPosition: `${100 * agent.crop[0] / (720 - agent.crop[1])}% top`,
   },

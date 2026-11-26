@@ -272,7 +272,10 @@ export function Mainboard({ currentActivity }: { currentActivity?: Operation | n
       event.stopPropagation();
       setOpen(value => !value);
     };
+    const touchDevice = matchMedia("(pointer: coarse)");
     const rightClick = (event: MouseEvent) => {
+      // Sul telefono il "menu contestuale" è il tocco prolungato (copia/incolla): mai bloccarlo.
+      if (touchDevice.matches || (event as PointerEvent).pointerType === "touch" || event.button !== 2) return;
       if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable], .message-content, .office-note, .collection-notes")) {
         lastRightClick = 0;
         return;

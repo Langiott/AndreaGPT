@@ -57,6 +57,9 @@ import {
   Link2,
   ScrollText,
   RefreshCw,
+  Bell,
+  Images,
+  FolderOpen,
 } from "lucide-react";
 import { TASKS } from "../utils/data";
 import { downloadConverted, type Converted } from "../utils/converted";
@@ -88,6 +91,7 @@ const FotoPanel = lazy(() => import("../components/FotoPanel").then(module => ({
 const PersonalBoard = lazy(() => import("../components/PersonalBoard").then(module => ({ default: module.PersonalBoard })));
 const SystemPanel = lazy(() => import("../components/SystemPanel").then(module => ({ default: module.SystemPanel })));
 const SocialPanel = lazy(() => import("../components/SocialPanel").then(module => ({ default: module.SocialPanel })));
+const WebSearchPanel = lazy(() => import("../components/WebSearchPanel").then(module => ({ default: module.WebSearchPanel })));
 const CandidaturePanel = lazy(() => import("../components/CandidaturePanel").then(module => ({ default: module.CandidaturePanel })));
 const CodePanel = lazy(() => import("../components/CodePanel").then(module => ({ default: module.CodePanel })));
 const AgentRun = lazy(() => import("../components/AgentRun").then(module => ({ default: module.AgentRun })));
@@ -389,6 +393,7 @@ export default function App() {
   const [socialOpen, setSocialOpen] = useState(false);
   const [candidatureOpen, setCandidatureOpen] = useState(false);
   const [fotoOpen, setFotoOpen] = useState(false);
+  const [webSearchOpen, setWebSearchOpen] = useState(false);
   const [personalBoardView, setPersonalBoardView] = useState<"report" | "chat" | null>(() => {
     const office = new URLSearchParams(location.search).get("office");
     return office === "chat" ? "chat" : office !== null ? "report" : null;
@@ -418,8 +423,14 @@ export default function App() {
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null);
   const [workNotices, setWorkNotices] = useState<WorkCompletion[]>([]);
   const [notificationPermission, setNotificationPermission] = useState(() => "Notification" in window ? Notification.permission : "unsupported");
+  const [noticeHistory, setNoticeHistory] = useState<(WorkCompletion & { at: number })[]>(() => { try { return JSON.parse(localStorage.getItem("work-notice-history") || "[]"); } catch { return []; } });
+  const [noticeHistoryOpen, setNoticeHistoryOpen] = useState(false);
+  const [noticeUnread, setNoticeUnread] = useState(0);
+  useEffect(() => { try { localStorage.setItem("work-notice-history", JSON.stringify(noticeHistory)); } catch { /* storage non disponibile */ } }, [noticeHistory]);
   const workingSections = useBackgroundWork(work => {
-    setWorkNotices(current => [...current.slice(-3), work]);
+    setWorkNotices([work]);
+    setNoticeHistory(current => [{ ...work, at: Date.now() }, ...current.filter(item => item.id !== work.id)].slice(0, 40));
+    setNoticeUnread(count => count + 1);
     notifyDone(work.label, workOutcome(work), () => openWorkSection(work.section));
   });
   const [operationSeconds, setOperationSeconds] = useState(0);
@@ -431,6 +442,11 @@ export default function App() {
   const sidebarBeforeOverlayRef = useRef<boolean | null>(null);
   const [installPrompt, setInstallPrompt] = useState<AppInstallPrompt | null>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  // Chat Image: scelta origine dell'esempio (img2img) e quanto discostarsene.
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [imageDenoise, setImageDenoise] = useState(0.6);
+  const imageGalleryRef = useRef<HTMLInputElement>(null);
+  const imageCameraRef = useRef<HTMLInputElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(() => document.fullscreenElement !== null);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
@@ -930,26 +946,11 @@ export default function App() {
     } catch { setError("Accesso al microfono negato o non disponibile."); }
   }
 
+  // Lo schermo intero si attiva solo dal pulsante, mai da solo al primo clic.
   useEffect(() => {
-    const phone = matchMedia("(max-width: 850px), (pointer: coarse)");
-    const appWindow = matchMedia("(display-mode: standalone), (display-mode: fullscreen)");
-    let enteringFullscreen = false;
-    const startFullscreen = (event: MouseEvent) => {
-      if (!event.isTrusted || phone.matches || appWindow.matches || !document.fullscreenEnabled || document.fullscreenElement || enteringFullscreen || navigator.userActivation?.isActive === false) return;
-      if (event.target instanceof Element && event.target.closest("input, textarea, select, a, [contenteditable], .fullscreen-button")) return;
-      enteringFullscreen = true;
-      void document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => { enteringFullscreen = false; });
-    };
-    const updateFullscreen = () => {
-      setFullscreen(document.fullscreenElement !== null);
-      if (document.fullscreenElement) window.removeEventListener("click", startFullscreen);
-    };
-    window.addEventListener("click", startFullscreen);
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement !== null);
     document.addEventListener("fullscreenchange", updateFullscreen);
-    return () => {
-      window.removeEventListener("click", startFullscreen);
-      document.removeEventListener("fullscreenchange", updateFullscreen);
-    };
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
   }, []);
 
   useEffect(() => {
@@ -2188,23 +2189,25 @@ export default function App() {
     }
   }
   async function processImage(prompt: string) {
-    if (!prompt.trim()) { setError("Descrivi l'immagine che vuoi creare."); return; }
+    // Con un esempio allegato si aspetta il testo: l'invio senza descrizione non parte.
+    const reference = attachments.find(attachment => attachment.kind === "image" && attachment.dataUrl);
+    if (!prompt.trim()) { setError(reference ? "Scrivi cosa creare a partire dall'esempio." : "Descrivi l'immagine che vuoi creare."); return; }
     if (!imageService.ready) { setError(imageService.message); return; }
     const assistantId = createId();
     const conversationId = activeConversationId;
-    setMessages(current => [...current, { id: createId(), role: "user", content: prompt }, { id: assistantId, role: "assistant", content: "ComfyUI · avvio" }]);
-    setInput(""); setError(""); setLoading(true);
+    setMessages(current => [...current, { id: createId(), role: "user", content: prompt, attachments: reference ? [reference] : undefined }, { id: assistantId, role: "assistant", content: "ComfyUI · avvio" }]);
+    setInput(""); setAttachments([]); setImagePickerOpen(false); setError(""); setLoading(true);
     const started = performance.now();
     const controller = new AbortController();
     abortRef.current = controller;
     askNotifyPermission();
     let jobId = "";
     try {
-      const response = await fetch("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, ...imageSettings, flow: imageModel }), signal: controller.signal });
+      const response = await fetch("/api/image/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, ...imageSettings, flow: imageModel, ...(reference ? { reference: reference.dataUrl, denoise: imageDenoise } : {}) }), signal: controller.signal });
       const queued = await response.json() as { error?: string; jobId?: string };
       if (!response.ok || !queued.jobId) throw new Error(queued.error || "Generazione non avviata.");
       jobId = queued.jobId;
-      let result: { error?: string; name?: string; url?: string; output?: string; width?: number; height?: number; seed?: number; device?: string; model?: string; generationMs?: number } = {};
+      let result: { error?: string; name?: string; url?: string; output?: string; width?: number; height?: number; seed?: number; device?: string; model?: string; generationMs?: number; log?: { group: string; label: string; value: string }[]; workflow?: Record<string, unknown> } = {};
       for (;;) {
         await new Promise(resolve => window.setTimeout(resolve, 1000));
         if (controller.signal.aborted) throw new DOMException("Generazione annullata.", "AbortError");
@@ -2226,7 +2229,7 @@ export default function App() {
         break;
       }
       if (!result.url || !result.name) throw new Error(result.error || "Generazione non riuscita.");
-      const complete = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content: "Immagine pronta.", metrics: { totalMs: result.generationMs ?? Math.round(performance.now() - started) }, generatedImage: { url: result.url!, name: result.name!, width: result.width!, height: result.height!, seed: result.seed!, output: result.output!, device: result.device, model: result.model ?? "Qwen/Qwen-Image-2.1" } } : message;
+      const complete = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content: "Immagine pronta.", metrics: { totalMs: result.generationMs ?? Math.round(performance.now() - started) }, generatedImage: { url: result.url!, name: result.name!, width: result.width!, height: result.height!, seed: result.seed!, output: result.output!, device: result.device, model: result.model ?? "Qwen/Qwen-Image-2.1", log: result.log, workflow: result.workflow } } : message;
       setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(complete), updatedAt: Date.now() } : conversation));
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(complete));
       setImageSettings(current => ({ ...current, seed: Math.floor(Math.random() * 2147483647) }));
@@ -2316,7 +2319,6 @@ export default function App() {
             <span>Modelli</span><span className="section-summary"><span className="count">{visibleModels.length}</span><ChevronDown size={14} /></span>
           </button>
           {!modelsCollapsed && <>
-          <SearchField className="search-box" label="Cerca un modello" value={search} onChange={setSearch} />
           <div className="model-list">
             {modelsLoading && <div className="loading-list"><span /><span /><span /></div>}
             {!modelsLoading && filteredModels.map((model) => (
@@ -2333,6 +2335,7 @@ export default function App() {
 
         <div className="sidebar-footer">
           <SidebarActivity visible={sidebarOpen} />
+          <button type="button" className="sidebar-action" onClick={() => { setWebSearchOpen(true); if (matchMedia("(max-width: 850px)").matches) setSidebarOpen(false); }}><Globe2 size={17} /> Cerca nel web</button>
           <button className="sidebar-action" onClick={() => setPersonalBoardView("report")}><LayoutDashboard size={17} /> Mainboard</button>
           <button type="button" className="sidebar-action" onClick={() => setSystemOpen(true)}><Cpu size={17} /> Sistema</button>
           <button className="sidebar-action" onClick={() => setBrainOpen(true)}><Folder size={17} /> Brain {workIndicator("Brain")}</button>
@@ -2341,18 +2344,11 @@ export default function App() {
           <button className="sidebar-action" onClick={() => setFotoOpen(true)}><Image size={17} /> Foto {workIndicator("Foto")}</button>
           <button className="sidebar-action" onClick={() => setCodeOpen(true)}><Code2 size={17} /> Code {workIndicator("Code")}</button>
           <button className="sidebar-action" onClick={() => openOutputFolder(null)}><Folder size={17} /> Output {workIndicator("Output", researchLoading || compactingChat || Boolean(activeOperation && /^(?:OCR|Analyze|Immagine|YOLO)/i.test(activeOperation.label)))}</button>
-          {notificationPermission === "default" && <button className="sidebar-action" onClick={askNotifyPermission}>Attiva notifiche</button>}
           <button className="sidebar-action" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /> Impostazioni</button>
           <button className="sidebar-action" onClick={() => setInstructionsOpen(true)}><FileText size={17} /> Istruzioni</button>
         </div>
       </aside>
       {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Chiudi menu" />}
-      <div className="work-notices" aria-live="polite">
-        {workNotices.map(work => <div className="work-notice" key={work.id}>
-          <button type="button" onClick={() => { setWorkNotices(current => current.filter(item => item.id !== work.id)); openWorkSection(work.section); }}><strong>{work.label}</strong><small>{workOutcome(work)}</small></button>
-          <button type="button" aria-label="Chiudi notifica" onClick={() => setWorkNotices(current => current.filter(item => item.id !== work.id))}><X size={16} /></button>
-        </div>)}
-      </div>
 
       <main className="main-panel chat-surface">
         {appearance.loaded && <UniverseBackground key={`${appearance.pictures.map(picture => picture.id).join("|")}:${appearance.preferences.pinned ?? ""}`} images={appearance.pictures.map(picture => ({ id: picture.id, url: picture.url }))} pinnedId={appearance.preferences.pinned} />}
@@ -2374,6 +2370,11 @@ export default function App() {
                 : <div><strong>{selectedModel?.name ?? "Caricamento modelli"}</strong></div>}
           </div>
           <div className="topbar-actions">
+            <button type="button" className="icon-button topbar-quick-refresh topbar-bell" onClick={() => { setNoticeHistoryOpen(open => !open); setNoticeUnread(0); }} aria-label="Storico notifiche" aria-expanded={noticeHistoryOpen} title="Notifiche"><Bell size={17} />{noticeUnread > 0 && <span className="topbar-bell-dot">{noticeUnread}</span>}</button>
+            {noticeHistoryOpen && <div className="notice-history" role="dialog" aria-label="Storico notifiche">
+              <div className="notice-history-head"><strong>Notifiche</strong>{noticeHistory.length > 0 && <button type="button" onClick={() => setNoticeHistory([])} aria-label="Svuota storico"><Trash2 size={15} /></button>}</div>
+              {noticeHistory.length ? noticeHistory.map(work => <button type="button" key={work.id} className="notice-history-item" onClick={() => { setNoticeHistoryOpen(false); openWorkSection(work.section); }}><strong>{work.label}</strong><small>{workOutcome(work)} · {new Date(work.at).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></button>) : <p>Nessuna notifica</p>}
+            </div>}
             <button type="button" className="icon-button topbar-quick-refresh" onClick={refreshChatPage} disabled={refreshDisabled} aria-label="Aggiorna pagina" title="Aggiorna"><RefreshCw size={17} /></button>
           </div>
         </header>
@@ -2423,7 +2424,11 @@ export default function App() {
                     {diagnosticsEnabled && message.brainSources && openMessagePanels[message.id]?.brain && <div className="citation-panel">{message.brainSources.length ? message.brainSources.map((source) => <div key={source.id}><button type="button" className="brain-source-link" onClick={() => setCiteOpen({ ...parseCitation(source.source), text: source.text })} title="Apri il documento sul tratto citato"><strong>[{source.id}] {source.source}</strong></button><span className="brain-feedback source-feedback" aria-label={`Valuta la fonte ${source.id}`}><button className={message.sourceFeedback?.[source.source] === 1 ? "active" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, 1)} title="Fonte giusta per questa domanda: sale per domande simili" aria-label="Fonte giusta"><ThumbsUp size={13} /></button><button className={message.sourceFeedback?.[source.source] === -1 ? "active negative" : ""} type="button" onClick={() => void rateBrainSource(message, messageIndex, source.source, -1)} title="Fonte sbagliata per questa domanda: scende per domande simili" aria-label="Fonte sbagliata"><ThumbsDown size={13} /></button></span><p>{source.text}</p></div>) : <p>Nessuna fonte pertinente trovata nell'indice.</p>}</div>}
                     {diagnosticsEnabled && message.webSources && openMessagePanels[message.id]?.web && <div className="citation-panel web-citations">{message.webSources.length ? message.webSources.map((source) => <div key={source.source}><strong>[{source.source}] <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a></strong><p>{source.excerpt}</p></div>) : <p>Nessuna fonte Web datata e verificabile trovata.</p>}</div>}
                     {message.logs?.length && openMessagePanels[message.id]?.logs ? <div className="citation-panel message-logs">{message.logs.map((line, index) => <p key={index}>{line}</p>)}</div> : null}
-                    {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details"><p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p></div>}
+                    {message.generatedImage && openMessagePanels[message.id]?.image && <div className="citation-panel image-details">{message.generatedImage.log?.length
+                      ? <>{[...new Set(message.generatedImage.log.map(row => row.group))].map(group => <details key={group} className="image-log-group"><summary>{group}</summary><dl>{message.generatedImage!.log!.filter(row => row.group === group).map((row, index) => <div key={index}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl></details>)}
+                        <details className="image-log-group"><summary>File</summary><dl><div><dt>Output</dt><dd>{message.generatedImage.output}</dd></div></dl></details>
+                        {message.generatedImage.workflow && <details className="image-log-group"><summary>Workflow JSON</summary><pre>{JSON.stringify(message.generatedImage.workflow, null, 2)}</pre></details>}</>
+                      : <p>Modello: {message.generatedImage.model ?? "Qwen/Qwen-Image-2.1"}<br />Formato: {message.generatedImage.width}×{message.generatedImage.height}<br />Seed: {message.generatedImage.seed}<br />Dispositivo: {message.generatedImage.device ?? "xpu"}<br />File: {message.generatedImage.output}</p>}</div>}
                     {diagnosticsEnabled && message.metrics && openMessagePanels[message.id]?.metrics && <div className="citation-panel metrics-citations"><p>
                       {message.metrics.retrievalMs !== undefined && <>Ricerca: {(message.metrics.retrievalMs / 1000).toFixed(2)} s · </>}
                       {message.metrics.firstTokenMs !== undefined && <>Prima risposta: {(message.metrics.firstTokenMs / 1000).toFixed(1)} s · </>}
@@ -2444,6 +2449,16 @@ export default function App() {
             {voce.attiva && <div className="audio-status voice-status" role="status" aria-live="polite"><span className={voce.fase === "ascolto" ? "recording-dot" : "voice-dot"} /><strong>{voce.fase === "ascolto" ? "Ascolto" : voce.fase === "parla" ? "Parla" : "Penso"}</strong>{voce.parziale && <span className="voice-text">{voce.parziale}</span>}</div>}
             {(recording || transcribing) && <div className="audio-status" role="status"><span className={recording ? "recording-dot" : ""} />{recording ? "Sto registrando audio" : "Sto trascrivendo audio"}</div>}
             {activeOperation && !activeOperation.inline && <div className="operation-status" role="status" aria-live="polite"><span className="operation-pulse" /><span><strong>{activeOperation.label} · {formatElapsed(operationSeconds)}</strong><small>{activeOperation.detail}</small></span></div>}
+            {specialMode === "image" && <>
+              <input ref={imageGalleryRef} className="file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => { void addAttachments(event.target.files ?? []); event.target.value = ""; setImagePickerOpen(false); }} />
+              <input ref={imageCameraRef} className="file-input" type="file" accept="image/*" capture="environment" onChange={event => { void addAttachments(event.target.files ?? []); event.target.value = ""; setImagePickerOpen(false); }} />
+              {imagePickerOpen && <div id="image-reference-options" className="image-reference-options" aria-label="Origine immagine di esempio">
+                <button type="button" disabled={loading} onClick={() => imageGalleryRef.current?.click()}><Images size={17} /> Galleria</button>
+                <button type="button" disabled={loading} onClick={() => imageCameraRef.current?.click()}><Camera size={17} /> Fotocamera</button>
+                <button type="button" disabled={loading} onClick={() => { fileInputRef.current?.click(); setImagePickerOpen(false); }}><FolderOpen size={17} /> File</button>
+              </div>}
+              {attachments.some(attachment => attachment.kind === "image") && <label className="image-denoise-row"><span>Variazione</span><input type="range" min={0.2} max={0.95} step={0.05} value={imageDenoise} onChange={event => setImageDenoise(Number(event.target.value))} /><strong>{Math.round(imageDenoise * 100)}%</strong></label>}
+            </>}
             {attachments.length > 0 && <AttachmentList attachments={attachments} removable onRemove={(id) => setAttachments((current) => current.filter((attachment) => attachment.id !== id))} />}
             {brainSource && <div className="mention-filter-chip" title="Filtro Brain attivo: la ricerca è limitata a questa fonte. Rimuovilo per cercare in tutto l'archivio."><span><span>@</span>{brainSource}</span><button type="button" onClick={() => setBrainSource("")} aria-label="Rimuovi filtro fonte Brain"><X size={14} /></button></div>}
             <div className="composer-row">
@@ -2452,7 +2467,7 @@ export default function App() {
                 className="file-input"
                 type="file"
                 multiple
-                accept={specialMode === "ocr" ? "image/*,.pdf" : specialMode === "video" ? VIDEO_ACCEPT : specialMode === "yolo" || specialMode === "analyze" ? "image/*" : specialMode === "normal" ? "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1,audio/*,.aac,.flac,.m4a,.mp3,.mpeg,.mp4,.ogg,.wav,.webm" : "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"}
+                accept={specialMode === "ocr" ? "image/*,.pdf" : specialMode === "image" ? "image/png,image/jpeg,image/webp" : specialMode === "video" ? VIDEO_ACCEPT : specialMode === "yolo" || specialMode === "analyze" ? "image/*" : specialMode === "normal" ? "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1,audio/*,.aac,.flac,.m4a,.mp3,.mpeg,.mp4,.ogg,.wav,.webm" : "image/*,.pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.h,.hpp,.sql,.yaml,.yml,.log,.sh,.ps1"}
                 onChange={(event) => void addAttachments(event.target.files ?? [])}
               />
               <input ref={videoInputRef} className="file-input" type="file" accept={VIDEO_ACCEPT} onChange={event => { const file = event.target.files?.[0]; if (file) void transcribeVideo({ file }); }} />
@@ -2463,17 +2478,8 @@ export default function App() {
                   if (!(event.target instanceof Element) || !event.target.closest("button:not(:disabled)")) return;
                   setComposerToolsOpen(false);
                 }}>
-                  <div className="composer-tools-actions">
-                    <button type="button" className={fileMenuOpen ? "active" : ""} onClick={(event) => { event.stopPropagation(); setFileMenuOpen((open) => !open); }} aria-expanded={fileMenuOpen} aria-controls={fileMenuOpen ? "composer-file-tools" : undefined} disabled={loading}><Folder size={17} /><span>File</span></button>
-                    <button type="button" onClick={newChat} disabled={loading} aria-label="Nuova chat" title="Nuova chat"><Plus size={21} /></button>
-                    <button type="button" onClick={refreshChatPage} disabled={refreshDisabled}><RefreshCw size={17} /><span>Aggiorna</span></button>
-                    <button type="button" className="fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Esci dallo schermo intero" : "Attiva schermo intero"} title={fullscreen ? "Esci dallo schermo intero" : "Schermo intero"}>{fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}</button>
-                  </div>
-                  {fileMenuOpen && <div id="composer-file-tools" className="composer-primary-tools composer-file-tools">
-                    <button type="button" onClick={() => openSpecialChat("ocr")} disabled={loading}><ScanLine size={17} /><span>OCR</span></button>
-                    <button type="button" onClick={() => openSpecialChat("convert")} disabled={loading}><FileOutput size={17} /><span>Converti</span></button>
-                  </div>}
                   {installPrompt && <button type="button" onClick={() => void installApp()}><Download size={17} /><span>Installa app</span></button>}
+                  {notificationPermission === "default" && <button type="button" onClick={askNotifyPermission}><Bell size={17} /><span>Attiva notifiche</span></button>}
                   <div className="composer-primary-tools">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading || attachments.length >= MAX_ATTACHMENTS || specialMode === "agent"}><Paperclip size={17} /><span>Allega file</span></button>
                     <button type="button" onClick={() => void compactCurrentChat()} disabled={loading || compactingChat || !messages.some(message => message.content.trim())}><Archive size={17} /><span>{compactingChat ? "Compatto…" : "Compatta chat"}</span></button>
@@ -2492,8 +2498,19 @@ export default function App() {
                     <button type="button" className={webSearchEnabled ? "active" : ""} onClick={() => setWebSearchEnabled((enabled) => !enabled)} disabled={loading || brainPrivate || webAvailable === false || specialMode === "agent"} aria-pressed={webSearchEnabled} title={brainPrivate ? "Web bloccato: la conversazione Brain è privata" : webAvailable === false ? "Ricerca Web non disponibile" : webSearchEnabled ? "Ricerca Web attiva" : "Ricerca Web disattivata"}><Globe2 size={18} /><span>Web {webSearchEnabled ? "ON" : "OFF"}</span></button>
                     <button type="button" className={brainEnabled ? "active" : ""} onClick={() => setBrainMode(!brainEnabled)} disabled={loading || specialMode === "agent"} aria-pressed={brainEnabled} title={brainEnabled ? "I documenti Brain vengono consultati" : "Brain spento: i documenti non vengono consultati"}><Network size={18} /><span>Brain {brainEnabled ? "ON" : "OFF"}</span></button>
                   </div>
+                  {fileMenuOpen && <div id="composer-file-tools" className="composer-primary-tools composer-file-tools">
+                    <button type="button" onClick={() => openSpecialChat("ocr")} disabled={loading}><ScanLine size={17} /><span>OCR</span></button>
+                    <button type="button" onClick={() => openSpecialChat("convert")} disabled={loading}><FileOutput size={17} /><span>Converti</span></button>
+                  </div>}
+                  <div className="composer-tools-actions">
+                    <button type="button" className={fileMenuOpen ? "active" : ""} onClick={(event) => { event.stopPropagation(); setFileMenuOpen((open) => !open); }} aria-expanded={fileMenuOpen} aria-controls={fileMenuOpen ? "composer-file-tools" : undefined} disabled={loading}><Folder size={17} /><span>File</span></button>
+                    <button type="button" onClick={newChat} disabled={loading} aria-label="Nuova chat" title="Nuova chat"><Plus size={21} /></button>
+                    <button type="button" onClick={refreshChatPage} disabled={refreshDisabled}><RefreshCw size={17} /><span>Aggiorna</span></button>
+                    <button type="button" className="fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Esci dallo schermo intero" : "Attiva schermo intero"} title={fullscreen ? "Esci dallo schermo intero" : "Schermo intero"}>{fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}</button>
+                  </div>
                 </div>}
               </div>
+              {specialMode === "image" && <button type="button" className="attach-button" aria-label="Immagine di esempio" aria-expanded={imagePickerOpen} aria-controls={imagePickerOpen ? "image-reference-options" : undefined} disabled={loading || attachments.some(attachment => attachment.kind === "image")} onClick={() => setImagePickerOpen(open => !open)}><Paperclip size={19} /></button>}
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -2558,6 +2575,7 @@ export default function App() {
         </Modal>
       )}
 
+      {webSearchOpen && <Modal title="Cerca nel web" className="fit-modal" mobilePage wide onClose={() => setWebSearchOpen(false)}><Suspense fallback={<div className="thinking">Caricamento…</div>}><WebSearchPanel /></Suspense></Modal>}
       {fotoOpen && <Modal title="Foto" className="fit-modal foto-modal" headerSlot="foto-modal-actions" mobilePage wide closeOnBackdrop={false} onClose={() => setFotoOpen(false)}><Suspense fallback={<div className="foto-apertura" role="status" aria-label="Apertura foto"><span className="operation-pulse" /></div>}><FotoPanel /></Suspense></Modal>}
       {personalBoardView && <Modal title={null} ariaLabel="Chatbot, collezioni e report" className="personal-board-modal" headerSlot="personal-board-actions" mobilePage wide closeOnBackdrop={false} onClose={() => {
         const url = new URL(location.href);

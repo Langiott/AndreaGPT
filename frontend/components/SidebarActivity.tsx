@@ -24,12 +24,12 @@ export function SidebarActivity({ visible }: { visible: boolean }) {
       <div className="sidebar-agent">
         <strong>Andrea</strong>
         <span className="sidebar-agent-frame">
-          <img className="sidebar-mascot" src="/mascotte-welcome.png" alt="" />
+          <img className="sidebar-mascot" src="/mascotte-sidebar.png" alt="" />
         </span>
       </div>
       {officeAgents.map(agent => <div key={agent.id} className={`sidebar-agent${activeRole === agent.id ? " active" : ""}`} title={agent.name}>
         <strong>{agent.character}</strong>
-        <span className="sidebar-agent-frame"><span className="office-agent-portrait" style={agent.portrait} /></span>
+        <span className="sidebar-agent-frame"><span className="office-agent-portrait" style={agent.sidebarPortrait} /></span>
       </div>)}
     </div>
   </section>;

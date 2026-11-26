@@ -10,9 +10,11 @@ const ask = (office: ReturnType<typeof createOffice>, text: string) => office.re
 
 test("chat principale: le azioni personali vanno all'ufficio, il resto alla chat", () => {
   const office = ["salva la carta One Piece Luffy OP01-024", "che abbonamenti ho?", "dov'è la carta di Luffy", "annulla", "/conferma 1a2b3c4d",
-    "fammi un riassunto di https://example.com/a", "quanto vale la carta Luffy OP01-024?", "quali carte mi mancano del set OP01?", "sposta le carte nelle collezioni"];
+    "fammi un riassunto di https://example.com/a", "quanto vale la carta Luffy OP01-024?", "quali carte mi mancano del set OP01?", "sposta le carte nelle collezioni",
+    "che note ho?", "crea la collezione Vinili", "elimina l abbonamento Spotify", "abbonamento annuale Amazon Prime 49,90 rinnovo 15 marzo"];
   const chat = ["come si gioca a carte?", "spiegami la carta costituzionale", "cerca la carta igienica in offerta", "ho una carta di credito scaduta, che faccio?",
-    "quali sono le carte più rare di One Piece?", "salva questo codice python in un file", "leggi https://example.com e dimmi cosa dice"];
+    "quali sono le carte più rare di One Piece?", "salva questo codice python in un file", "leggi https://example.com e dimmi cosa dice",
+    "cerca sul web le uscite di dicembre", "crea una storia breve", "elimina il file temporaneo"];
   for (const text of office) assert.notEqual(chatOfficeText(text, today), "", text);
   for (const text of chat) assert.equal(chatOfficeText(text, today), "", text);
 });
@@ -29,7 +31,7 @@ test("salva, ritrova, set mancanti e annulla l'ultima carta", async () => {
     assert.match(await ask(office, "salva la carta One Piece Luffy OP01-001"), /catalogato in «One Piece» · Carta/);
     assert.match(await ask(office, "salva Nami OP01-003 e Zoro OP01-005 di One Piece"), /Nami OP01-003.*\n.*Zoro OP01-005/s);
     assert.match(await ask(office, "ce l'ho la carta di Zoro?"), /1 elemento trovato\nZoro OP01-005/);
-    assert.match(await ask(office, "quali carte mi mancano del set OP01 di One Piece?"), /3 carte possedute.*Mancanti fino a OP01-005: OP01-002, OP01-004/s);
+    assert.match(await ask(office, "quali carte mi mancano del set OP01 di One Piece?"), /3 carte possedute.*Mancanti fino a OP01-005: OP01-002, 004 \(2 carte\)/s);
     assert.match(await ask(office, "annulla"), /Annullato: Nami OP01-003, Zoro OP01-005/);
     assert.deepEqual(office.collections.archive().items.map(item => item.title), ["Luffy OP01-001"]);
     assert.match(await ask(office, "annulla"), /Annullato: collezione One Piece/);
@@ -53,6 +55,20 @@ test("prezzo di una carta delle collezioni: fonti, mediana e salvataggio solo su
     assert.ok(code);
     assert.match(await ask(office, `/conferma ${code}`), /Prezzo salvato/);
     assert.match(office.collections.archive().items[0].notes, /Prezzo indicativo 14,00\s€/);
+  } finally { office.close(); }
+});
+
+test("prezzo: scarta box, buste e fonti che non citano la carta; con meno di 2 prezzi non propone niente", async () => {
+  const office = createOffice(":memory:", "Europe/Rome", { ...noModel, search: async () => [
+    { title: "One Piece Card Game Romance Dawn OP01 Display – 24 Buste", url: "https://box.example", snippet: "", candidate: { amount: 109.99, currency: "EUR" } },
+    { title: "Carte One Piece in giapponese", url: "https://shop.example", snippet: "", candidate: { amount: 50, currency: "EUR" } },
+    { title: "Monkey.D.Luffy (OP01-024) - Cardmarket", url: "https://cm.example", snippet: "da 2,50 €", candidate: { amount: 2.5, currency: "EUR" } },
+  ] });
+  try {
+    await ask(office, "salva la carta One Piece Luffy OP01-024");
+    const reply = await ask(office, "quanto vale la carta Luffy OP01-024?");
+    assert.match(reply, /Prezzo non affidabile.*un solo prezzo/);
+    assert.doesNotMatch(reply, /109|\/conferma/);
   } finally { office.close(); }
 });
 
@@ -98,5 +114,18 @@ test("riassunto di un link senza salvare e dentro una collezione", async () => {
     office.collections.saveCollection({ title: "Letture", description: "" });
     assert.match(await ask(office, `riassumi ${url} nella collezione Letture`), /Riassunto salvato in «Letture»/);
     assert.equal(office.collections.archive().items[0].types[0], "Link");
+  } finally { office.close(); }
+});
+
+test("la stessa voce aggiunta due volte non si duplica; un appuntamento in un altro giorno sì", async () => {
+  const office = createOffice(":memory:", "Europe/Rome", noModel);
+  try {
+    await office.add({ kind: "film", title: "Arrival" }).done;
+    const again = await office.add({ kind: "film", title: "arrival" }).done;
+    assert.match(again?.result?.message ?? "", /Già presente: Arrival/);
+    await office.add({ kind: "appointment", title: "Dentista", day: "2026-12-01", time: "17:30" }).done;
+    await office.add({ kind: "appointment", title: "Dentista", day: "2026-12-08", time: "17:30" }).done;
+    assert.equal(office.snapshot().entries.filter(entry => entry.kind === "film").length, 1);
+    assert.equal(office.snapshot().entries.filter(entry => entry.kind === "appointment").length, 2);
   } finally { office.close(); }
 });

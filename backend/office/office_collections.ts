@@ -72,7 +72,17 @@ export function createCollectionStore(db: DatabaseSync) {
     const row = db.prepare("SELECT id, collectionId, title, notes, types FROM collection_items WHERE collectionId = ? AND name = ?").get(collectionId, normalized(name));
     return row && decodeItem(row);
   };
-  const itemByName = (collectionId: string, name: string) => requireRecord(findItem(collectionId, name), `Elemento «${name}» non trovato nella collezione.`);
+  // Nome esatto; altrimenti l'unico elemento il cui titolo contiene (o è contenuto in) quello chiesto:
+  // "Dark Side of the Moon" trova "Dark Side of the Moon dei Pink Floyd". Con più candidati non sceglie.
+  const itemByName = (collectionId: string, name: string) => {
+    const exact = findItem(collectionId, name);
+    if (exact) return exact;
+    const key = normalized(name);
+    const candidates = key.length < 3 ? [] : (db.prepare("SELECT id, collectionId, title, notes, types, name FROM collection_items WHERE collectionId = ?").all(collectionId) as { name: string }[])
+      .filter(row => row.name.includes(key) || key.includes(row.name));
+    if (candidates.length > 1) throw new OfficeError(`Più elementi corrispondono a «${name}»: specifica il titolo completo.`);
+    return requireRecord(candidates[0] && decodeItem(candidates[0] as never), `Elemento «${name}» non trovato nella collezione.`);
+  };
   function saveCollection(input: z.infer<typeof collectionInput>, id?: string) {
     const key = normalized(input.title);
     const existing = db.prepare("SELECT id FROM collections WHERE name = ?").get(key);

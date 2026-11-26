@@ -90,7 +90,12 @@ export async function readPageForNote(link: string) {
       const title = text(html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? host);
       const content = html.replace(/<!--[\s\S]*?-->/g, "")
         .replace(/<(script|style|nav|header|footer|aside|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
-      const body = text(content.match(/<(article|main)\b[^>]*>([\s\S]*?)<\/\1>/i)?.[2] ?? content).slice(0, 12_000);
+      // Prima i paragrafi <p>: è il testo vero della pagina. Il resto (tabelle, infobox, attributi con JSON
+      // come su Wikipedia) inquina il riassunto. Fallback: article/main o pagina intera.
+      const cleaned = content.replace(/<(table|figure|sup|form|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/\s(?:data-[\w-]+|style|class|about|typeof)\s*=\s*(?:"[^"]*"|'[^']*')/gi, "");
+      const paragraphs = [...cleaned.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)].map(match => text(match[1])).filter(paragraph => paragraph.length > 40);
+      const fromParagraphs = paragraphs.join("\n");
+      const body = (fromParagraphs.length > 400 ? fromParagraphs : text(cleaned.match(/<(article|main)\b[^>]*>([\s\S]*?)<\/\1>/i)?.[2] ?? cleaned)).slice(0, 12_000);
       if (body.length < 60) throw new OfficeError("La pagina non contiene abbastanza testo per un riassunto.");
       return { title, body, url: url.href };
     } finally { await dispatcher.destroy(); }

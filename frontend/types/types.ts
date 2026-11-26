@@ -43,7 +43,9 @@ export interface ChatMessage {
   metrics?: Record<string, number>;
   diagnostics?: DiagnosticTrace;
   diagnosticFeedback?: 1 | -1;
-  generatedImage?: { url: string; name: string; width: number; height: number; seed: number; output: string; device?: string; model?: string };
+  generatedImage?: { url: string; name: string; width: number; height: number; seed: number; output: string; device?: string; model?: string;
+    /** Log completo di ComfyUI: parametri, tempi per fase, sistema, grafo. */
+    log?: { group: string; label: string; value: string }[]; workflow?: Record<string, unknown> };
   generatedFile?: { name: string; type: string; data: string };
   /** Immagini prodotte da uno strumento (es. YOLO annotato), apribili a schermo intero. */
   resultImages?: { url: string; name: string; plain?: string; cutout?: string }[];
