@@ -559,6 +559,8 @@ export default function App() {
   }
   const summaryToggle = <label className="welcome-chip" title="A fine trascrizione il modello scrive riassunto e punti d'azione"><input type="checkbox" checked={audioSummary} onChange={(event) => setAudioSummary(event.target.checked)} /> Riassumi dopo</label>;
   const abortRef = useRef<AbortController | null>(null);
+  const imageControllersRef = useRef(new Map<string, AbortController>());
+  const [imageJobCount, setImageJobCount] = useState(0);
   const analyzeAbortRef = useRef<AbortController | null>(null);
   const analyzeConversationIdRef = useRef("");
   const researchAbortRef = useRef<AbortController | null>(null);
@@ -1313,7 +1315,7 @@ export default function App() {
     channel.onmessage = (event) => {
       if (event.data !== "nuova-scheda") return;
       staleTabRef.current = true;
-      if (!loadingRef.current && !fotoOpenRef.current) reloadStaleTab();
+      if (!loadingRef.current && !fotoOpenRef.current && imageControllersRef.current.size === 0) reloadStaleTab();
     };
     // Una scheda ricaricata perché vecchia non si annuncia: altrimenti le schede si ricaricherebbero a vicenda.
     let reloadedAsStale = false;
@@ -1322,7 +1324,7 @@ export default function App() {
     return () => channel.close();
   }, []);
   useEffect(() => {
-    if (!staleTabRef.current || loading || fotoOpen) return;
+    if (!staleTabRef.current || loading || fotoOpen || imageJobCount > 0) return;
     // La risposta appena finita va salvata, ma solo le chat più aggiornate qui che nel browser.
     try {
       const stored = JSON.parse(localStorage.getItem("andreagpt-conversations") ?? "[]") as Conversation[];
@@ -1330,7 +1332,7 @@ export default function App() {
       if (newer.length) persistConversations([...newer, ...stored.filter((other) => !newer.some((mine) => mine.id === other.id))]);
     } catch { /* memoria piena: si ricarica comunque */ }
     reloadStaleTab();
-  }, [loading, fotoOpen]);
+  }, [loading, fotoOpen, imageJobCount]);
 
   useEffect(() => {
     if (staleTabRef.current) return;
@@ -1578,7 +1580,7 @@ export default function App() {
     abortRef.current?.abort();
     activeConversationIdRef.current = conversation.id;
     stickToBottomRef.current = true;
-    setLoading(false);
+    setLoading(imageControllersRef.current.has(conversation.id));
     setActiveOperation(null);
     setActiveConversationId(conversation.id);
     setMessages(conversation.messages);
@@ -1944,6 +1946,7 @@ export default function App() {
 
   function stopGeneration() {
     if (activeOperation?.label.startsWith("Analyze") && analyzeConversationIdRef.current === activeConversationIdRef.current) analyzeAbortRef.current?.abort();
+    else if (imageControllersRef.current.has(activeConversationIdRef.current)) imageControllersRef.current.get(activeConversationIdRef.current)?.abort();
     else abortRef.current?.abort();
   }
 
@@ -2194,12 +2197,22 @@ export default function App() {
     if (!prompt.trim()) { setError(reference ? "Scrivi cosa creare a partire dall'esempio." : "Descrivi l'immagine che vuoi creare."); return; }
     if (!imageService.ready) { setError(imageService.message); return; }
     const assistantId = createId();
-    const conversationId = activeConversationId;
-    setMessages(current => [...current, { id: createId(), role: "user", content: prompt, attachments: reference ? [reference] : undefined }, { id: assistantId, role: "assistant", content: "ComfyUI · avvio" }]);
+    const conversationId = activeConversationId || createId();
+    if (imageControllersRef.current.has(conversationId)) return;
+    const initialMessages: ChatMessage[] = [...messages, { id: createId(), role: "user", content: prompt, attachments: reference ? [reference] : undefined }, { id: assistantId, role: "assistant", content: "ComfyUI - avvio" }];
+    activeConversationIdRef.current = conversationId;
+    setActiveConversationId(conversationId);
+    setMessages(initialMessages);
+    setConversations(current => {
+      const existing = current.find(item => item.id === conversationId);
+      const conversation: Conversation = { ...existing, id: conversationId, title: existing?.customTitle ? existing.title : createConversationTitleFromMessages(initialMessages), mode: "image", messages: initialMessages, modelId: selectedModelId, updatedAt: Date.now() };
+      return existing ? current.map(item => item.id === conversationId ? conversation : item) : [conversation, ...current];
+    });
     setInput(""); setAttachments([]); setImagePickerOpen(false); setError(""); setLoading(true);
     const started = performance.now();
     const controller = new AbortController();
-    abortRef.current = controller;
+    imageControllersRef.current.set(conversationId, controller);
+    setImageJobCount(imageControllersRef.current.size);
     askNotifyPermission();
     let jobId = "";
     try {
@@ -2221,7 +2234,9 @@ export default function App() {
             : progress.phase === "loading" ? "caricamento modelli"
             : progress.phase === "decoding" ? "decodifica"
             : `passo ${progress.value}/${progress.max} · ${Math.round(progress.value / Math.max(1, progress.max) * 100)}%`;
-          setMessages(current => current.map(message => message.id === assistantId ? { ...message, content: `ComfyUI · ${phase} · ${elapsed}` } : message));
+          const update = (message: ChatMessage): ChatMessage => message.id === assistantId ? { ...message, content: `ComfyUI - ${phase} - ${elapsed}` } : message;
+          setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(update), updatedAt: Date.now() } : conversation));
+          if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(update));
           continue;
         }
         if (!jobResponse.ok) throw new Error(job.error || "Generazione immagine non riuscita.");
@@ -2242,7 +2257,11 @@ export default function App() {
       setConversations(current => current.map(conversation => conversation.id === conversationId ? { ...conversation, messages: conversation.messages.map(failed), updatedAt: Date.now() } : conversation));
       if (activeConversationIdRef.current === conversationId) setMessages(current => current.map(failed));
       if (!cancelled) notifyDone("Immagine non riuscita", content, () => goToConversation(conversationId));
-    } finally { if (abortRef.current === controller) abortRef.current = null; setLoading(false); }
+    } finally {
+      imageControllersRef.current.delete(conversationId);
+      setImageJobCount(imageControllersRef.current.size);
+      if (activeConversationIdRef.current === conversationId) setLoading(false);
+    }
   }
 
   if (new URLSearchParams(window.location.search).get("embeddingSpace") === "1") return <Suspense fallback={<div className="thinking">Caricamento spazio 3D…</div>}><EmbeddingSpace standalone /></Suspense>;
