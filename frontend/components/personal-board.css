@@ -15,7 +15,8 @@
 .personal-board-modal > header > button { color: var(--office-ink); }
 .personal-board-modal > .modal-body { padding: clamp(9px, 1.5vw, 16px); background: var(--office-paper); }
 .office-empty { margin: 0; color: var(--office-muted); }
-.office-toolbar { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.office-toolbar { display: flex; flex: 1 1 auto; align-items: center; gap: 5px; min-width: 0; }
+.personal-board-modal .office-toolbar > button { flex: 1 1 0; min-width: 0; }
 .office-toolbar > button { flex: 0 0 auto; white-space: nowrap; }
 .office-toolbar .office-model[aria-expanded="true"] { background: var(--cosmic-hover); border-color: var(--office-accent); }
 .office-crew { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -130,11 +131,11 @@
 .office-confirmation .office-actions { justify-content: flex-end; }
 .personal-board .office-confirmation .office-confirm-action { color: #fff; background: #96382e; }
 .office-collections { display: grid; gap: 12px; min-width: 0; }
-.collection-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
-.personal-board .collection-toolbar select { max-width: 190px; min-height: 42px; padding: 5px 4px 5px 7px; font-size: 13px; text-overflow: ellipsis; }
+.collection-toolbar { display: flex; align-items: center; gap: 6px; }
+.collection-toolbar > * { flex: 1 1 0; min-width: 0; }
+.personal-board .collection-toolbar select { max-width: none; min-height: 42px; padding: 5px 4px 5px 7px; font-size: 13px; text-overflow: ellipsis; }
 .personal-board .collection-toolbar button { min-width: 0; min-height: 42px; white-space: nowrap; }
 .personal-board .collection-toolbar button svg { flex-shrink: 0; }
-.collection-new { justify-self: end; }
 .collection-toolbar button[aria-pressed="true"], .collection-gallery button[aria-pressed="true"] { color: #80520d; background: #fbe6ac; border-color: #d6ae5d; }
 .office-collections .search-field input { min-height: 42px; }
 .collection-heading, .collection-item > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
@@ -215,3 +216,46 @@
 .office-renewals { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; padding: 6px 9px; border: 1px solid var(--office-accent); border-radius: 7px; font: 600 12px/1.4 system-ui, sans-serif; }
 .office-renewals span::before { content: "⟳ "; }
 .office-chat-clear { margin-left: auto; }
+
+/* Collezione: griglia foto compatta, elimina in alto a destra. */
+.collection-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(30%, 120px), 1fr)); gap: 4px; }
+.collection-photo-grid figure { position: relative; margin: 0; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: #315b410d; }
+.personal-board .collection-photo-grid .collection-photo-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: none; }
+.collection-photo-grid img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.personal-board .collection-photo-grid .collection-photo-delete { position: absolute; top: 4px; right: 4px; min-height: 28px; width: 28px; padding: 0; border-radius: 50%; background: #fffc; }
+.personal-board .collection-upload { display: inline-flex; align-items: center; gap: 5px; min-height: 33px; padding: 5px 9px; font: 600 12px/1.3 system-ui, sans-serif; border: 1px solid var(--office-line); border-radius: 7px; background: var(--office-paper); cursor: pointer; }
+.personal-board .collection-upload[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.collection-form-col { display: grid; gap: 8px; }
+.collection-form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+@media (max-width: 520px) { .collection-form-row { grid-template-columns: minmax(0, 1fr); } }
+.personal-board-modal .office-toolbar > button.office-chat-clear { flex: 0 0 auto; min-width: 36px; }
+.collection-form-col { display: grid; gap: 8px; }
+.collection-form-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+@media (max-width: 520px) { .collection-form-row { grid-template-columns: minmax(0, 1fr); } }
+.personal-board-modal .office-toolbar > button.office-chat-clear { flex: 0 0 auto; min-width: 36px; }
+
+/* Visore foto della collezione. */
+.collection-viewer { position: fixed; inset: 0; z-index: 1000; display: grid; grid-template-rows: minmax(0, 1fr) auto; background: #111d; }
+.collection-viewer-stage { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 10px; min-height: 0; }
+.collection-viewer-stage img { width: 100%; height: 100%; object-fit: contain; min-height: 0; }
+.personal-board .collection-viewer-stage > button { width: 44px; height: 44px; padding: 0; border-radius: 50%; background: #fffd; }
+.personal-board .collection-viewer-stage > .collection-viewer-close { position: absolute; top: 10px; right: 10px; }
+.collection-viewer-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; align-items: center; padding: 10px; background: var(--office-paper); }
+.collection-viewer-form input, .collection-viewer-form select { min-height: 40px; }
+.collection-viewer-types { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
+.personal-board .collection-viewer-types button { min-height: 30px; border-radius: 16px; }
+.collection-viewer-types input { flex: 1 1 90px; min-width: 0; }
+.personal-board .collection-viewer-form > button { min-height: 40px; }
+@media (max-width: 640px) {
+  .collection-viewer-stage { grid-template-columns: 1fr; }
+  .personal-board .collection-viewer-stage > button:not(.collection-viewer-close) { position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; }
+  .personal-board .collection-viewer-stage > button:first-child { left: 8px; }
+  .personal-board .collection-viewer-stage > button:nth-child(3) { right: 8px; }
+}
+.collection-viewer-form > :not(input):not(select) { grid-column: 1 / -1; }
+.collection-viewer-field { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.collection-viewer-field strong { flex: 0 0 30%; overflow-wrap: anywhere; font-size: 14px; }
+.collection-viewer-field input { flex: 1 1 0; min-width: 0; min-height: 40px; }
+.personal-board .collection-viewer-field button { min-height: 40px; flex: 0 0 auto; }
+.personal-board .collection-viewer-add { justify-self: start; min-height: 36px; }
+.collection-viewer-form { max-height: 50vh; overflow-y: auto; }

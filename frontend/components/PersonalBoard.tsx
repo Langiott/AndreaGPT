@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Activity, CalendarDays, Camera, ChevronLeft, ChevronRight, Clapperboard, Download, FileText, FolderOpen, GitBranch, House, Images, Layers, Mail, Notebook, Paperclip, Pencil, Send, ShoppingBag, Trash2, Wallet, X } from "lucide-react";
+import { CalendarDays, Camera, ChevronLeft, ChevronRight, Clapperboard, Download, FileText, FolderOpen, GitBranch, House, Images, Layers, Mail, Notebook, Paperclip, Pencil, Send, ShoppingBag, Trash2, Wallet, X } from "lucide-react";
 import type { Entry, Job, RecordItem, Result, Role } from "../../backend/office/office_schema";
 import { officeAttachmentCount, officeAttachmentLimit } from "../../backend/office/office_attachment_limits";
 import { extraFields, isExtra, kinds, labels, sectionActions, type Operation } from "../../backend/office/office_sections";
@@ -342,7 +342,7 @@ export function PersonalBoard({ models, startInChat }: { models: ModelInfo[]; st
   const toolbar = <nav className="office-toolbar" aria-label="Viste della Mainboard">
     <button type="button" aria-pressed={chatOpen} onClick={() => { setChatOpen(!chatOpen); setSettings(false); }}>Chatbot</button>
     <button type="button" aria-pressed={!chatOpen && tab === "collections"} onClick={() => { setSelection({}); selectTab("collections"); setCollectionKey(value => value + 1); }}>Collezioni</button>
-    <button type="button" aria-pressed={!chatOpen && tab === "log"} onClick={() => selectTab("log")}><Activity size={14} /> Vedi Report</button>
+    <button type="button" aria-pressed={!chatOpen && tab === "log"} onClick={() => selectTab("log")}>Report</button>
     <button className="office-model" type="button" disabled={!snapshot} aria-expanded={settings} title={snapshot?.model}
       onClick={() => { if (snapshot) { setError(""); setModel(snapshot.model); setSettings(!settings); } }}>Modello</button>
     {chatOpen && <button type="button" className="office-chat-clear" disabled={busy || !chat.length || !!active} title="Cancella conversazione" aria-label="Cancella conversazione"
